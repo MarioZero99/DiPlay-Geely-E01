@@ -136,9 +136,16 @@ androidComponents {
 if (encryptVendorPayload != null) {
     tasks.configureEach { task ->
         // Everything that reads the source sets' assets has to be told who writes the generated
-        // directory: the merge tasks package it and the lint model tasks describe it, and
-        // `sourceSets` below hands neither of them that knowledge.
-        if ((task.name.startsWith('merge') && task.name.endsWith('Assets')) || task.name.contains('Lint')) {
+        // directory: the merge tasks package it and the lint tasks describe it, and `sourceSets` above
+        // hands neither of them that knowledge.
+        //
+        // Matched without case, because AGP names these two ways: `generate...LintModel` carries a
+        // capital L, while `lintVitalAnalyzeRelease` and `lintAnalyzeRelease` start lower case. The
+        // capital-L-only match left the second kind out, and a release build then failed Gradle's
+        // implicit-dependency check outright -- but only when this module's release lint happened to
+        // re-run, so a build that had it up to date succeeded and the next one did not.
+        if ((task.name.startsWith('merge') && task.name.endsWith('Assets')) ||
+                task.name.toLowerCase().contains('lint')) {
             task.dependsOn(encryptVendorPayload)
         }
     }
