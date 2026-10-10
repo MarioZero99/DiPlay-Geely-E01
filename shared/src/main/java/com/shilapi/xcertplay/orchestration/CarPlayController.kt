@@ -873,6 +873,11 @@ class CarPlayController(
     }
 
     private fun runWireless(generation: Int) {
+        // A run superseded mid-flight still owns whatever it opened after the newer run's cleanup ran.
+        // The shared fields now belong to that newer run, so `closeWirelessStack()` would tear down the
+        // wrong session; these locals are what lets the losing run let go of its own.
+        var ownBonjour: CarPlayBonjour? = null
+        var ownStream: BlockingDuplexByteStream? = null
         try {
             debugLog("wireless bring-up generation=$generation starting")
             closeWirelessStack()
@@ -1025,6 +1030,22 @@ class CarPlayController(
                 return
             }
 
+            // Bluetooth before discovery: the iPhone opens this leg unprompted (the iAP2 bootstrap carries
+            // the Wi-Fi credentials it needs first), and discovery is the step that can fail outside here.
+            onStatus(CarPlayStatus.ConnectingBluetooth)
+            debugLog(
+                "wireless RFCOMM connecting address=${target.address} " +
+                    "uuid=$IAP2_IPHONE_UUID",
+            )
+            val stream = link.open().also { bluetoothStream = it }
+            ownStream = stream
+            debugLog("wireless RFCOMM connected address=${target.address}")
+            if (isStaleWirelessRun(generation)) {
+                releaseOwnWirelessResources(ownBonjour, ownStream)
+                closeWirelessStack()
+                return
+            }
+
             val bonjourClient = CarPlayBonjour(
                 context = appContext,
                 config = wirelessAirPlayConfig,
@@ -1037,26 +1058,17 @@ class CarPlayController(
                 onEvent = { event -> debugLog("wireless bonjour: ${event.diagnosticSummary()}") },
             )
             bonjour = bonjourClient
+            ownBonjour = bonjourClient
             bonjourClient.start()
             startedBonjour = bonjourClient
             diagnostics.start()
             debugLog("wireless Bonjour services started mode=interface iface=${hotspotInfo.interfaceName ?: "unknown"}")
             if (isStaleWirelessRun(generation)) {
+                releaseOwnWirelessResources(ownBonjour, ownStream)
                 closeWirelessStack()
                 return
             }
 
-            onStatus(CarPlayStatus.ConnectingBluetooth)
-            debugLog(
-                "wireless RFCOMM connecting address=${target.address} " +
-                    "uuid=$IAP2_IPHONE_UUID",
-            )
-            val stream = link.open().also { bluetoothStream = it }
-            debugLog("wireless RFCOMM connected address=${target.address}")
-            if (isStaleWirelessRun(generation)) {
-                closeWirelessStack()
-                return
-            }
             val channel = Iap2Session.openWireless(
                 stream,
                 traceContext = "wireless-rfcomm",
@@ -1064,6 +1076,7 @@ class CarPlayController(
             ).also { csm = it }
             debugLog("wireless iAP2 CSM channel opened over RFCOMM")
             if (isStaleWirelessRun(generation)) {
+                releaseOwnWirelessResources(ownBonjour, ownStream)
                 closeWirelessStack()
                 return
             }
@@ -1142,6 +1155,7 @@ class CarPlayController(
             }
         } catch (error: Throwable) {
             if (closed || generation != wirelessGeneration.get()) {
+                releaseOwnWirelessResources(ownBonjour, ownStream)
                 return
             }
             if (wirelessActiveReported.get() && error !is Error) {
@@ -1871,6 +1885,28 @@ class CarPlayController(
 
     private fun isStaleWirelessRun(generation: Int): Boolean =
         closed || phase != Phase.WIRELESS || generation != wirelessGeneration.get()
+
+    /**
+     * Closes what a superseded run opened for itself.
+     *
+     * [closeWirelessStack] releases the *shared* fields, which by the time a losing run notices it lost
+     * belong to the newer run — so it can close neither this run's Bonjour nor its RFCOMM stream. A
+     * Bonjour left behind keeps mDNS 5353 bound, and a bound mDNS socket rejects every later bind with
+     * EADDRINUSE, which ends discovery for the rest of the process.
+     */
+    private fun releaseOwnWirelessResources(
+        ownBonjour: CarPlayBonjour?,
+        ownStream: BlockingDuplexByteStream?,
+    ) {
+        if (ownBonjour != null) {
+            if (bonjour === ownBonjour) bonjour = null
+            closeBestEffort("superseded Bonjour") { ownBonjour.close() }
+        }
+        if (ownStream != null) {
+            if (bluetoothStream === ownStream) bluetoothStream = null
+            closeBestEffort("superseded Bluetooth link") { ownStream.close() }
+        }
+    }
 
     private fun closeWirelessStack(service: CarPlayVpnService? = vpnService) {
         val diagnostics = wirelessDiagnostics

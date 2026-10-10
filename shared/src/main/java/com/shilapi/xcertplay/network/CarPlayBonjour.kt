@@ -153,6 +153,15 @@ class CarPlayBonjour(
     private var started = false
     @Volatile
     private var closed = false
+
+    /**
+     * Guards [close]'s body, which is not the same thing as [closed].
+     *
+     * A start that failed marks the object closed so nothing else can be published through it — but it
+     * may still be holding the multicast lock, a bound mDNS socket and a worker thread. Letting [closed]
+     * short-circuit [close] left those to the garbage collector while the port stayed taken.
+     */
+    private var released = false
     private var registrationRequested = false
     private var discoveryRequested = false
     @Volatile
@@ -323,7 +332,8 @@ class CarPlayBonjour(
         val workerToJoin: Thread?
         val dnsToClose: JmDNS?
         synchronized(lifecycleLock) {
-            if (closed) return
+            if (released) return
+            released = true
             closed = true
             if (registrationRequested) {
                 registrationRequested = false
