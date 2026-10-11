@@ -195,6 +195,7 @@
     <string name="error">Error</string>
     <string name="restart_application">RESTART APPLICATION</string>
     <string name="exit_application">EXIT APPLICATION</string>
+    <string name="close_app">Close DiPlay</string>
     <string name="finish_setup_save_your_hotspot_details_to_use_this_mode">Finish setup · Save your hotspot details to use this mode.</string>
     <string name="follow_instrument_theme_and_map_card">Follow instrument theme and map card</string>
     <string name="frame_rate">Frame rate</string>
@@ -238,6 +239,9 @@
     <string name="longest_height">Longest height</string>
     <string name="looking_for_your_paired_iphone">Looking for your paired iPhone…</string>
     <string name="made_possible_by_open_source">Made possible by open source</string>
+    <string name="maintenance_continue">Continue</string>
+    <string name="maintenance_session_active">CarPlay is running. End the session before changing the head unit\'s firmware.</string>
+    <string name="maintenance_working">Working…</string>
     <string name="make_diplay_feel_right_for_your_car">Make DiPlay feel right for your car.</string>
     <string name="manual_hotspot">Manual hotspot</string>
     <string name="manual_mode_match_the_cluster_theme_here_the_map_cannot_fo">Manual mode: match the cluster theme here. The map cannot follow card visibility without Usage Access.</string>

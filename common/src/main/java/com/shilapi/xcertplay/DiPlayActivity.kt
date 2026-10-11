@@ -45,6 +45,7 @@ import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeBasis
 import com.shilapi.xcertplay.airplay.CarPlayClusterDisplay
 import com.shilapi.xcertplay.carhop.CarBluetoothHop
 import com.shilapi.xcertplay.carhop.CarBluetoothHops
+import com.shilapi.xcertplay.carhop.CarBluetoothMaintenance
 import com.shilapi.xcertplay.carhop.CarBluetoothPhone
 import com.shilapi.xcertplay.host.BuildConfig
 import com.shilapi.xcertplay.host.R
@@ -246,6 +247,7 @@ class DiPlayActivity : ComponentActivity() {
             if (parent == null) startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
             else { page = parent; render() }
         }, LinearLayout.LayoutParams(dp(130), dp(56)))
+        header.addView(button(getString(R.string.close_app), false) { closeTheApp() }, LinearLayout.LayoutParams(dp(130), dp(56)).apply { marginStart = dp(10) })
         content.addView(header)
         content.addView(space(24))
         when (page) {
@@ -473,10 +475,24 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(button(getString(R.string.app_permissions), false) { openSystem(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }, matchButton(16, 60))
             if (deviceSupportsWireless()) card.addView(button(getString(R.string.wireless_connection_help), false) { wirelessHelp() }, matchButton(10, 60))
         }
+        hopMaintenanceSection(content)
         section(content, getString(R.string.about), R.drawable.ic_dp_about) { card ->
             card.addView(button(getString(R.string.about_diplay), false) { page = "about"; render() }, matchButton(0, 60))
         }
         languageSettings(content)
+    }
+
+    /**
+     * Ends the app on purpose. The control sits next to the home control in the header, so it is on
+     * every page rather than only at the bottom of the system settings.
+     *
+     * What outlives a session goes back first — the car's own Bluetooth, and the mDNS socket the app
+     * holds for its whole life so that no attempt can lose 5353 — and the process ends after, which is
+     * what frees the socket when no session is running at all.
+     */
+    private fun closeTheApp() {
+        releaseProcessWirelessResources(applicationContext)
+        CarPlayBackgroundSession.exit { android.os.Process.killProcess(android.os.Process.myPid()) }
     }
 
     private fun displaySettings(content: LinearLayout) {
@@ -853,6 +869,16 @@ class DiPlayActivity : ComponentActivity() {
     private var hopPhonesAt = 0L
     private var hopPhonesInFlight = false
 
+    private var hopMaintenance: CarBluetoothMaintenance? = null
+    private var hopMaintenanceAt = 0L
+    private var hopMaintenanceInFlight = false
+
+    /** The action id being carried out, or null. Only one runs at a time. */
+    private var hopMaintenanceRunning: String? = null
+
+    /** What the last action said when it finished, for the page to show under the buttons. */
+    private var hopMaintenanceResult: String? = null
+
     /**
      * Asks the hop which phones are connected, off the main thread.
      *
@@ -875,6 +901,139 @@ class DiPlayActivity : ComponentActivity() {
                 if (page == "wireless") render()
             }
         }, "car-hop-phones").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * Asks the hop what it can do to the head unit, away from the main thread.
+     *
+     * The answer costs a round trip through the head unit's own root service, so it is kept for a few
+     * seconds rather than asked for while drawing. A hop that offers nothing is remembered as such
+     * too, or the page would run the trip again on every redraw.
+     */
+    private fun refreshHopMaintenance(hop: CarBluetoothHop) {
+        if (hopMaintenanceInFlight) return
+        if (hopMaintenanceAt != 0L && SystemClock.elapsedRealtime() - hopMaintenanceAt < HOP_MAINTENANCE_TTL_MILLIS) return
+        hopMaintenanceInFlight = true
+        Thread({
+            val maintenance = runCatching { hop.maintenance(this) }.getOrNull()
+            runOnUiThread {
+                hopMaintenanceInFlight = false
+                if (isFinishing) return@runOnUiThread
+                hopMaintenance = maintenance
+                hopMaintenanceAt = SystemClock.elapsedRealtime()
+                if (page == "system") render()
+            }
+        }, "car-hop-maintenance").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * Carries out one action and keeps the page current while it runs.
+     *
+     * The call blocks on the head unit, and an install can end with the head unit restarting, so the
+     * work goes to a thread and nothing is read back from it until it returns. What the page shows
+     * meanwhile comes from the hop's own state, which is why it is re-asked on a timer instead of
+     * waiting for the call: an operation that takes a minute should not look like a dead screen.
+     */
+    private fun runHopMaintenance(hop: CarBluetoothHop, action: CarBluetoothMaintenance.Action) {
+        if (hopMaintenanceRunning != null) return
+        // The confirmation can sit open while a session starts, and these replace the head unit's own
+        // firmware: doing that under a running session is the one thing the head unit cannot survive
+        // quietly. The buttons are withheld while a session is live; this is the second look.
+        if (CarPlayBackgroundSession.hasSession()) {
+            hopMaintenanceResult = getString(R.string.maintenance_session_active)
+            render()
+            return
+        }
+        hopMaintenanceRunning = action.id
+        hopMaintenanceResult = null
+        render()
+        val watch = object : Runnable {
+            override fun run() {
+                if (hopMaintenanceRunning == null || isFinishing) return
+                hopMaintenanceAt = 0L
+                refreshHopMaintenance(hop)
+                handler.postDelayed(this, HOP_MAINTENANCE_WATCH_MILLIS)
+            }
+        }
+        handler.postDelayed(watch, HOP_MAINTENANCE_WATCH_MILLIS)
+        Thread({
+            val message = runCatching { hop.performMaintenance(this, action.id) }
+                .getOrElse { it.message ?: it.javaClass.simpleName }
+            runOnUiThread {
+                hopMaintenanceRunning = null
+                hopMaintenanceResult = message
+                hopMaintenanceAt = 0L
+                if (isFinishing) return@runOnUiThread
+                refreshHopMaintenance(hop)
+                if (page == "system") render()
+            }
+        }, "car-hop-maintenance-run").apply { isDaemon = true }.start()
+    }
+
+    /** These change the head unit, so what the hop says it does is shown before it does it. */
+    private fun confirmHopMaintenance(hop: CarBluetoothHop, action: CarBluetoothMaintenance.Action) {
+        AlertDialog.Builder(this)
+            .setTitle(action.label)
+            .setMessage(action.confirmation)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.maintenance_continue) { _, _ -> runHopMaintenance(hop, action) }
+            .show()
+    }
+
+    /**
+     * Whatever this build's hop can do to the head unit itself, when it can do anything.
+     *
+     * Absent everywhere else — the published tree, CI, any other head unit — because [vendorHop]
+     * answers null there and this draws nothing.
+     */
+    private fun hopMaintenanceSection(content: LinearLayout) {
+        val hop = vendorHop(this) ?: return
+        val maintenance = hopMaintenance
+        if (maintenance == null) {
+            refreshHopMaintenance(hop)
+            return
+        }
+        section(content, maintenance.title, R.drawable.ic_dp_diagnostics) { card ->
+            card.addView(label(maintenance.state, 18, TEXT))
+            maintenance.detail?.let {
+                card.addView(label(it, 15, MUTED).apply { setPadding(0, dp(6), 0, 0) })
+            }
+            if (maintenance.steps.isNotEmpty()) {
+                maintenance.steps.forEachIndexed { index, step ->
+                    val current = index == maintenance.currentStep
+                    val color = when {
+                        current && maintenance.failed -> WARNING
+                        current -> ACCENT
+                        else -> MUTED
+                    }
+                    card.addView(label(step, 15, color, current).apply { setPadding(dp(4), dp(8), 0, 0) })
+                }
+            }
+            val busy = hopMaintenanceRunning != null
+            // Nothing is offered while a session is live, which is the reference's own rule and the
+            // one the hop cannot check for itself: the session flag lives in this module.
+            val sessionLive = CarPlayBackgroundSession.hasSession()
+            if (sessionLive) {
+                card.addView(
+                    label(getString(R.string.maintenance_session_active), 15, WARNING)
+                        .apply { setPadding(0, dp(12), 0, 0) },
+                )
+            }
+            maintenance.actions.forEach { action ->
+                if (sessionLive) return@forEach
+                val running = hopMaintenanceRunning == action.id
+                card.addView(
+                    button(
+                        if (running) getString(R.string.maintenance_working) else action.label,
+                        action.primary && !busy,
+                    ) { confirmHopMaintenance(hop, action) }.apply { isEnabled = !busy },
+                    matchButton(if (action.primary) 16 else 10, 60),
+                )
+            }
+            hopMaintenanceResult?.let {
+                card.addView(label(it, 15, MUTED).apply { setPadding(0, dp(12), 0, 0) })
+            }
+        }
     }
 
     /** The hop this build ships, when it is for this head unit. */
@@ -1862,6 +2021,13 @@ class DiPlayActivity : ComponentActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     companion object {
         private const val HOP_DEVICES_TTL_MILLIS = 10_000L
+
+        /** How long a hop's maintenance answer is reused before it is asked for again. */
+        private const val HOP_MAINTENANCE_TTL_MILLIS = 10_000L
+
+        /** How often the page re-asks while an action runs, so the step being attempted moves. */
+        private const val HOP_MAINTENANCE_WATCH_MILLIS = 700L
+
         private val BG = Color.rgb(12, 17, 27)
         private val SURFACE = Color.rgb(21, 30, 44)
         private val BORDER = Color.rgb(42, 56, 75)

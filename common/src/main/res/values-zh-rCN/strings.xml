@@ -190,6 +190,7 @@
     <string name="error">错误</string>
     <string name="restart_application">重启应用</string>
     <string name="exit_application">退出应用</string>
+    <string name="close_app">关闭 DiPlay</string>
     <string name="finish_setup_save_your_hotspot_details_to_use_this_mode">完成设置 · 保存热点信息以使用此模式。</string>
     <string name="follow_instrument_theme_and_map_card">跟随仪表盘主题和地图卡片</string>
     <string name="frame_rate">帧率</string>
@@ -238,6 +239,9 @@
     <string name="longest_height">较长边</string>
     <string name="looking_for_your_paired_iphone">正在查找已配对的 iPhone…</string>
     <string name="made_possible_by_open_source">开源项目鸣谢</string>
+    <string name="maintenance_continue">继续</string>
+    <string name="maintenance_session_active">CarPlay 正在运行。结束会话后再改动车机固件。</string>
+    <string name="maintenance_working">正在执行…</string>
     <string name="make_diplay_feel_right_for_your_car">按需调整 DiPlay 设置。</string>
     <string name="manual_hotspot">手动热点</string>
     <string name="manual_mode_match_the_cluster_theme_here_the_map_cannot_fo">手动模式：在此匹配仪表盘主题。没有使用访问权限时，地图无法跟随卡片显示状态。</string>
