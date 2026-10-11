@@ -94,6 +94,15 @@ interface CarBluetoothHop {
      */
     fun performMaintenance(context: Context, id: String): String
 
+    /**
+     * True while the hop is changing the head unit, when a session must not start.
+     *
+     * Cheap and safe to ask on the main thread: it answers from state the hop already holds, and does
+     * not go near the head unit. A session begun while the hop has the head unit's own process stopped
+     * would be built on a socket that is about to move.
+     */
+    fun busy(context: Context): Boolean
+
     /** Hands the head unit's radio back once the session is over. */
     fun idleAfterSession(context: Context)
 }

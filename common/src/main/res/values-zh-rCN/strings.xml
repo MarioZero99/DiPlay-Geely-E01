@@ -239,6 +239,7 @@
     <string name="longest_height">较长边</string>
     <string name="looking_for_your_paired_iphone">正在查找已配对的 iPhone…</string>
     <string name="made_possible_by_open_source">开源项目鸣谢</string>
+    <string name="maintenance_busy_no_session">正在改动车机固件，等它完成再连接。</string>
     <string name="maintenance_continue">继续</string>
     <string name="maintenance_session_active">CarPlay 正在运行。结束会话后再改动车机固件。</string>
     <string name="maintenance_working">正在执行…</string>

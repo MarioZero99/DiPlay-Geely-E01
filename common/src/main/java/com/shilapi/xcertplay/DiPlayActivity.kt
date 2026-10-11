@@ -1283,6 +1283,15 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun connect(wireless: Boolean) {
+        // A session must not start while the hop is changing the head unit: it would be built on a
+        // socket that is about to move, and the operation would unwind underneath it. Checked before
+        // anything else, because none of the gaps below are the reason to refuse this time.
+        val hopBusy = wireless &&
+            vendorHop(this)?.let { hop -> runCatching { hop.busy(this) }.getOrDefault(false) } == true
+        if (hopBusy) {
+            toast(getString(R.string.maintenance_busy_no_session))
+            return
+        }
         if (wireless && !CarPlayBackgroundSession.hasSession()) {
             val readiness = currentWirelessReadiness()
             if (!readiness.ready) {
