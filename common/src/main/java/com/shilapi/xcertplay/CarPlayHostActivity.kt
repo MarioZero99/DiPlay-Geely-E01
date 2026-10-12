@@ -70,12 +70,14 @@ import com.shilapi.xcertplay.airplay.AirPlaySession
 import com.shilapi.xcertplay.airplay.AirPlaySessionListener
 import com.shilapi.xcertplay.airplay.CarPlayMediaEngine
 import com.shilapi.xcertplay.airplay.SafeAreaRect
+import com.shilapi.xcertplay.carhop.CarBluetoothHops
 import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.location.AndroidCarPlayLocationProvider
 import com.shilapi.xcertplay.media.AndroidMediaSink
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.network.CarHotspotStatus
 import com.shilapi.xcertplay.network.CarPlayVpnService
+import com.shilapi.xcertplay.network.WirelessDiscovery
 import com.shilapi.xcertplay.orchestration.CarPlayController
 import com.shilapi.xcertplay.orchestration.CarPlayRuntimeConfig
 import com.shilapi.xcertplay.orchestration.CarPlayFailureReason
@@ -2107,9 +2109,9 @@ class CarPlayHostActivity : ComponentActivity() {
         controller = snapshot.controller
         sink = snapshot.sink
         CarPlayMediaKeys.bindAudioFocusTarget(snapshot.sink::onExternalAudioFocus)
-        CarPlayBackgroundSession.store(snapshot.controller, snapshot.sink, snapshot.width, snapshot.height, this) { completion ->
+        CarPlayBackgroundSession.store(snapshot.controller, snapshot.sink, snapshot.width, snapshot.height, this) { terminate, completion ->
             runOnUiThread {
-                shutdown(false, "DiPlay disconnect", completion)
+                shutdown(terminateProcess = terminate, reason = "DiPlay disconnect", completion = completion)
                 finish()
             }
         }
@@ -2221,9 +2223,9 @@ class CarPlayHostActivity : ComponentActivity() {
         )
         controller = next
         CarPlayMediaKeys.attach(this, next)
-        CarPlayBackgroundSession.store(next, renderer, size.width, size.height, this) { completion ->
+        CarPlayBackgroundSession.store(next, renderer, size.width, size.height, this) { terminate, completion ->
             runOnUiThread {
-                shutdown(terminateProcess = false, reason = "DiPlay disconnect", completion = completion)
+                shutdown(terminateProcess = terminate, reason = "DiPlay disconnect", completion = completion)
                 finish()
             }
         }
@@ -2386,7 +2388,7 @@ class CarPlayHostActivity : ComponentActivity() {
         sink = null
         teardownExecutor.execute {
             oldController?.close()
-            oldController?.awaitClosed(CONTROLLER_CLOSE_TIMEOUT_MILLIS)
+            val closed = oldController?.awaitClosed(CONTROLLER_CLOSE_TIMEOUT_MILLIS) ?: true
             oldSink?.close()
             runOnUiThread {
                 val queued = startAfterHandshakeReset
@@ -2394,7 +2396,20 @@ class CarPlayHostActivity : ComponentActivity() {
                 if (shuttingDown.get()) return@runOnUiThread
                 if (generation == restartGeneration) {
                     handshakeResetInProgress = false
-                    startCarPlay(size)
+                    if (closed) {
+                        startCarPlay(size)
+                    } else {
+                        // A controller that has not let go still owns the sockets it opened, the mDNS
+                        // responder among them; a replacement would fail on the port and report that
+                        // as the reason. Say what happened instead, and leave the manual retry.
+                        Log.i(
+                            TAG,
+                            "restart: previous controller did not close within " +
+                                "${CONTROLLER_CLOSE_TIMEOUT_MILLIS}ms",
+                        )
+                        appendLog(PREVIOUS_SESSION_STILL_CLOSING)
+                        setConnectionStage(PREVIOUS_SESSION_STILL_CLOSING)
+                    }
                 } else if (queued) {
                     handshakeResetInProgress = false
                     maybeStartCarPlay()
@@ -2434,7 +2449,10 @@ class CarPlayHostActivity : ComponentActivity() {
             applicationContext.stopService(Intent(applicationContext, DiPlaySessionService::class.java))
             teardownExecutor.shutdown()
             mainHandler.post { completion() }
-            if (terminateProcess) Process.killProcess(Process.myPid())
+            if (terminateProcess) {
+                releaseProcessWirelessResources(applicationContext)
+                Process.killProcess(Process.myPid())
+            }
         }
     }
 
@@ -2768,6 +2786,9 @@ class CarPlayHostActivity : ComponentActivity() {
         const val USB_LIST_INTERVAL_MILLIS = 2_000L
         const val IAP_TUNNEL_RECONNECT_DELAY_MILLIS = 15_000L
         const val CONTROLLER_CLOSE_TIMEOUT_MILLIS = 4_000L
+        /** Said when a restart cannot go ahead because the previous controller still owns its sockets. */
+        const val PREVIOUS_SESSION_STILL_CLOSING =
+            "the previous session is still closing; not starting a new one"
         const val SESSION_LOG_DRAIN_TIMEOUT_MILLIS = 500L
         /** Bounded so a stalled disk cannot grow the queue without limit on a 26 MB device. */
         const val SESSION_LOG_QUEUE_CAPACITY = 64
@@ -2826,24 +2847,43 @@ class CarPlayHostActivity : ComponentActivity() {
 }
 
 /** Process-local hand-off for keeping the CarPlay session alive while no Activity is visible. */
+/**
+ * Gives the head unit back the two things that outlive a session.
+ *
+ * The car's own Bluetooth process is replaced for the length of a session and handed back when the
+ * session ends; the mDNS socket is held for the whole life of the app, which is what stops an attempt
+ * from losing 5353 for the process. Closing the app is the one moment both go back — a session's
+ * teardown owns neither.
+ */
+internal fun releaseProcessWirelessResources(context: Context) {
+    runCatching { WirelessDiscovery.releaseResponder() }
+    runCatching { CarBluetoothHops.active?.idleAfterSession(context.applicationContext) }
+}
+
 internal object CarPlayBackgroundSession {
     @Volatile var active = false
-    private var stopAction: (((() -> Unit)) -> Unit)? = null
+    private var stopAction: ((Boolean, () -> Unit) -> Unit)? = null
     private var stopping = false
     private var owner: Any? = null
     @Synchronized fun isOwner(candidate: Any): Boolean = owner === candidate
     @Synchronized fun hasSession(): Boolean = stopAction != null || stopping
     private val stopWaiters = mutableListOf<() -> Unit>()
 
-    fun stop(completion: () -> Unit = {}) {
-        val action: (((() -> Unit)) -> Unit)?
+    /** Ends the session and leaves the app running. */
+    fun stop(completion: () -> Unit = {}) = request(terminateProcess = false, completion)
+
+    /** Ends the session and the app with it — the way out of the app, beside the way out of a session. */
+    fun exit(completion: () -> Unit = {}) = request(terminateProcess = true, completion)
+
+    private fun request(terminateProcess: Boolean, completion: () -> Unit) {
+        val action: ((Boolean, () -> Unit) -> Unit)?
         synchronized(this) {
             if (stopping) { stopWaiters.add(completion); return }
             action = stopAction
             if (action != null) { stopping = true; stopWaiters.add(completion) }
         }
         if (action == null) { completion(); return }
-        action.invoke {
+        action.invoke(terminateProcess) {
             val callbacks = synchronized(this) {
                 stopping = false
                 stopWaiters.toList().also { stopWaiters.clear() }
@@ -2872,7 +2912,7 @@ internal object CarPlayBackgroundSession {
     }
 
     @Synchronized
-    fun store(controller: CarPlayController, sink: AndroidMediaSink, width: Int, height: Int, owner: Any, stop: (() -> Unit) -> Unit) {
+    fun store(controller: CarPlayController, sink: AndroidMediaSink, width: Int, height: Int, owner: Any, stop: (Boolean, () -> Unit) -> Unit) {
         this.stopAction = stop
         this.owner = owner
         this.controller = controller

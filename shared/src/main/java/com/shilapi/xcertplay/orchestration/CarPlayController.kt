@@ -33,6 +33,8 @@ import com.shilapi.xcertplay.network.diagnosticSummary
 import com.shilapi.xcertplay.network.CarPlayVpnService
 import com.shilapi.xcertplay.network.LocalOnlyHotspotManager
 import com.shilapi.xcertplay.network.ManualHotspotManager
+import com.shilapi.xcertplay.network.PortHolders
+import com.shilapi.xcertplay.network.packageNameResolver
 import com.shilapi.xcertplay.network.WifiP2pGroupManager
 import com.shilapi.xcertplay.carhop.CarBluetoothHops
 import com.shilapi.xcertplay.network.WirelessHotspotInfo
@@ -216,6 +218,9 @@ class CarPlayController(
     private enum class Phase { IDLE, MFI, WIRELESS, IPHONE, REENUMERATION, DATAPATHS, CONTROL }
 
     private val appContext = context.applicationContext
+
+    /** Turns a socket-table uid into a package name, so a held port names its holder. */
+    private val portPackageNames by lazy { packageNameResolver(appContext) }
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private val bluetoothAdapter =
         (appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -880,6 +885,7 @@ class CarPlayController(
         var ownStream: BlockingDuplexByteStream? = null
         try {
             debugLog("wireless bring-up generation=$generation starting")
+            debugLog("wireless 5353 sample at=run-start ${PortHolders.udp(CarPlayBonjour.MDNS_PORT, portPackageNames)}")
             closeWirelessStack()
             if (
                 closed ||
@@ -995,6 +1001,7 @@ class CarPlayController(
             val listenPort = AirPlayPorts.choose(airPlayConfig.port)
             if (listenPort != airPlayConfig.port) {
                 debugLog("wireless AirPlay port ${airPlayConfig.port} is taken; using $listenPort instead")
+                debugLog("wireless AirPlay port ${airPlayConfig.port} holders ${PortHolders.tcp(airPlayConfig.port, portPackageNames)}")
             }
             val wirelessAirPlayConfig = airPlayConfig.copy(
                 deviceId = deviceIdentifier,
@@ -1037,9 +1044,11 @@ class CarPlayController(
                 "wireless RFCOMM connecting address=${target.address} " +
                     "uuid=$IAP2_IPHONE_UUID",
             )
+            debugLog("wireless 5353 sample at=before-bluetooth ${PortHolders.udp(CarPlayBonjour.MDNS_PORT, portPackageNames)}")
             val stream = link.open().also { bluetoothStream = it }
             ownStream = stream
             debugLog("wireless RFCOMM connected address=${target.address}")
+            debugLog("wireless 5353 sample at=after-bluetooth ${PortHolders.udp(CarPlayBonjour.MDNS_PORT, portPackageNames)}")
             if (isStaleWirelessRun(generation)) {
                 releaseOwnWirelessResources(ownBonjour, ownStream)
                 closeWirelessStack()
@@ -1059,10 +1068,19 @@ class CarPlayController(
             )
             bonjour = bonjourClient
             ownBonjour = bonjourClient
-            bonjourClient.start()
-            startedBonjour = bonjourClient
+            // A responder that will not come up costs this receiver's advertisement, not the attempt. Every
+            // wireless attempt on this head unit has ended on this step, and the iPhone is given the
+            // address and the port over the Bluetooth leg as well; losing the advertisement is
+            // recoverable, losing the attempt is not. This stays additive: where 5353 is free nothing here
+            // changes, and where it is not, the attempt used to die without ever reaching authentication.
+            try {
+                bonjourClient.start()
+                startedBonjour = bonjourClient
+                debugLog("wireless Bonjour services started mode=interface iface=${hotspotInfo.interfaceName ?: "unknown"}")
+            } catch (error: IOException) {
+                debugLog("wireless Bonjour unavailable, carrying on without an advertisement: ${error.message}")
+            }
             diagnostics.start()
-            debugLog("wireless Bonjour services started mode=interface iface=${hotspotInfo.interfaceName ?: "unknown"}")
             if (isStaleWirelessRun(generation)) {
                 releaseOwnWirelessResources(ownBonjour, ownStream)
                 closeWirelessStack()

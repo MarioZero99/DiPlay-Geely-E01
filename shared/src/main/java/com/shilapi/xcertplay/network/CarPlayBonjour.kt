@@ -24,7 +24,6 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
 import javax.jmdns.ServiceListener
@@ -132,6 +131,9 @@ class CarPlayBonjour(
             .getSystemService(Context.NSD_SERVICE) as? NsdManager
             ?: throw IOException("Android NSD service is unavailable")
     }
+
+    /** Turns a socket-table uid into a package name, so a held port names its holder. */
+    private val portPackageNames by lazy { packageNameResolver(context) }
     private val services = LinkedBlockingQueue<NsdServiceInfo>()
     private val interfaceServices = LinkedBlockingQueue<Pair<CarPlayBonjourEndpoint, InetAddress>>()
     private val discoveryEvents = LinkedBlockingQueue<CarPlayBonjourEvent.Discovery>(32)
@@ -168,7 +170,8 @@ class CarPlayBonjour(
     private var worker: Thread? = null
     @Volatile
     private var activeSocket: Socket? = null
-    private var interfaceMdns: JmDNS? = null
+    private var publishedService: ServiceInfo? = null
+    private var responderSocket: MdnsResponderSocket? = null
 
     private val interfaceListener = object : ServiceListener {
         override fun serviceAdded(event: ServiceEvent) {
@@ -268,13 +271,15 @@ class CarPlayBonjour(
                     val address = requireNotNull(localAdvertisedAddress) {
                         "Interface mDNS requires a local advertised address"
                     }
-                    val dns = interfaceMdnsOrFail(address)
-                    interfaceMdns = dns
-                    dns.addServiceListener("$CARPLAY_CONTROL_SERVICE_TYPE.local.", interfaceListener)
-                    dns.registerService(ServiceInfo.create(
+                    val socket = responderOrFail(address)
+                    responderSocket = socket
+                    socket.addServiceListener("$CARPLAY_CONTROL_SERVICE_TYPE.local.", interfaceListener)
+                    val service = ServiceInfo.create(
                         "$AIRPLAY_SERVICE_TYPE.local.", config.deviceName, config.port,
                         0, 0, CarPlayBonjourProtocol.airPlayTxtRecords(config, identity),
-                    ))
+                    )
+                    publishedService = service
+                    MdnsResponder.publish(service)
                     publishedFamilies = if (address is Inet4Address) "IPv4" else "IPv6"
                 } else {
                     registerAirPlay()
@@ -302,8 +307,7 @@ class CarPlayBonjour(
                 }
                 worker?.interrupt()
                 worker = null
-                runCatching { interfaceMdns?.close() }
-                interfaceMdns = null
+                unpublish()
                 publishedFamilies = "none"
                 if (multicastLock.isHeld) multicastLock.release()
                 throw error
@@ -312,25 +316,45 @@ class CarPlayBonjour(
     }
 
     /**
-     * Brings up the interface mDNS responder, naming the bind when it will not come up.
+     * Borrows the process's mDNS responder, naming the address when it will not come up.
      *
-     * A refusal here arrives as a bare `BindException: bind failed: EADDRINUSE`, which says neither which
-     * socket nor which family asked for it — on a head unit whose own `mdnsd` may already hold 5353, that is
-     * the whole difference between "our port is taken" and "something is wrong in here".
+     * A refusal arrives as a bare `BindException: bind failed: EADDRINUSE`, which says neither which
+     * socket nor which family asked for it. The responder is shared, so a failure here belongs to the
+     * process and not to this run — but it is this run's address that is worth naming.
      */
-    private fun interfaceMdnsOrFail(address: InetAddress): JmDNS = try {
-        JmDNS.create(address, "carplay-${config.deviceId.replace(":", "")}")
+    private fun responderOrFail(address: InetAddress): MdnsResponderSocket = try {
+        MdnsResponder.acquire(address, "carplay-${config.deviceId.replace(":", "")}")
     } catch (error: IOException) {
         val family = if (address is Inet4Address) "IPv4" else "IPv6"
+        // Whoever holds 5353 decides the fix, and the kernel table is the only place that says so.
+        DiagLog.w(TAG, "mDNS $MDNS_PORT held by ${PortHolders.udp(MDNS_PORT, portPackageNames)}")
         throw IOException(
             "mDNS $MDNS_PORT bind failed on ${address.hostAddress} ($family): ${error.message}",
             error,
         )
     }
 
+    /**
+     * Gives this run's borrow back: its record and its listener go, the socket stays.
+     *
+     * The socket outlives every run, so closing it here would hand the next attempt the very refusal
+     * this exists to remove. The record goes back only if this run still owns it — a run that lost the
+     * race to a newer one must not take that newer run's record down with it.
+     */
+    private fun unpublish() {
+        val socket = responderSocket ?: return
+        responderSocket = null
+        publishedService?.let { service ->
+            publishedService = null
+            runCatching { MdnsResponder.retract(service) }
+        }
+        runCatching {
+            socket.removeServiceListener("$CARPLAY_CONTROL_SERVICE_TYPE.local.", interfaceListener)
+        }
+    }
+
     override fun close() {
         val workerToJoin: Thread?
-        val dnsToClose: JmDNS?
         synchronized(lifecycleLock) {
             if (released) return
             released = true
@@ -348,15 +372,13 @@ class CarPlayBonjour(
             services.clear()
             interfaceServices.clear()
             discoveryEvents.clear()
-            dnsToClose = interfaceMdns
-            interfaceMdns = null
+            unpublish()
             workerToJoin = worker
             worker = null
             workerToJoin?.interrupt()
             publishedFamilies = "none"
             if (multicastLock.isHeld) multicastLock.release()
         }
-        runCatching { dnsToClose?.close() }
         workerToJoin?.let(::joinWorker)
     }
 
@@ -633,7 +655,9 @@ class CarPlayBonjour(
         }
     }
 
-    private companion object {
+    // Internal rather than private: the wireless bring-up samples who holds MDNS_PORT, and naming the
+    // same constant there is what keeps one number in one place.
+    internal companion object {
         const val TAG = "xcertplay-bonjour"
         const val WORKER_NAME = "carplay-bonjour"
         const val AIRPLAY_SERVICE_TYPE = "_airplay._tcp"
