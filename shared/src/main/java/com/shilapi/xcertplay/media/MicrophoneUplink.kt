@@ -31,6 +31,10 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
     @Volatile private var socket: DatagramSocket? = null
     @Volatile private var opusEncoder: OpusEncoder? = null
     private var thread: Thread? = null
+    /** The audio source the current recorder actually uses; null before start. */
+    @Volatile private var usedSource: Int? = null
+    /** Issue #102: per-frame capture-silence tracking for this uplink. */
+    private val silence = MicrophoneSilenceTracker()
 
     fun start(): Boolean {
         if (!running.compareAndSet(false, true)) return true
@@ -52,7 +56,18 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
         }
 
         val source = when (config.audioType) {
-            "telephony" -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            // Issue #102: if VOICE_COMMUNICATION proved silent-broken on this device, use MIC for
+            // telephony uplinks instead of capturing zeroes forever.
+            "telephony" -> if (voiceCommunicationSilentBroken) {
+                DiagLog.i(
+                    TAG,
+                    "microphone telephony using MIC " +
+                        "(VOICE_COMMUNICATION silent-broken on this device)",
+                )
+                MediaRecorder.AudioSource.MIC
+            } else {
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            }
             "speechrecognition" -> MediaRecorder.AudioSource.VOICE_RECOGNITION
             else -> MediaRecorder.AudioSource.MIC
         }
@@ -118,6 +133,7 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
         }
 
         recorder = nextRecorder
+        usedSource = source
         socket = nextSocket
         opusEncoder = nextEncoder
         return try {
@@ -180,6 +196,8 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
     }
 
     private fun sendFrame(socket: DatagramSocket, counters: MicrophoneCounters, frame: ByteArray) {
+        // Issue #102: record whether this captured frame carried anything but silence.
+        silence.frame(frame.all { it == 0.toByte() })
         val bodies = if (config.codec == AudioCodecKind.OPUS) {
             opusEncoder?.encode(frame).orEmpty()
         } else {
@@ -249,8 +267,28 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
         release()
     }
 
+    /**
+     * Issue #102: a telephony uplink on VOICE_COMMUNICATION that captured nothing but zeroes means
+     * the source is broken on this head unit (GKUI 19 yields no data for it). Remember it so the
+     * next telephony uplink uses MIC instead of repeating the silent capture.
+     */
+    private fun noteSilentVoiceCommunication() {
+        if (voiceCommunicationSilentBroken) return
+        val usedVoiceCommunication = usedSource == MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        if (silence.isVoiceCommunicationBroken(config.audioType, usedVoiceCommunication)) {
+            voiceCommunicationSilentBroken = true
+            DiagLog.w(
+                TAG,
+                "microphone telephony VOICE_COMMUNICATION captured only silence " +
+                    "(${silence.silentFrameCount} frames); " +
+                    "future telephony uplinks will use MIC",
+            )
+        }
+    }
+
     @Synchronized
     private fun release() {
+        noteSilentVoiceCommunication()
         running.set(false)
         val currentRecorder = recorder
         recorder = null
@@ -275,5 +313,12 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
         const val TAG = "xcertplay-usb"
         const val MIN_READ_BYTES = 2_048
         const val CLOSE_JOIN_MILLIS = 500L
+
+        /**
+         * Issue #102: set once a telephony uplink on VOICE_COMMUNICATION captured nothing but
+         * silence (e.g. GKUI head units whose driver yields zeroes for that source). Later
+         * telephony uplinks skip the broken source and use MIC directly.
+         */
+        @Volatile var voiceCommunicationSilentBroken = false
     }
 }
