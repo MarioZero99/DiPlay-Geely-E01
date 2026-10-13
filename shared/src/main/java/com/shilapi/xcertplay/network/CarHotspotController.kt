@@ -16,6 +16,48 @@ internal fun hotspotEnableAttempts(stationEnabled: Boolean): List<Boolean> =
     if (stationEnabled) listOf(false, true) else listOf(false)
 
 /**
+ * Whether turning the driver's Wi-Fi off could still change the answer.
+ *
+ * A firmware that refused the permission, or that has no hotspot API at all, refuses exactly the same
+ * way with station mode gone — the radio was never what it was gating on. Releasing station mode is
+ * expensive on this head unit (the driver's Wi-Fi, and their ADB over it, go with it), so it is only
+ * spent where it can still buy something.
+ */
+internal fun releasingStationModeCouldHelp(previous: HotspotStartResult): Boolean = when (previous) {
+    HotspotStartResult.FAILED, HotspotStartResult.TIMED_OUT -> true
+    else -> false
+}
+
+/**
+ * Makes the attempts [hotspotEnableAttempts] asks for, and puts the driver's Wi-Fi back if the hotspot
+ * still did not come on.
+ *
+ * The restore matters as much as the restraint: once station mode has been spent and the hotspot still
+ * refused, leaving it off buys nothing and costs the driver the connection they had before the switch
+ * was ever attempted.
+ */
+internal fun enableHotspot(
+    stationEnabled: Boolean,
+    releaseStationMode: () -> Unit,
+    restoreStationMode: () -> Unit,
+    enable: () -> HotspotStartResult,
+): HotspotStartResult {
+    var last = HotspotStartResult.FAILED
+    var released = false
+    for (releaseStation in hotspotEnableAttempts(stationEnabled)) {
+        if (releaseStation) {
+            if (!releasingStationModeCouldHelp(last)) break
+            releaseStationMode()
+            released = true
+        }
+        last = enable()
+        if (last == HotspotStartResult.READY) return last
+    }
+    if (released) restoreStationMode()
+    return last
+}
+
+/**
  * Why the switch did not finish. The driver is shown [reason], so a firmware that gates the
  * permission is reported differently from a car that simply would not start its hotspot.
  */
@@ -63,21 +105,23 @@ internal class CarHotspotController(context: Context) {
         val wifi = wifi ?: return HotspotStartResult.NO_WIFI_SERVICE
         val setAp = setApEnabled ?: return HotspotStartResult.UNSUPPORTED
 
-        var last = HotspotStartResult.FAILED
-        for (releaseStation in hotspotEnableAttempts(stationEnabled = wifi.isWifiEnabled)) {
-            if (releaseStation) wifi.isWifiEnabled = false
-            when (enableAccessPoint(setAp, wifi)) {
-                null -> last = HotspotStartResult.PERMISSION_REQUIRED
-                false -> last = HotspotStartResult.FAILED
-                true -> last = if (awaitEnabled(timeoutMillis)) {
-                    return HotspotStartResult.READY
-                } else {
-                    HotspotStartResult.TIMED_OUT
-                }
+        return enableHotspot(
+            stationEnabled = wifi.isWifiEnabled,
+            releaseStationMode = { wifi.isWifiEnabled = false },
+            restoreStationMode = { wifi.isWifiEnabled = true },
+        ) { attemptEnable(setAp, wifi, timeoutMillis) }
+    }
+
+    private fun attemptEnable(setAp: Method, wifi: WifiManager, timeoutMillis: Long): HotspotStartResult =
+        when (enableAccessPoint(setAp, wifi)) {
+            null -> HotspotStartResult.PERMISSION_REQUIRED
+            false -> HotspotStartResult.FAILED
+            true -> if (awaitEnabled(timeoutMillis)) {
+                HotspotStartResult.READY
+            } else {
+                HotspotStartResult.TIMED_OUT
             }
         }
-        return last
-    }
 
     /**
      * Passes a null configuration on purpose: it keeps whatever the car already has, where building
