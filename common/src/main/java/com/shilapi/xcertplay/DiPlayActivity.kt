@@ -192,6 +192,7 @@ class DiPlayActivity : ComponentActivity() {
         loadConnectionSettings()
         render()
         handleWirelessRecovery()
+        startVendorHopInBackground()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val parent = parentOf(page)
@@ -879,6 +880,9 @@ class DiPlayActivity : ComponentActivity() {
     /** What the last action said when it finished, for the page to show under the buttons. */
     private var hopMaintenanceResult: String? = null
 
+    /** True while the hop is being put in place, at app start or on the way into a session. */
+    private var hopStartInFlight = false
+
     /**
      * Asks the hop which phones are connected, off the main thread.
      *
@@ -1039,6 +1043,27 @@ class DiPlayActivity : ComponentActivity() {
     /** The hop this build ships, when it is for this head unit. */
     private fun vendorHop(context: Context): CarBluetoothHop? = CarBluetoothHops.active?.takeIf { hop ->
         runCatching { hop.applies(context) }.getOrDefault(false)
+    }
+
+    /**
+     * Asks the hop to put itself in place, off the main thread, and redraws when it is done.
+     *
+     * Cheap when there is nothing to do: the hop answers from the socket, without a round trip, when
+     * its service is already up. Only one attempt runs at a time, so a page that redraws often cannot
+     * turn this into a stream of root calls.
+     */
+    private fun startVendorHopInBackground() {
+        val hop = vendorHop(this) ?: return
+        if (hopStartInFlight) return
+        hopStartInFlight = true
+        Thread({
+            runCatching { hop.onAppStart(this) }
+            runOnUiThread {
+                hopStartInFlight = false
+                if (isFinishing) return@runOnUiThread
+                if (page == "home" || page == "wireless") render()
+            }
+        }, "car-hop-start").apply { isDaemon = true }.start()
     }
 
     private fun gapsCard(content: LinearLayout, readiness: WirelessReadiness) {
@@ -1296,6 +1321,9 @@ class DiPlayActivity : ComponentActivity() {
             val readiness = currentWirelessReadiness()
             if (!readiness.ready) {
                 // What is missing belongs next to the controls that fix it, not in a dialog over them.
+                // The hop's own service is one of those gaps, and putting it in place runs off the main
+                // thread: ask for it now, and the page redraws when it is there.
+                startVendorHopInBackground()
                 wirelessBlocked = true
                 page = "wireless"
                 render()

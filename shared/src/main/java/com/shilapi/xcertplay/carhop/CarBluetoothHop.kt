@@ -68,6 +68,17 @@ interface CarBluetoothHop {
     /** Whether a session could start right now. May cost a round trip; callers cache the answer. */
     fun ready(context: Context): Boolean
 
+    /**
+     * Puts this hop in place at app start, for a hop that has to be there before a session rather than
+     * at one.
+     *
+     * Best-effort, and only ever called off the main thread: it may need root and the head unit. A hop
+     * that acts only when a session starts leaves the default, and a build with no hop never gets here.
+     */
+    fun onAppStart(context: Context) {
+        // Nothing by default.
+    }
+
     /** The phones the head unit reports. Blocking — callers stay off the main thread. */
     fun connectedPhones(context: Context): List<CarBluetoothPhone>
 
