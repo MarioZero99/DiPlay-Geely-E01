@@ -2,16 +2,24 @@ plugins {
     id 'com.android.library'
 }
 
-// The car hop, when this machine has one.
+// The car hop, when this build was asked for one.
 //
 // Its sources, resources, native half and payload live outside this repository, under the directory
-// DIPLAY_VENDOR_HOP_DIR names. Set, they are compiled into this module like any other source, which is
-// what lets the hop keep using the module's internal types. Unset — the tree as published, CI, any
-// other machine — none of it is on the source path, `VendorCarHop` is a class nothing defines, and the
-// build is the AOSP path. Nothing has to be deleted to publish this tree, because none of it is here.
-def vendorHopEnv = providers.environmentVariable('DIPLAY_VENDOR_HOP_DIR').orNull
-def vendorHopDirectory = (vendorHopEnv != null && new File(vendorHopEnv).isDirectory())
-    ? new File(vendorHopEnv) : null
+// `-PvendorHopDir=<path>` names. Given, they are compiled into this module like any other source,
+// which is what lets the hop keep using the module's internal types. Not given — the tree as
+// published, CI, any other machine — none of it is on the source path, `VendorCarHop` is a class
+// nothing defines, and the build is the AOSP path. Nothing has to be deleted to publish this tree,
+// because none of it is here.
+//
+// The command line is the only place this is read from. A `gradle.properties` entry or an environment
+// variable would both be inherited, and an inherited input deciding what a package contains is what
+// this replaced. A path that was given but names no directory is a typo, not a request for the AOSP
+// build, so it fails instead of quietly falling back.
+def vendorHopValue = gradle.startParameter.projectProperties['vendorHopDir']
+def vendorHopDirectory = vendorHopValue == null ? null : new File(vendorHopValue)
+if (vendorHopDirectory != null && !vendorHopDirectory.isDirectory()) {
+    throw new GradleException("-PvendorHopDir=${vendorHopValue} is not a directory")
+}
 def vendorHopPayload = vendorHopDirectory == null ? null : new File(vendorHopDirectory, 'payload')
 def vendorHopAssets = new File(layout.buildDirectory.get().asFile, 'generated/vendorHopAssets')
 

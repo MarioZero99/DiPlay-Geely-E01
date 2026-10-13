@@ -2,9 +2,11 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
-// Optional local-only input. CI and ordinary source builds contain no accessory identity.
-val localAuthenticationAssets = providers.environmentVariable("DIPLAY_AUTH_ASSETS_DIR")
-    .orNull?.let { file(it).canonicalFile }
+// The accessory identity, when this build was asked to carry one. Command line only, for the same
+// reason the hop directory is: this input decides what the package authenticates as, and an inherited
+// variable must not be able to decide that. CI and ordinary source builds pass nothing here.
+val localAuthenticationAssets = gradle.startParameter.projectProperties["authAssetsDir"]
+    ?.let { file(it).canonicalFile }
 
 android {
     namespace = "com.shilapi.xcertplay"
@@ -109,18 +111,18 @@ tasks.register("assembleStandaloneDebug") {
     dependsOn(verifyStandaloneAuthentication, "assembleDebug")
 }
 
-// The car hop is in the tree only when DIPLAY_VENDOR_HOP_DIR names it. A car-test APK without one runs
-// the AOSP stack and would waste the trip, so the standalone build asks for it as well.
+// The car hop is compiled in only when -PvendorHopDir names it. A car-test APK without one runs the
+// AOSP stack and would waste the trip, so the standalone build asks for it as well.
 val verifyVendorHop by tasks.registering {
     group = "verification"
     description = "Require the car hop for a standalone car-test APK."
-    val directory = providers.environmentVariable("DIPLAY_VENDOR_HOP_DIR").orNull?.let { file(it) }
+    val directory = gradle.startParameter.projectProperties["vendorHopDir"]?.let { file(it) }
     doLast {
         check(directory != null) {
-            "Standalone car builds require DIPLAY_VENDOR_HOP_DIR; without it the APK carries no car hop."
+            "Standalone car builds require -PvendorHopDir=<path>; without it the APK carries no car hop."
         }
         check(directory.resolve("src/com/shilapi/xcertplay/carhop/VendorCarHop.kt").isFile) {
-            "DIPLAY_VENDOR_HOP_DIR does not hold the car hop source."
+            "-PvendorHopDir=${directory} does not hold the car hop source."
         }
     }
 }

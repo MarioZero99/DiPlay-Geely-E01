@@ -160,6 +160,16 @@ jobs:
             | grep -aE 'sb_publishable_|eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' >/dev/null; then
             fail 'the APK carries a Supabase key — a build made from git must not upload anything'
           fi
+          # The car hop is not in a release, and neither is what it installs: the encrypted payload
+          # assets, the native half that decrypts them, and the hop class itself. -PvendorHopDir is what
+          # decides all three, and this is the check that the decision reached the package — a release
+          # built in a shell that still exported the retired variable is exactly what this catches.
+          if unzip -l "$APK" | grep -qE 'assets/payload/|lib/.*/libpayload_crypto\.so'; then
+            fail 'the APK carries the car hop payload — a release must not'
+          fi
+          if unzip -p "$APK" 'classes*.dex' | grep -a 'carhop/VendorCarHop' >/dev/null; then
+            fail 'the APK carries the car hop implementation — a release must not'
+          fi
 
       - name: Checksums
         env:
