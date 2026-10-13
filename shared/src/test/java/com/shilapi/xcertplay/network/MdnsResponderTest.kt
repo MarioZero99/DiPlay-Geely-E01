@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay.network
 
 import java.net.InetAddress
+import javax.jmdns.ServiceInfo
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -71,4 +72,50 @@ class MdnsResponderTest {
 
         assertTrue(opened.single().closed)
     }
+
+    /**
+     * A record the responder replaced is taken back. Left registered it is advertised for the rest of
+     * the process's life, which is invisible only while every run publishes the same name.
+     */
+    @Test fun publishingTakesTheRecordItReplacesBack() {
+        MdnsResponder.acquire(addressA, "carplay-1")
+        val first = service("carplay-a")
+        val second = service("carplay-b")
+
+        MdnsResponder.publish(first)
+        MdnsResponder.publish(second)
+
+        assertEquals(listOf(first, second), opened.single().published)
+        assertEquals(listOf(first), opened.single().retracted)
+    }
+
+    /**
+     * The handover still holds after the takeover retracts: a run that published before the current one
+     * must not be able to take the record away from it.
+     */
+    @Test fun aSupersededRunCannotRetractTheRecordThatReplacedIt() {
+        MdnsResponder.acquire(addressA, "carplay-1")
+        val first = service("carplay-a")
+        val second = service("carplay-b")
+        MdnsResponder.publish(first)
+        MdnsResponder.publish(second)
+
+        MdnsResponder.retract(first)
+
+        // Only the takeover's own retract is there; the stale call added nothing.
+        assertEquals(listOf(first), opened.single().retracted)
+    }
+
+    /**
+     * Publishing without a socket is refused. Recording it instead would read as published to
+     * everything except the network, and [MdnsResponder.acquire] would never go back for it.
+     */
+    @Test fun publishingWithoutASocketIsRefused() {
+        val thrown = runCatching { MdnsResponder.publish(service("carplay-a")) }.exceptionOrNull()
+
+        assertTrue("expected a refusal, got $thrown", thrown is IllegalStateException)
+        assertTrue(opened.isEmpty())
+    }
+
+    private fun service(name: String) = ServiceInfo.create("_airplay._tcp.local.", name, 7000, 0, 0, emptyMap<String, String>())
 }

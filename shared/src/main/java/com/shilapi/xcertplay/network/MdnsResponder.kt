@@ -76,11 +76,23 @@ internal object MdnsResponder {
         opened
     }
 
-    /** Publishes [info] as the responder's record, taking it over from whoever published last. */
+    /**
+     * Publishes [info] as the responder's record, taking it over from whoever published last.
+     *
+     * The record this one replaces is taken back first. jmDNS matches a retraction by name and type,
+     * and for one accessory those are the same every run — which is why the old record staying behind
+     * has not shown up as a problem. They stop being the same the moment the accessory is renamed, and
+     * a record left registered is advertised for the rest of the process's life.
+     *
+     * A publish with no socket is refused rather than recorded. The socket is what [acquire] opens, and
+     * a record held without one reads as published to everything except the network.
+     */
     fun publish(info: ServiceInfo) {
         synchronized(lock) {
+            val current = socket ?: error("publish without a socket: acquire one first")
+            published?.takeIf { it !== info }?.let { current.retract(it) }
             published = info
-            socket?.publish(info)
+            current.publish(info)
         }
     }
 

@@ -2850,10 +2850,10 @@ class CarPlayHostActivity : ComponentActivity() {
 /**
  * Gives the head unit back the two things that outlive a session.
  *
- * The car's own Bluetooth process is replaced for the length of a session and handed back when the
- * session ends; the mDNS socket is held for the whole life of the app, which is what stops an attempt
- * from losing 5353 for the process. Closing the app is the one moment both go back — a session's
- * teardown owns neither.
+ * The car's own Bluetooth carries the hop's patched process for the whole life of the app rather than
+ * for one session, and the mDNS socket is held the same way, which is what stops an attempt from losing
+ * 5353 for the process. Closing the app is the one moment both go back — a session's teardown owns
+ * neither.
  */
 internal fun releaseProcessWirelessResources(context: Context) {
     runCatching { WirelessDiscovery.releaseResponder() }

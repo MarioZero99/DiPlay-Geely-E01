@@ -1055,30 +1055,47 @@ class CarPlayController(
                 return
             }
 
-            val bonjourClient = CarPlayBonjour(
-                context = appContext,
-                config = wirelessAirPlayConfig,
-                identity = identity,
-                advertisedHost = hostAddress.hostAddress,
-                // Bind discovery and its connect probe to the same AP/address family as AirPlay.
-                // The car hotspot previously used system NSD, which could resolve another interface
-                // or IPv6 while the listener/probe was bound to the AP's IPv4 address.
-                useInterfaceMdns = true,
-                onEvent = { event -> debugLog("wireless bonjour: ${event.diagnosticSummary()}") },
-            )
-            bonjour = bonjourClient
-            ownBonjour = bonjourClient
             // A responder that will not come up costs this receiver's advertisement, not the attempt. Every
             // wireless attempt on this head unit has ended on this step, and the iPhone is given the
             // address and the port over the Bluetooth leg as well; losing the advertisement is
             // recoverable, losing the attempt is not. This stays additive: where 5353 is free nothing here
             // changes, and where it is not, the attempt used to die without ever reaching authentication.
-            try {
-                bonjourClient.start()
-                startedBonjour = bonjourClient
-                debugLog("wireless Bonjour services started mode=interface iface=${hotspotInfo.interfaceName ?: "unknown"}")
-            } catch (error: IOException) {
+            //
+            // The construction belongs inside the guard with the start, and the guard takes any exception:
+            // the advertised address is parsed in the constructor, so a host it rejects is the same lost
+            // advertisement as a socket that will not bind — and it rejects one by throwing
+            // IllegalArgumentException, which the IOException this used to catch never covered. Built
+            // outside the guard, that one exception ended the whole attempt at the very step the guard
+            // exists to make survivable.
+            val bonjourClient = try {
+                CarPlayBonjour(
+                    context = appContext,
+                    config = wirelessAirPlayConfig,
+                    identity = identity,
+                    // The scope suffix a link-local IPv6 host carries names an interface, not an address,
+                    // and this is the same value stripped for the display path above.
+                    advertisedHost = hostAddressText,
+                    // Bind discovery and its connect probe to the same AP/address family as AirPlay.
+                    // The car hotspot previously used system NSD, which could resolve another interface
+                    // or IPv6 while the listener/probe was bound to the AP's IPv4 address.
+                    useInterfaceMdns = true,
+                    onEvent = { event -> debugLog("wireless bonjour: ${event.diagnosticSummary()}") },
+                )
+            } catch (error: Exception) {
                 debugLog("wireless Bonjour unavailable, carrying on without an advertisement: ${error.message}")
+                null
+            }
+            // Set even when the construction failed, so nothing is built that no teardown path can see.
+            bonjour = bonjourClient
+            ownBonjour = bonjourClient
+            if (bonjourClient != null) {
+                try {
+                    bonjourClient.start()
+                    startedBonjour = bonjourClient
+                    debugLog("wireless Bonjour services started mode=interface iface=${hotspotInfo.interfaceName ?: "unknown"}")
+                } catch (error: Exception) {
+                    debugLog("wireless Bonjour unavailable, carrying on without an advertisement: ${error.message}")
+                }
             }
             diagnostics.start()
             if (isStaleWirelessRun(generation)) {
@@ -1937,10 +1954,11 @@ class CarPlayController(
         if (activeTunnel != null) closeBestEffort("tunneled iAP2 link") { activeTunnel.close() }
 
         bluetoothLink = null
-        // A supplied hop's restore rides on idleAfterSession, which the failure paths out of the wireless
-        // run never reach. Asking for it here is enough — the hop's own service watches for the stop — and
-        // these teardown paths must not wait for the swap to finish.
-        closeBestEffort("car hop restore") { CarBluetoothHops.active?.idleAfterSession(appContext) }
+        // A session ending does not hand the car's own Bluetooth back any more: the hop keeps its patched
+        // process in place for as long as the app is running and gives it up when the app closes. A hop
+        // that acts at session end rather than at app exit still gets its chance here, and nothing waits
+        // on it — the failure paths out of the wireless run reach this too.
+        closeBestEffort("car hop session end") { CarBluetoothHops.active?.idleAfterSession(appContext) }
         closeBluetoothBootstrapTransport()
 
         val activeBonjour = bonjour

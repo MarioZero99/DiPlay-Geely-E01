@@ -7,6 +7,7 @@ import java.net.InetAddress
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -82,6 +83,11 @@ class CarPlayBonjourResponderTest {
     /**
      * jmDNS retracts a record by service name and type, which every run of the same accessory shares,
      * so a superseded run letting go would otherwise take the newer run's record down with it.
+     *
+     * The one retraction below belongs to the takeover: the second run's publish takes the first run's
+     * record back before registering its own, because a record left registered is advertised for the
+     * life of the process. What must not follow is a second one — the older run closing afterwards has
+     * to reach nothing, or the handover this whole class is about is gone.
      */
     @Test fun aSupersededRunDoesNotTakeTheNextRunsRecordAway() {
         val first = bonjour()
@@ -94,9 +100,9 @@ class CarPlayBonjourResponderTest {
 
             first.close()
 
-            // Only the latest record may be retracted, so the older run's let-go never reached the socket.
             assertEquals(2, socket.published.size)
-            assertEquals(0, socket.retracted.size)
+            assertEquals(1, socket.retracted.size)
+            assertSame(socket.published.first(), socket.retracted.single())
         } finally {
             runCatching { first.close() }
             runCatching { second.close() }
