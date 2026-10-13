@@ -12,7 +12,7 @@ internal fun concatBytes(vararg arrays: ByteArray): ByteArray {
 
 internal fun String.asciiBytes(): ByteArray = toByteArray(Charsets.US_ASCII)
 
-internal fun ByteArray.toHexString(): String {
+fun ByteArray.toHexString(): String {
     val alphabet = "0123456789abcdef"
     val output = CharArray(size * 2)
     for (index in indices) {

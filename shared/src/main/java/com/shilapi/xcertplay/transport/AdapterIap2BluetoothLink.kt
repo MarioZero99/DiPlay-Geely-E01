@@ -1,6 +1,5 @@
 package com.shilapi.xcertplay.transport
 
-import com.shilapi.xcertplay.transport.hci.ActionsHciHost
 import java.io.IOException
 
 /**
@@ -12,7 +11,7 @@ import java.io.IOException
  * connection page.
  */
 internal class AdapterIap2BluetoothLink(
-    private val host: ActionsHciHost,
+    private val host: AdapterBluetoothHost,
     private val configuredAddress: String? = null,
 ) : Iap2BluetoothLink {
     override val localAddress: String?

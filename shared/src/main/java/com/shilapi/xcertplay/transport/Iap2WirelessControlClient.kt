@@ -29,6 +29,12 @@ class Iap2WirelessControlClient(
         onReady: () -> Unit = {},
         onIncoming: (Iap2Frame) -> Unit = {},
         onProgress: (String) -> Unit = {},
+        /**
+         * Whether a phone that asked for the certificate and then never challenged is carried past instead
+         * of failing the run. See [Iap2MfiAuthenticationClient.whenItGoesQuiet] for why silence is worth
+         * reading as something other than a failure; off unless a caller asks.
+         */
+        carryOnWhenTheChallengeNeverComes: Boolean = false,
     ): Iap2WirelessControlResult {
         require(identification.wireless != null) {
             "Wireless control requires an Iap2IdentificationConfig with wireless transport"
@@ -50,9 +56,23 @@ class Iap2WirelessControlClient(
         onProgress("iap2 identification accepted")
         var stage = Iap2WirelessControlStage.IDENTIFIED
 
-        mfi.run(session, requireRemaining(deadlineNanos), onProgress)
+        mfi.run(
+            session,
+            min(requireRemaining(deadlineNanos), MFI_AUTHENTICATION_TIMEOUT_MILLIS),
+            onProgress,
+            carryOnWhenTheChallengeNeverComes,
+        ).let { challenged ->
+            onProgress(
+                if (challenged) {
+                    "iap2 authentication accepted"
+                } else {
+                    // Not "accepted": nothing was accepted, the exchange simply never happened. Saying so
+                    // is what keeps a run that carried on from reading like a run that authenticated.
+                    "iap2 no challenge came for the certificate the phone asked for; carrying on"
+                },
+            )
+        }
         stage = Iap2WirelessControlStage.AUTHENTICATED
-        onProgress("iap2 authentication accepted")
 
         for (subscription in Iap2WiredControlClient.subscriptions()) {
             send(subscription, deadlineNanos)
@@ -281,6 +301,28 @@ class Iap2WirelessControlClient(
         private const val LOCATION_POLL_INTERVAL_MILLIS = 1_000L
         const val NO_TIMEOUT_MILLIS = Long.MAX_VALUE
         private const val DEFAULT_TIMEOUT_MILLIS = 60_000L
+
+        /**
+         * The budget the MFi exchange gets, rather than the caller's remaining deadline.
+         *
+         * [timeoutMillis] covers the whole control run: identification, five subscriptions, Wi-Fi
+         * credentials, and the transport notifications, which is why it is measured in tens of
+         * seconds. Authentication is a small part of that, so handing it the whole remaining
+         * deadline bought a run that was never going to authenticate another forty seconds of
+         * standing still.
+         *
+         * Six seconds is the measured shape of this step over Bluetooth, not a preference. The
+         * phone never answers the first copy of the accessory certificate; it answers the second,
+         * and that copy goes out on the peer's own advertised retransmission timeout of four
+         * seconds. Measured across every run on this bench, including the ones that authenticated,
+         * the phone's first words land 110-120 ms after that retransmission -- so a challenge
+         * cannot arrive before the certificate plus about 4.1 seconds, and the certificate is sent
+         * a fraction of a second into this step. Six seconds leaves that more than a second and a
+         * half of margin. A peer that advertised a longer retransmission timeout would need more,
+         * which is why this is written down as a formula rather than picked.
+         */
+        private const val MFI_AUTHENTICATION_TIMEOUT_MILLIS = 6_000L
+
         private const val MAX_TIMEOUT_MILLIS = 24 * 60 * 60 * 1_000L
         private const val MAX_RECV_TIMEOUT_MILLIS = 5 * 60 * 1_000L
         private const val MAX_PRE_TRANSPORT_WIFI_CONFIGURATION_SENDS = 5

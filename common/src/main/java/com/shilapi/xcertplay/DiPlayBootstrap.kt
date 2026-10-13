@@ -5,8 +5,8 @@ import android.os.Build
 import com.shilapi.xcertplay.airplay.AirPlayIdentity
 import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import com.shilapi.xcertplay.orchestration.MfiTarget
-import com.shilapi.xcertplay.transport.ExternalBluetoothRoute
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
+import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import java.io.File
 import java.security.MessageDigest
 
@@ -45,11 +45,13 @@ internal object DiPlayBootstrap {
         ready = true
     }
 
-    fun deviceId(identity: AirPlayIdentity): String {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(identity.publicKey).take(6).toByteArray()
-        bytes[0] = ((bytes[0].toInt() and 0xfc) or 0x02).toByte()
-        return bytes.joinToString(":") { "%02X".format(it.toInt() and 0xff) }
-    }
+    /**
+     * The app's entry point for the accessory's device id. The derivation itself lives on
+     * [com.shilapi.xcertplay.airplay.AirPlayIdentity.deviceId], because the desk bench needs the same
+     * value and cannot see this module -- and two copies of "who the accessory is" is how a declaration
+     * starts disagreeing with itself.
+     */
+    fun deviceId(identity: AirPlayIdentity): String = identity.deviceId
 }
 
 internal object DiPlayPreferences {
@@ -60,11 +62,11 @@ internal object DiPlayPreferences {
         prefs(context).edit().putString("phone_address", address).putString("phone_name", name).apply()
     }
     /**
-     * The radio a wireless run uses. With the adapter hop off there is one radio left, so it is the
-     * answer whether or not the driver ever picked it — the page no longer shows a choice to make.
+     * The radio a wireless run uses. With no adapter stack in this build there is one radio left, so it is
+     * the answer whether or not the driver ever picked it — the page no longer shows a choice to make.
      */
     fun bluetoothHop(context: Context): WirelessBluetoothHop? {
-        if (!ExternalBluetoothRoute.enabled) return WirelessBluetoothHop.CAR
+        if (!AdapterRoutes.available) return WirelessBluetoothHop.CAR
         return WirelessBluetoothHop.fromKey(prefs(context).getString("bluetooth_hop", null))
     }
     fun saveBluetoothHop(context: Context, hop: WirelessBluetoothHop) {

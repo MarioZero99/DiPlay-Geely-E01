@@ -23,6 +23,19 @@ if (vendorHopDirectory != null && !vendorHopDirectory.isDirectory()) {
 def vendorHopPayload = vendorHopDirectory == null ? null : new File(vendorHopDirectory, 'payload')
 def vendorHopAssets = new File(layout.buildDirectory.get().asFile, 'generated/vendorHopAssets')
 
+// The USB-adapter stack, when this build was asked for one.
+//
+// Same shape as the hop above, and read the same way: `-PadapterDir=<path>` names a directory outside
+// this repository holding the adapter's Kotlin, resources and native half — the native half goes to the
+// makefile below through ADAPTER_HCI_JNI. Given, they are compiled into this module like its own
+// sources. Not given — the tree as published, CI, any other machine — nothing of it is on the source
+// path, no adapter native code is built, and the build is the AOSP path.
+def adapterValue = gradle.startParameter.projectProperties['adapterDir']
+def adapterDirectory = adapterValue == null ? null : new File(adapterValue)
+if (adapterDirectory != null && !adapterDirectory.isDirectory()) {
+    throw new GradleException("-PadapterDir=${adapterValue} is not a directory")
+}
+
 def encryptVendorPayload = vendorHopPayload == null ? null : tasks.register('encryptVendorPayload') {
     group = 'build'
     description = 'Encrypt the car hop payload into the assets the app reads.'
@@ -99,6 +112,10 @@ android {
         externalNativeBuild {
             ndkBuild {
                 arguments 'APP_PLATFORM=android-19'
+                // The module's own makefile includes the adapter's by this name, when there is one.
+                if (adapterDirectory != null) {
+                    arguments "ADAPTER_HCI_JNI=${new File(adapterDirectory, 'jni')}"
+                }
                 // The module's own makefile includes the hop's by this name, when there is one.
                 if (vendorHopDirectory != null) {
                     arguments "VENDOR_HOP_JNI=${new File(vendorHopDirectory, 'jni')}"
@@ -121,6 +138,9 @@ android {
                 res.srcDir(new File(vendorHopDirectory, 'res'))
                 assets.srcDir(vendorHopAssets)
             }
+            if (adapterDirectory != null) {
+                res.srcDir(new File(adapterDirectory, 'res'))
+            }
         }
     }
     compileOptions {
@@ -137,6 +157,10 @@ androidComponents {
         if (vendorHopDirectory != null) {
             variant.sources.java.addStaticSourceDirectory(new File(vendorHopDirectory, 'src').absolutePath)
             variant.unitTest?.sources?.java?.addStaticSourceDirectory(new File(vendorHopDirectory, 'test').absolutePath)
+        }
+        if (adapterDirectory != null) {
+            variant.sources.java.addStaticSourceDirectory(new File(adapterDirectory, 'src').absolutePath)
+            variant.unitTest?.sources?.java?.addStaticSourceDirectory(new File(adapterDirectory, 'test').absolutePath)
         }
     }
 }
@@ -169,4 +193,41 @@ dependencies {
     implementation libs.jmdns
     testImplementation libs.junit
     testImplementation 'org.robolectric:robolectric:4.17'
+}
+
+// The adapter's native stack, built for the machine running the tests, so the host test can drive the real
+// BtstackBluetoothHost and the real transport instead of a second implementation of either.
+//
+// Nothing about it lives here any more — not the sources, not the script — so a build with no adapter has
+// nothing to build and no host test that would want it. Hence the task exists only when the directory does,
+// and the sources are read where they are rather than through this project's own paths. On a machine with
+// no C compiler or no JDK headers the script prints why and builds nothing, and the test skips itself.
+def hostBtstackLibs = layout.buildDirectory.dir('host-libs')
+def buildHostBtstackLibs = null
+if (adapterDirectory != null) {
+    def adapter = adapterDirectory
+    buildHostBtstackLibs = tasks.register('buildHostBtstackLibs', Exec) {
+        group = 'verification'
+        description = 'Builds the adapter native stack for the host test.'
+        commandLine 'sh', new File(adapter, 'tools/build-host-btstack.sh').absolutePath,
+                adapter.absolutePath, hostBtstackLibs.get().asFile.absolutePath
+        inputs.files(fileTree(new File(adapter, 'jni')) { include '**/*.c', '**/*.h' })
+        inputs.files(fileTree(new File(adapter, 'hostTest/c')))
+        inputs.file(new File(adapter, 'tools/build-host-btstack.sh'))
+        outputs.dir(hostBtstackLibs)
+    }
+}
+
+tasks.withType(Test).configureEach {
+    if (buildHostBtstackLibs != null) {
+        dependsOn buildHostBtstackLibs
+        // The library is found at run time off java.library.path, so it is never on the test classpath and
+        // never in the up-to-date check. It has to be an input for that reason alone: a change to the native
+        // stack rebuilt the library and left the test results untouched, so the tests reported the last
+        // run's verdict for code that was already gone.
+        inputs.dir(hostBtstackLibs).withPropertyName('hostBtstackLibs')
+    }
+    // System.loadLibrary searches here, which is how the shipping code finds the host build without
+    // knowing a test exists. With no adapter this names a directory that stays empty, and nothing looks.
+    systemProperty 'java.library.path', hostBtstackLibs.get().asFile.absolutePath
 }

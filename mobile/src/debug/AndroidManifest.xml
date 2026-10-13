@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The desk rig's display head, and nothing else.
+
+  This overlay used to carry the BYD HUD demo as well; the fork dropped BYD's HUD, battery and charging
+  output, and with them the activities and the vendor permission that were declared here. What is left is
+  the one activity the rig needs, kept as a debug-only entry that adb can start and an ordinary app cannot.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application android:label="DiPlay Rig" tools:replace="android:label">
+        <activity
+            android:name="com.shilapi.xcertplay.rig.AirPlayDisplayHeadActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+    </application>
+</manifest>

@@ -30,6 +30,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -51,15 +52,14 @@ import com.shilapi.xcertplay.host.BuildConfig
 import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.media.NavigationAudioStream
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
-import com.shilapi.xcertplay.transport.AdapterBringUp
-import com.shilapi.xcertplay.transport.AdapterBringUpAssessment
-import com.shilapi.xcertplay.transport.AdapterObservation
-import com.shilapi.xcertplay.transport.ExternalBluetoothRoute
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.WirelessGap
 import com.shilapi.xcertplay.transport.WirelessReadiness
 import com.shilapi.xcertplay.transport.WirelessReadinessCheck
 import com.shilapi.xcertplay.transport.WirelessReadinessInput
+import com.shilapi.xcertplay.transport.adapter.AdapterPage
+import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
+import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -71,6 +71,17 @@ class DiPlayActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var page = "home"
     private var pendingCarHotspotSetup = false
+
+    /**
+     * Where a rebuilt page comes back to.
+     *
+     * Most controls repaint by rebuilding the page, and a fresh ScrollView starts at the top: turning
+     * on a switch in a card near the bottom threw the page back to the header. The offset is kept per
+     * page, so moving between pages still starts at the top.
+     */
+    private var pageScroll: ScrollView? = null
+    private var pageScrollY = 0
+    private var scrollYPage: String? = null
 
     /**
      * The manual-hotspot pair, read once per redraw for the same reason [cachedReport] is: laying the
@@ -85,8 +96,8 @@ class DiPlayActivity : ComponentActivity() {
     private var connectButton: Button? = null
     private var disconnectButton: Button? = null
     private var lastRunning: Boolean? = null
-    private var adapterWatch: AdapterWatch? = null
-    private var adapterSeen: AdapterObservation? = null
+    private var adapterPage: AdapterPage? = null
+    private var adapterSeen: WirelessAdapterStatus? = null
 
     /** The line the adapter's step is written into, kept so a step change repaints it instead of the page. */
     private var adapterStatus: TextView? = null
@@ -228,7 +239,7 @@ class DiPlayActivity : ComponentActivity() {
         super.onPause()
     }
     override fun onDestroy() {
-        releaseAdapterWatch()
+        releaseAdapterPage()
         super.onDestroy()
     }
 
@@ -237,6 +248,8 @@ class DiPlayActivity : ComponentActivity() {
         // One probe per redraw: laying the page out asks what the head unit supports several times over.
         cachedReport = null
         cachedHotspot = null
+        pageScroll?.let { if (scrollYPage == page) pageScrollY = it.scrollY }
+        if (scrollYPage != page) { scrollYPage = page; pageScrollY = 0 }
         val scroll = ScrollView(this).apply { setBackgroundColor(BG); isFillViewport = true; clipToPadding = false }
         val content = column().apply { setPadding(dp(32), dp(24), dp(32), dp(32)) }
         scroll.addView(content)
@@ -261,6 +274,8 @@ class DiPlayActivity : ComponentActivity() {
             else -> home(content)
         }
         setContentView(scroll)
+        pageScroll = scroll
+        restoreScroll(scroll, pageScrollY)
         refreshStatus()
     }
 
@@ -273,6 +288,21 @@ class DiPlayActivity : ComponentActivity() {
         "settings" -> "home"
         "about" -> "system"
         else -> "settings"
+    }
+
+    /**
+     * A rebuilt page has nowhere to scroll to until it has been laid out: [ScrollView.scrollTo] clamps
+     * against the child's height, which is still zero when the rebuild returns.
+     */
+    private fun restoreScroll(scroll: ScrollView, offset: Int) {
+        if (offset <= 0) return
+        val observer = scroll.viewTreeObserver
+        observer.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                observer.removeOnGlobalLayoutListener(this)
+                if (pageScroll === scroll) scroll.scrollTo(0, offset)
+            }
+        })
     }
 
     private fun home(content: LinearLayout) {
@@ -782,7 +812,7 @@ class DiPlayActivity : ComponentActivity() {
         if (hop == DiPlayPreferences.bluetoothHop(this)) return
         DiPlayPreferences.saveBluetoothHop(this, hop)
         // The adapter stack may not keep running once the car's own radio is the choice.
-        if (hop == WirelessBluetoothHop.CAR) releaseAdapterWatch()
+        if (hop == WirelessBluetoothHop.CAR) releaseAdapterPage()
         render()
     }
 
@@ -796,7 +826,7 @@ class DiPlayActivity : ComponentActivity() {
 
     /** The phone the adapter itself paired. It only exists once the adapter's flow has got that far. */
     private fun externalPhoneChoice(card: LinearLayout) {
-        if (!UsbBluetoothRadios.present(this)) {
+        if (AdapterRoutes.active?.present(this) != true) {
             // The one thing here that only the driver can fix, said before anything the phone could show:
             // without the adapter there is no radio to pair to, so a "pair the iPhone first" line would be
             // asking for something the driver cannot do yet.
@@ -804,7 +834,7 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(button(getString(R.string.adapter_check_again), false) { render() }, matchButton(8, 60))
             return
         }
-        val target = adapterWatch?.host()?.pairedTarget()
+        val target = adapterPage?.host?.pairedTarget()
         if (target == null) {
             card.addView(label(getString(R.string.pair_the_iphone_to_the_external_radio_first), 15, MUTED).apply { setPadding(0, dp(8), 0, 0) })
             return
@@ -1091,7 +1121,7 @@ class DiPlayActivity : ComponentActivity() {
         val lines = readiness.gaps.map { gapText(it, readiness.adapter) }.toMutableList()
         val adapter = readiness.adapter
         if (adapter != null && WirelessGap.DONGLE_NOT_READY !in readiness.gaps && !adapter.flowEffective) {
-            lines += adapterBringUpText(this, adapter)
+            adapter.sentence?.let { lines += it }
         }
         lines.forEach { card.addView(label(it, 15, WARNING).apply { setPadding(0, dp(4), 0, dp(4)) }) }
     }
@@ -1368,7 +1398,7 @@ class DiPlayActivity : ComponentActivity() {
         }
         val open = {
             AirPlayPersistence.saveWirelessEnabled(this, wireless)
-            val watch = adapterWatch.also { adapterWatch = null }
+            val watch = adapterPage.also { adapterPage = null }
             val project = {
                 if (!isFinishing && (Build.VERSION.SDK_INT < 17 || !isDestroyed)) openProjection()
             }
@@ -1377,7 +1407,7 @@ class DiPlayActivity : ComponentActivity() {
             } else {
                 // The connection page claims this same stick. Wait for the release off the UI thread.
                 Thread({
-                    watch.closeAndWait()
+                    watch.releaseAndWait()
                     runOnUiThread { project() }
                 }, "adapter-release").start()
             }
@@ -1529,65 +1559,80 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun externalBluetoothSelected() =
-        com.shilapi.xcertplay.transport.AdapterDiscovery.runs(DiPlayPreferences.bluetoothHop(this))
+        DiPlayPreferences.bluetoothHop(this) == WirelessBluetoothHop.USB_ADAPTER
 
     private fun adapterStatusView(): TextView? {
         if (!externalBluetoothSelected()) {
-            releaseAdapterWatch()
+            releaseAdapterPage()
             adapterStatus = null
             return null
         }
-        if (!UsbBluetoothRadios.present(this)) {
+        val seen = adapterStatusNow()
+        if (!seen.plugged) {
             adapterStatus = null
             return null
         }
         val view = label("", 15, MUTED).apply { setPadding(0, dp(8), 0, dp(8)) }
         adapterStatus = view
-        paintAdapterStatus(view)
+        paintAdapterStatus(view, seen)
         return view
     }
 
     /** The adapter's step goes into the line already on screen; starting up must not rebuild the page. */
-    private fun paintAdapterStatus(view: TextView) {
+    private fun paintAdapterStatus(view: TextView, seen: WirelessAdapterStatus) {
         if (CarPlayBackgroundSession.hasSession()) {
             view.text = getString(R.string.adapter_status_while_connecting)
             view.setTextColor(MUTED)
             return
         }
-        paintAdapterStep(view, observedAdapter())
+        view.text = seen.sentence
+        view.setTextColor(if (seen.flowEffective) MUTED else WARNING)
     }
 
-    private fun paintAdapterStep(view: TextView, observed: AdapterObservation) {
-        val report = AdapterBringUpAssessment.assess(observed)
-        view.text = adapterBringUpText(this, report)
-        view.setTextColor(if (report.flowEffective) MUTED else WARNING)
-    }
-
-    private fun observedAdapter(): AdapterObservation {
+    /**
+     * The adapter as it stands.
+     *
+     * Its session is only brought up when the radio is on the bus: a page holding a status for a radio that is
+     * not in the socket must not claim the USB interface. A run already holding the interface is left alone —
+     * its own session owns the stick — and the answer is whatever it last reported.
+     */
+    private fun adapterStatusNow(): WirelessAdapterStatus {
         if (!externalBluetoothSelected()) {
-            releaseAdapterWatch()
-            return AdapterObservation(UsbBluetoothRadios.present(this), false, null, null, false).also { adapterSeen = it }
+            releaseAdapterPage()
+            return noAdapterSeen().also { adapterSeen = it }
         }
-        if (CarPlayBackgroundSession.hasSession()) {
-            return adapterSeen ?: AdapterObservation(UsbBluetoothRadios.present(this), false, null, null, false)
+        if (CarPlayBackgroundSession.hasSession()) return adapterSeen ?: noAdapterSeen()
+        val route = AdapterRoutes.active ?: run {
+            releaseAdapterPage()
+            return noAdapterSeen().also { adapterSeen = it }
         }
-        if (!UsbBluetoothRadios.present(this)) {
-            releaseAdapterWatch()
-            return AdapterObservation(false, false, null, null, false).also { adapterSeen = it }
-        }
-        val watch = adapterWatch ?: AdapterWatch(this) { seen ->
-            adapterSeen = seen
-            adapterStatus?.let { paintAdapterStep(it, seen) }
-        }.also { adapterWatch = it }
-        val advertise = com.shilapi.xcertplay.transport.AdapterDiscovery.shouldAdvertise(
-            com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this),
-        )
-        return watch.refresh(advertise).also { adapterSeen = it }
+        val page = adapterPage ?: newAdapterPage(route)
+        if (!route.present(this)) return page.status.also { adapterSeen = it }
+        return page.refresh(com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this))
+            .also { adapterSeen = it }
     }
 
-    private fun releaseAdapterWatch() {
-        adapterWatch?.close()
-        adapterWatch = null
+    private fun newAdapterPage(route: com.shilapi.xcertplay.transport.adapter.AdapterRoute): AdapterPage =
+        route.page(
+            context = this,
+            onStatus = { seen ->
+                adapterSeen = seen
+                adapterStatus?.let { paintAdapterStatus(it, seen) }
+            },
+            onLine = {},
+        ).also { adapterPage = it }
+
+    /** What to report when there is no adapter stack in this build, or the car's own radio is the choice. */
+    private fun noAdapterSeen() = WirelessAdapterStatus(
+        plugged = false,
+        named = false,
+        flowEffective = false,
+        sentence = null,
+    )
+
+    private fun releaseAdapterPage() {
+        adapterPage?.close()
+        adapterPage = null
     }
 
     private fun registerUsbTopology() {
@@ -1606,7 +1651,7 @@ class DiPlayActivity : ComponentActivity() {
      */
     private fun onUsbTopologyChanged() {
         if (!externalBluetoothSelected()) return
-        val plugged = UsbBluetoothRadios.present(this)
+        val plugged = AdapterRoutes.active?.present(this) == true
         if (plugged == adapterPluggedSeen) return
         adapterPluggedSeen = plugged
         if (page == "home" || page == "wireless") render()
@@ -1626,14 +1671,11 @@ class DiPlayActivity : ComponentActivity() {
     private fun currentWirelessReadiness(): WirelessReadiness {
         val manual = AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL
         val hop = DiPlayPreferences.bluetoothHop(this)
-        val plugged = UsbBluetoothRadios.present(this) && !CarPlayBackgroundSession.hasSession()
-        val observed = if (plugged && com.shilapi.xcertplay.transport.AdapterDiscovery.runs(hop)) {
-            observedAdapter()
-        } else {
-            AdapterObservation(false, false, null, null, false)
-        }
-        val bringUp = if (plugged || hop == WirelessBluetoothHop.USB_ADAPTER) AdapterBringUpAssessment.assess(observed) else null
-        val pairedAddress = adapterWatch?.host()?.pairedTarget()?.address
+        val plugged = AdapterRoutes.active?.present(this) == true
+        // The adapter radio is the only one whose gaps read the step line, and that line is the adapter's own
+        // wording — so it is asked even with the radio out of the socket, where it says so.
+        val seen = if (hop == WirelessBluetoothHop.USB_ADAPTER) adapterStatusNow() else noAdapterSeen()
+        val pairedAddress = adapterPage?.host?.pairedTarget()?.address
         val saved = DiPlayPreferences.phoneAddress(this)
         val phoneChosen = when (hop) {
             WirelessBluetoothHop.USB_ADAPTER -> pairedAddress != null && saved?.equals(pairedAddress, ignoreCase = true) == true
@@ -1648,18 +1690,18 @@ class DiPlayActivity : ComponentActivity() {
                 phoneChosen = phoneChosen,
                 carBluetoothOn = carBluetoothOn(),
                 adapterPlugged = plugged,
-                adapter = bringUp,
+                adapter = if (plugged || hop == WirelessBluetoothHop.USB_ADAPTER) seen else null,
             ),
         )
     }
 
-    private fun gapText(gap: WirelessGap, adapter: AdapterBringUp?): String = when (gap) {
+    private fun gapText(gap: WirelessGap, adapter: WirelessAdapterStatus?): String = when (gap) {
         WirelessGap.HOTSPOT_CREDENTIALS -> getString(R.string.gap_hotspot_credentials)
         WirelessGap.HOTSPOT_OFF -> getString(R.string.gap_hotspot_off)
         WirelessGap.RADIO_NOT_CHOSEN -> getString(R.string.gap_radio)
-        WirelessGap.CAR_BLUETOOTH_OFF -> getString(R.string.gap_car_bluetooth)
+        WirelessGap.CAR_BLUETOOTH_OFF -> getString(carBluetoothOffText(AdapterRoutes.available))
         WirelessGap.PHONE_NOT_CHOSEN -> getString(R.string.gap_phone)
-        WirelessGap.DONGLE_NOT_READY -> adapter?.let { adapterBringUpText(this, it) } ?: getString(R.string.gap_adapter_missing)
+        WirelessGap.DONGLE_NOT_READY -> adapter?.sentence ?: getString(R.string.gap_adapter_missing)
     }
 
     private fun wirelessHelp() {
@@ -2095,3 +2137,13 @@ class DiPlayActivity : ComponentActivity() {
         private val WARNING = Color.rgb(255, 196, 128)
     }
 }
+
+/**
+ * Which of the two car-Bluetooth wordings to show.
+ *
+ * The longer one ends by sending the driver to the external radio, so it is only true on a page that offers
+ * one — the same answer the radio choices at the top of the page take from [AdapterRoutes]. Whichever build
+ * this is, this is the one place that decides.
+ */
+internal fun carBluetoothOffText(hasAdapter: Boolean): Int =
+    if (hasAdapter) R.string.gap_car_bluetooth else R.string.gap_car_bluetooth_no_adapter

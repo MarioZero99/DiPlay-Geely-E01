@@ -8,6 +8,7 @@
 #
 #   DIPLAY_AUTH_ASSETS_DIR   default ~/.diplay-auth-assets    (offline-mfi identity)
 #   DIPLAY_VENDOR_HOP_DIR    no default; the car-test build requires it, a release ignores it
+#   DIPLAY_ADAPTER_DIR       no default; the car-test build requires it, a release ignores it
 #   DIPLAY_CLOUD_LOGS        0 drops the Supabase log-upload key from the APK
 #
 # The signing key stays a variable: a password on a command line is readable by anything that can list
@@ -33,6 +34,7 @@ tag="V$(printf '%s' "$version" | tr -d '.')"
 : "${ANDROID_HOME:=/opt/homebrew/share/android-commandlinetools}"
 auth_dir=${DIPLAY_AUTH_ASSETS_DIR:-$HOME/.diplay-auth-assets}
 hop_dir=${DIPLAY_VENDOR_HOP_DIR:-}
+adapter_dir=${DIPLAY_ADAPTER_DIR:-}
 
 # A build made from git is the one that gets published, and it must not carry the log-upload key: a CI
 # workspace is a checkout, so whatever a local.properties lying in it says is not what is being
@@ -48,7 +50,7 @@ fi
 
 # Gradle refuses a stale one of these outright, and that refusal is what makes translating here the
 # only way in. This script's own copies are taken above and are not passed on.
-unset DIPLAY_AUTH_ASSETS_DIR DIPLAY_VENDOR_HOP_DIR DIPLAY_CLOUD_LOGS
+unset DIPLAY_AUTH_ASSETS_DIR DIPLAY_VENDOR_HOP_DIR DIPLAY_ADAPTER_DIR DIPLAY_CLOUD_LOGS
 export ANDROID_HOME
 
 mkdir -p "$out"
@@ -74,6 +76,9 @@ build_release() {
     if [ -n "$hop_dir" ]; then
         echo "package-geely: a release carries no car hop; DIPLAY_VENDOR_HOP_DIR is ignored for it" >&2
     fi
+    if [ -n "$adapter_dir" ]; then
+        echo "package-geely: a release carries no adapter stack; DIPLAY_ADAPTER_DIR is ignored for it" >&2
+    fi
     (cd "$root" && sh gradlew -PauthAssetsDir="$auth_dir" -PcloudLogs="$cloud_logs" :mobile:assembleRelease)
     cp "$root/mobile/build/outputs/apk/release/mobile-release.apk" "$out/DiPlay-Legacy-Geely-$tag.apk"
     echo "→ $out/DiPlay-Legacy-Geely-$tag.apk"
@@ -83,8 +88,11 @@ build_debug() {
     if [ -z "$hop_dir" ]; then
         echo "package-geely: the car-test package needs DIPLAY_VENDOR_HOP_DIR" >&2; exit 1
     fi
+    if [ -z "$adapter_dir" ]; then
+        echo "package-geely: the car-test package needs DIPLAY_ADAPTER_DIR" >&2; exit 1
+    fi
     (cd "$root" && sh gradlew -PauthAssetsDir="$auth_dir" -PcloudLogs="$cloud_logs" \
-        -PvendorHopDir="$hop_dir" :mobile:assembleStandaloneDebug)
+        -PvendorHopDir="$hop_dir" -PadapterDir="$adapter_dir" :mobile:assembleStandaloneDebug)
     cp "$root/mobile/build/outputs/apk/debug/mobile-debug.apk" "$out/DiPlay-Legacy-Geely-$tag-hudtest.apk"
     echo "→ $out/DiPlay-Legacy-Geely-$tag-hudtest.apk"
 }

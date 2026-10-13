@@ -7,9 +7,12 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.TextView
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
+import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -21,10 +24,19 @@ import org.robolectric.annotation.Config
  * The settings area is a hub with one page per bucket. These lock in what the split is for: every
  * page opens from the hub, back goes to the hub rather than all the way home, and an action is
  * offered once rather than on whichever pages happened to want it.
+ *
+ * What the pages say is pinned to a build with no adapter stack. These assertions are about the split
+ * and the wording of the gaps, and a page that offers an external radio words several of them
+ * differently — so without the pin the same test would pass or fail according to whether the machine
+ * that ran it had the adapter mounted, and a suite that is green either way is evidence of nothing.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "en")
 class SettingsPagesUiTest {
+
+    @Before fun thisBuildHasNoAdapterStack() = AdapterRoutes.override(null)
+
+    @After fun giveTheBuildItsOwnAnswerBack() = AdapterRoutes.resetOverride()
 
     private val bucket = listOf(
         Triple("Open wireless settings", "Wireless settings", "wireless"),

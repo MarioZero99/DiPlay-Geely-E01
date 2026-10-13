@@ -16,6 +16,7 @@
     <string name="gap_radio">还没选蓝牙。在第 2 步里选外置蓝牙或内置蓝牙，再选手机。外置蓝牙配的是蓝牙棒的名字，内置蓝牙配的是车机蓝牙。</string>
     <string name="gap_phone">蓝牙选了，iPhone 还没选定。在第 2 步的列表里把要连的那台手机点上。</string>
     <string name="gap_car_bluetooth">选的是内置蓝牙，但车机蓝牙是关的，或者这个应用读不到它。打开车机蓝牙设置，打开蓝牙并配对这台 iPhone。这台车如果没有蓝牙数据口，无线要改选外置蓝牙。</string>
+    <string name="gap_car_bluetooth_no_adapter">选的是内置蓝牙，但车机蓝牙是关的，或者这个应用读不到它。打开车机蓝牙设置，打开蓝牙并配对这台 iPhone。</string>
     <string name="gap_adapter_missing">没检测到外置蓝牙。把蓝牙棒插到扶手箱 USB，允许 DiPlay 使用它，再查一次。</string>
     <string name="adapter_step_not_plugged">外置蓝牙没插上，启动还没开始。把蓝牙棒插到扶手箱 USB，然后点再查一次。</string>
     <string name="adapter_step_usb_permission">外置蓝牙已经检测到。启动卡在 USB 允许。屏幕上如果问是否允许 DiPlay 使用这个 USB 设备，点允许。没有弹窗就拔插蓝牙棒，再查一次。</string>

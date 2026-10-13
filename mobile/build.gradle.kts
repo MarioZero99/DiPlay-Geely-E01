@@ -97,7 +97,7 @@ val verifyStandaloneAuthentication by tasks.registering {
     val directory = localAuthenticationAssets
     doLast {
         check(directory != null) {
-            "Standalone car builds require DIPLAY_AUTH_ASSETS_DIR; assembleDebug alone is source-only."
+            "Standalone car builds require -PauthAssetsDir=<path>; assembleDebug alone is source-only."
         }
         check(listOf("identity.pk8", "certificate.p7b").all {
             directory.resolve("offline-mfi/$it").let { file -> file.isFile && file.length() > 0 }
@@ -128,3 +128,27 @@ val verifyVendorHop by tasks.registering {
 }
 tasks.named("preBuild") { mustRunAfter(verifyVendorHop) }
 tasks.named("assembleStandaloneDebug") { dependsOn(verifyVendorHop) }
+
+// The adapter stack is compiled in only when -PadapterDir names it, and nothing in the build asks for it:
+// without one the build is the published build, and a car-test APK still goes out carrying the car hop's
+// Bluetooth. So this is asked for by hand, and asking for it is a claim that this run means to have the
+// adapter — no directory named is then a failure rather than a build that quietly has no adapter in it.
+val verifyAdapter by tasks.registering {
+    group = "verification"
+    description = "Require the adapter stack, for a run that means to carry it."
+    val directory = gradle.startParameter.projectProperties["adapterDir"]?.let { file(it) }
+    doLast {
+        check(directory != null) {
+            "Standalone car builds require -PadapterDir=<path>; without it the APK carries no adapter stack."
+        }
+        check(directory.resolve("src/com/shilapi/xcertplay/adapter/UsbAdapterRoute.kt").isFile) {
+            "-PadapterDir=${directory} does not hold the adapter route."
+        }
+        check(directory.resolve("jni/Android.mk").isFile) {
+            "-PadapterDir=${directory} does not hold the adapter's native stack."
+        }
+    }
+}
+// Both sides of this file already registered this and neither hooked it up, so it never ran: a car-test
+// APK could be built with no adapter in it and nothing said so. The hop's check has always been wired.
+tasks.named("assembleStandaloneDebug") { dependsOn(verifyAdapter) }

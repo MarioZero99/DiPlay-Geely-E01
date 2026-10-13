@@ -1,6 +1,6 @@
 package com.shilapi.xcertplay.transport
 
-import com.shilapi.xcertplay.transport.hci.ActionsHciHost
+import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 
 /** The RFCOMM hop to the iPhone, however this head unit can reach it. */
 internal interface Iap2BluetoothLink {
@@ -31,15 +31,15 @@ internal object Iap2BluetoothLinks {
      * running also fails here: there is no silent fallback. [WirelessBluetoothHop.CAR] does not look at
      * the adapter.
      *
-     * The route switch is a parameter rather than a direct read of [ExternalBluetoothRoute] so that both
+     * The route switch is a parameter rather than a direct read of [AdapterRoutes] so that both
      * sides of it are reachable from a test.
      */
     fun chooseForWireless(
         hop: WirelessBluetoothHop,
-        host: ActionsHciHost?,
+        host: AdapterBluetoothHost?,
         configuredAddress: String?,
         onDiagnostic: (String) -> Unit = {},
-        externalRouteEnabled: Boolean = ExternalBluetoothRoute.enabled,
+        externalRouteEnabled: Boolean = AdapterRoutes.available,
         car: () -> Iap2BluetoothLink,
     ): Iap2BluetoothLink {
         if (hop == WirelessBluetoothHop.USB_ADAPTER) {

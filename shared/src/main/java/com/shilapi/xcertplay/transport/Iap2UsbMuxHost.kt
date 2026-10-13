@@ -322,6 +322,7 @@ class Iap2UsbMuxTcpConnection internal constructor(
     private val stateLock = Object()
     private val writeLock = Any()
     private val received = ArrayDeque<ByteArray>()
+    private var receivedBytes = 0
     private var nextSequence = 0
     private var nextAcknowledgement = 0
     private var connected = false
@@ -378,10 +379,13 @@ class Iap2UsbMuxTcpConnection internal constructor(
                 return ByteArray(0)
             }
             val packet = received.removeFirst()
+            receivedBytes -= packet.size
             return if (packet.size <= maxBytes) {
                 packet
             } else {
-                received.addFirst(packet.copyOfRange(maxBytes, packet.size))
+                val remainder = packet.copyOfRange(maxBytes, packet.size)
+                received.addFirst(remainder)
+                receivedBytes += remainder.size
                 packet.copyOf(maxBytes)
             }
         }
@@ -486,11 +490,29 @@ class Iap2UsbMuxTcpConnection internal constructor(
             return
         }
         if (payload.isNotEmpty()) {
-            synchronized(stateLock) {
+            val overflowed = synchronized(stateLock) {
                 if (closed) return
-                nextAcknowledgement += payload.size
-                received.addLast(payload)
-                stateLock.notifyAll()
+                if (receivedBytes + payload.size > MAX_RECEIVED_BYTES) {
+                    // The reader has stopped taking bytes and the peer keeps sending. Letting the queue
+                    // grow ends in an OOM on a head unit with 26-33 MB free, so the stream fails here
+                    // instead — the same shape as a peer reset, which the callers already handle.
+                    failure = IphoneUsbException.DeviceUnavailable(
+                        "USBMUX TCP receive queue is full at $MAX_RECEIVED_BYTES bytes",
+                    )
+                    closed = true
+                    stateLock.notifyAll()
+                    true
+                } else {
+                    nextAcknowledgement += payload.size
+                    received.addLast(payload)
+                    receivedBytes += payload.size
+                    stateLock.notifyAll()
+                    false
+                }
+            }
+            if (overflowed) {
+                host.removeConnection(this)
+                return
             }
             sendControl(TCP_ACK)
         }
@@ -531,6 +553,13 @@ class Iap2UsbMuxTcpConnection internal constructor(
         const val TCP_RST = 0x04
         const val TCP_ACK = 0x10
         const val MAX_SEND_PAYLOAD_BYTES = 16 * 1024
+
+        /**
+         * The most received-but-unread bytes one stream may hold. The same ceiling the rest of the
+         * stack's queues use, and a hard one: [TCP_WINDOW_FIELD] advertises a receive window but the
+         * peer is not obliged to respect it, so the queue has to defend itself.
+         */
+        const val MAX_RECEIVED_BYTES = 1024 * 1024
         const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }
