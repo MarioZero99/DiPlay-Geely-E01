@@ -310,10 +310,12 @@ class DiPlayActivity : ComponentActivity() {
         addEntry(
             connectionEntry(
                 title = getString(R.string.wireless_carplay),
-                hint = if (wireless) {
-                    wirelessEntryHint()
-                } else {
-                    getString(R.string.connection_entry_wireless_unavailable)
+                hint = when {
+                    // Ahead of the route's own state: a head unit with no radio that could carry the leg
+                    // has nothing to switch on, and "no usable route" would read as something to fix.
+                    !hasWirelessRadio() -> getString(R.string.this_head_unit_is_not_supported_for_wireless_carplay)
+                    wireless -> wirelessEntryHint()
+                    else -> getString(R.string.connection_entry_wireless_unavailable)
                 },
                 note = if (wireless && carHotspotOff()) getString(R.string.msg_car_hotspot_off, hotspotSsid()) else null,
                 action = getString(R.string.connect_phone),
@@ -699,6 +701,16 @@ class DiPlayActivity : ComponentActivity() {
         content.addView(label(getString(R.string.wireless_settings), 34, TEXT, true))
         content.addView(label(getString(R.string.set_up_once_your_details_stay_saved_for_the_next_drive_cha), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
         content.addView(supportedConnectionLabel().apply { setPadding(0, 0, 0, dp(16)) })
+        // Said alongside the steps rather than instead of them. A head unit with no radio that could carry
+        // the leg is worth saying so about, but the driver can still turn the car's hotspot on in the car's
+        // own settings and type its name in, and a probe that reads the Bluetooth leg wrong must not take
+        // that away — which is exactly what this page used to lose.
+        if (!hasWirelessRadio()) {
+            content.addView(
+                label(getString(R.string.this_head_unit_is_not_supported_for_wireless_carplay), 16, WARNING)
+                    .apply { setPadding(0, 0, 0, dp(16)) },
+            )
+        }
         // One readiness for the whole page, read once so the card and the connect step cannot disagree, and
         // so laying the page out asks the adapter and the hotspot only once. The card hides itself as soon as
         // nothing is missing, which is what stops it outliving the reason it was raised for.
@@ -1377,6 +1389,15 @@ class DiPlayActivity : ComponentActivity() {
         cachedReport ?: DeviceConnectionSupport.inspect(this).also { cachedReport = it }
 
     private fun deviceSupportsWireless(): Boolean = connectionReport().wirelessCapable
+
+    /**
+     * Whether any radio on this head unit could carry the iAP2 leg at all.
+     *
+     * [deviceSupportsWireless] asks whether the route can be driven, which a head unit with no radio
+     * answers the same way as one whose Wi-Fi is switched off. This is the narrower fact behind the
+     * "not supported" line: there is nothing here to switch on.
+     */
+    private fun hasWirelessRadio(): Boolean = connectionReport().wirelessSupported
 
     /** Which routes this head unit can run. What a route is missing is said by that route, not here. */
     private fun supportedConnectionLabel(): TextView {

@@ -447,6 +447,7 @@
     <string name="connection_headline_connected">已连接</string>
     <string name="connection_headline_failed">连接失败</string>
     <string name="connection_entry_wireless_unavailable">这台车机没有可用的无线连接方式，请用 USB 数据线。</string>
+    <string name="this_head_unit_is_not_supported_for_wireless_carplay">该车机不支持无线 CarPlay，请使用 USB 连接。</string>
     <string name="connection_entry_wired_unavailable">没有检测到可用的 USB 数据口，请走无线。</string>
     <string name="failure_mfi_usb_permission_denied">MFi 适配器没有获得授权。把它拔下来重新插上，再连接一次。</string>
     <string name="failure_mfi_usb_permission_timeout">MFi 适配器没拿到 USB 授权。把它拔下来重新插上，再连接一次。</string>

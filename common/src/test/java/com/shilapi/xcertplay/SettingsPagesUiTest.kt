@@ -175,6 +175,23 @@ class SettingsPagesUiTest {
         assertFalse("no blocked-connect card without a blocked connect", "Wireless is not ready" in shown)
     }
 
+    /**
+     * A head unit no radio here could carry the leg for is told so — and keeps its steps.
+     *
+     * The manual hotspot route asks nothing of the Bluetooth leg, so the steps are not the probe's to
+     * take: losing them is what this page used to do, and the test above is the other half of that.
+     * This test head unit has no Bluetooth service at all, so both halves run on the same page.
+     */
+    @Test fun aHeadUnitWithNoRadioIsToldSoAndKeepsItsSteps() {
+        val shown = texts(open("wireless"))
+        assertTrue(
+            "the unsupported line is said",
+            shown.any { it.startsWith("This head unit is not supported") },
+        )
+        assertTrue("the hotspot leg is still a step", "1 · Car hotspot (Wi-Fi)" in shown)
+        assertTrue("the connect step is still there", "3 · Connect" in shown)
+    }
+
     /** The step is named for the leg it is, not for the gesture the leg used to hide behind. */
     @Test fun theWirelessStepsAreNamedForTheirLegs() {
         val shown = texts(open("wireless"))

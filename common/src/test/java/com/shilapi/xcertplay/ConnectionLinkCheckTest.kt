@@ -184,4 +184,45 @@ class DeviceConnectionSupportTest {
         assertEquals(listOf(WirelessBluetoothHop.CAR), report.bluetoothRadioOptions)
         assertTrue(report.carHotspotNotes.isEmpty())
     }
+
+    // "Not this car" and "not yet" are different sentences, and the page says them differently: the
+    // first has no step that could clear it, the second has nothing but steps.
+
+    /**
+     * A hop that is for this head unit and still coming up is supported. Reading readiness here would
+     * have the page claim the car is unsupported for as long as the hop takes to start, which is the
+     * whole window the driver is most likely to be looking at it.
+     */
+    @Test fun aHopThatAppliesButIsNotUpYetIsStillSupported() {
+        val report = DeviceConnectionSupport.assess(
+            ready(22).copy(bluetooth = BluetoothRead.OFF, vendorHopApplies = true, vendorHopRfcomm = false),
+        )
+        assertTrue(report.wirelessSupported)
+    }
+
+    /** The head unit this line is for: no radio here could carry the leg, so no step of the page can. */
+    @Test fun aHeadUnitWithNoRadioThatCouldCarryTheLegIsNotSupported() {
+        val report = DeviceConnectionSupport.assess(
+            ready(22).copy(bluetooth = BluetoothRead.MISSING, rfcommSocket = false),
+        )
+        assertFalse(report.wirelessSupported)
+        assertFalse(report.wirelessCapable)
+    }
+
+    @Test fun aCarWhoseOwnStackIsOnIsSupported() {
+        assertTrue(DeviceConnectionSupport.assess(ready(22)).wirelessSupported)
+    }
+
+    @Test fun theAdapterAloneIsEnoughToBeSupported() {
+        val report = DeviceConnectionSupport.assess(
+            ready(22).copy(bluetooth = BluetoothRead.MISSING, adapterRfcomm = true),
+        )
+        assertTrue(report.wirelessSupported)
+    }
+
+    /** An adapter this app may not read yet is still a radio, so it is not the unsupported case. */
+    @Test fun anAdapterThatMayNotBeReadYetIsStillARadio() {
+        val report = DeviceConnectionSupport.assess(ready(22).copy(bluetooth = BluetoothRead.DENIED))
+        assertTrue(report.wirelessSupported)
+    }
 }

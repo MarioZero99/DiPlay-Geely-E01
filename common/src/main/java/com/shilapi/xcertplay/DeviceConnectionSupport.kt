@@ -52,6 +52,13 @@ internal data class HeadUnitProbe(
     val adapterRfcomm: Boolean = false,
     /** A hop this build supplies carries the Bluetooth leg, on a head unit whose own stack cannot. */
     val vendorHopRfcomm: Boolean = false,
+    /**
+     * A hop this build supplies is for this head unit, listening or not.
+     *
+     * [vendorHopRfcomm] answers the narrower question — "and it is up". A hop that is still starting is
+     * supported and simply not there yet, and those two must not be said the same way.
+     */
+    val vendorHopApplies: Boolean = false,
 )
 
 internal data class ConnectionSupportReport(
@@ -65,6 +72,15 @@ internal data class ConnectionSupportReport(
      * line asks; whether the route can be *configured* is not this, and is not gated on the probe.
      */
     val wirelessCapable: Boolean,
+    /**
+     * Whether any radio on this head unit could carry the iAP2 leg at all.
+     *
+     * A different question from [wirelessCapable], which asks whether the route can be *driven*: a
+     * head unit with no radio that could ever carry the leg gets told so, instead of being handed a
+     * page of steps that no action of the driver's can clear. Readiness is not this either — a hop
+     * that is still starting up is supported, and merely not there yet.
+     */
+    val wirelessSupported: Boolean,
     /** The Bluetooth radios that could carry the iAP2 leg here, in the order they are offered. */
     val bluetoothRadioOptions: List<WirelessBluetoothHop>,
 )
@@ -123,7 +139,22 @@ internal object DeviceConnectionSupport {
             if (probe.adapterRfcomm) add(WirelessBluetoothHop.USB_ADAPTER)
             if (vendorBluetoothCallable || probe.vendorHopRfcomm) add(WirelessBluetoothHop.CAR)
         }
-        return ConnectionSupportReport(usable, notes, modes, callsAnswer, radios)
+        // Whether a radio exists here, not whether it is in the state the driver wants: a car whose own
+        // Bluetooth is merely switched off has a radio, and so does one whose stack answers this app but
+        // cannot be read yet. The case this is for is the head unit that has none of them — where every
+        // step on the connection page is one no action of the driver's can complete.
+        val supported = probe.vendorHopApplies ||
+            probe.adapterRfcomm ||
+            probe.bluetooth == BluetoothRead.ON ||
+            probe.bluetooth == BluetoothRead.DENIED
+        return ConnectionSupportReport(
+            usable = usable,
+            carHotspotNotes = notes,
+            wirelessModes = modes,
+            wirelessCapable = callsAnswer,
+            wirelessSupported = supported,
+            bluetoothRadioOptions = radios,
+        )
     }
 
     fun inspect(context: Context): ConnectionSupportReport = assess(probe(context))
@@ -139,6 +170,7 @@ internal object DeviceConnectionSupport {
             else -> runCatching { if (adapter.isEnabled) BluetoothRead.ON else BluetoothRead.OFF }
                 .getOrElse { error -> if (error is SecurityException) BluetoothRead.DENIED else BluetoothRead.FAILED }
         }
+        val hop = vendorHopStatus(context)
         return HeadUnitProbe(
             sdkInt = Build.VERSION.SDK_INT,
             usbHost = context.packageManager.hasSystemFeature(PackageManager.FEATURE_USB_HOST),
@@ -147,7 +179,8 @@ internal object DeviceConnectionSupport {
             bluetooth = bluetooth,
             rfcommSocket = rfcommSocketExists(),
             adapterRfcomm = UsbBluetoothRadios.present(context),
-            vendorHopRfcomm = vendorHopRfcomm(context),
+            vendorHopRfcomm = hop.ready,
+            vendorHopApplies = hop.applies,
         )
     }
 
@@ -164,24 +197,33 @@ internal object DeviceConnectionSupport {
     }.isSuccess
 
     /**
-     * Whether the hop this build supplies is worth offering: it is for this head unit and could start.
+     * What the hop this build supplies says about this head unit, cached.
      *
-     * Answering costs a round trip that forks a process on the head unit, and the connection page asks
-     * this on every redraw — during layout, where a wedged service would park the page. A few seconds of
-     * staleness is invisible next to that.
+     * Asking costs a round trip that forks a process on the head unit, and the connection page asks on
+     * every redraw — during layout, where a wedged service would park the page. A few seconds of
+     * staleness is invisible next to that. Both answers come out of the one ask: whether the hop is for
+     * this head unit at all, and whether it is up.
      */
-    private fun vendorHopRfcomm(context: Context): Boolean {
+    private fun vendorHopStatus(context: Context): VendorHopStatus {
         val now = SystemClock.elapsedRealtime()
-        if (now - vendorHopProbeAt < VENDOR_HOP_PROBE_TTL_MILLIS) return vendorHopAvailable
-        vendorHopAvailable = runCatching {
-            val hop = CarBluetoothHops.active
-            hop != null && hop.applies(context) && hop.ready(context)
-        }.getOrDefault(false)
-        vendorHopProbeAt = now
-        return vendorHopAvailable
+        if (now - vendorHopProbeAt >= VENDOR_HOP_PROBE_TTL_MILLIS) {
+            vendorHopProbeAt = now
+            vendorHopProbe = try {
+                val hop = CarBluetoothHops.active
+                if (hop == null || !hop.applies(context)) VendorHopStatus(applies = false, ready = false)
+                // ready() answers from the socket rather than over the head unit, so it adds nothing to
+                // the applies() above.
+                else VendorHopStatus(applies = true, ready = hop.ready(context))
+            } catch (error: Exception) {
+                VendorHopStatus(applies = false, ready = false)
+            }
+        }
+        return vendorHopProbe
     }
+
+    private data class VendorHopStatus(val applies: Boolean, val ready: Boolean)
 
     private const val VENDOR_HOP_PROBE_TTL_MILLIS = 5_000L
     private var vendorHopProbeAt = 0L
-    private var vendorHopAvailable = false
+    private var vendorHopProbe = VendorHopStatus(applies = false, ready = false)
 }
