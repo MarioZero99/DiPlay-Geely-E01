@@ -291,6 +291,8 @@ private class VideoDecoder(
     }
 
     private fun configureDecoder(config: VideoJob.Config) {
+        val mime = if (config.codec == VideoCodec.H265) MediaFormat.MIMETYPE_VIDEO_HEVC
+        else MediaFormat.MIMETYPE_VIDEO_AVC
         val previous = lastConfig
         if (
             decoder != null &&
@@ -301,17 +303,22 @@ private class VideoDecoder(
                 duplicateConfigLogged = true
                 DiagLog.i(TAG, "video decoder config unchanged; keeping existing decoder")
             }
+            // The decoder is up, which is exactly what this diagnostic reports. Saying nothing here
+            // starved a caller that gates on it: it waited out its whole timeout for a decoder it
+            // already had, and the only evidence was a log line it never reads.
+            report("decoder=${decoder?.name} mime=$mime size=${width}x$height")
             return
         }
         lastConfig = config
         duplicateConfigLogged = false
         releaseDecoder()
         referenceChain.reset()
-        val surface = outputSurface ?: return
+        val surface = outputSurface ?: run {
+            report("decoder unavailable mime=$mime size=${width}x$height: no output surface")
+            return
+        }
         val codec = config.codec
         val codecData = config.codecData
-        val mime = if (codec == VideoCodec.H265) MediaFormat.MIMETYPE_VIDEO_HEVC
-        else MediaFormat.MIMETYPE_VIDEO_AVC
         val format = MediaFormat.createVideoFormat(mime, width, height).apply {
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_INPUT_SIZE)
             setInteger(MediaFormat.KEY_PRIORITY, 0)

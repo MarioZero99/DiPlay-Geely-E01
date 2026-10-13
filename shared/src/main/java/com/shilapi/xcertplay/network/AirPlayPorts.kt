@@ -12,7 +12,7 @@ import java.net.ServerSocket
  * attempt. The iPhone is told the port in the Bonjour record and in the iAP2 Wi-Fi configuration, so any free
  * port reaches us just as well; only the port number changes.
  */
-internal object AirPlayPorts {
+object AirPlayPorts {
     fun choose(
         requested: Int,
         isFree: (Int) -> Boolean = { port -> AirPlayPorts.isFree(port) },

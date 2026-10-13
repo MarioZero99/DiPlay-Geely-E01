@@ -135,11 +135,6 @@ alignment line, not the base line, is what says how current a release is.
   volume the context reports, and to the USB mount roots this head unit uses, with the app's private
   directory as the fallback. `WRITE_EXTERNAL_STORAGE` is declared with `maxSdkVersion 28` so the
   Android 4.4–8.1 units can write those copies at all.
-- **The log-upload key cannot reach a published APK.** It was kept out only by `local.properties`
-  being absent, and a workspace can hold one for reasons unrelated to the build.
-  `scripts/package-geely.sh` clears the fields whenever CI is set and leaves a local compile alone,
-  and the release workflow fails rather than publish an APK that still carries a key.
-
 ### Languages
 
 - **The picker offers the two languages this port actually translates.** Arabic, Russian and Spanish

@@ -17,26 +17,7 @@
     <string name="gap_radio">还没选蓝牙。点选择 iPhone，先选外置蓝牙或内置蓝牙，再选手机。外置蓝牙配的是蓝牙棒的名字，内置蓝牙配的是车机蓝牙。</string>
     <string name="gap_phone">蓝牙选了，iPhone 还没选定。点选择 iPhone，把要连的那台手机点上。</string>
     <string name="gap_car_bluetooth">选的是内置蓝牙，但车机蓝牙是关的，或者这个应用读不到它。打开车机蓝牙设置，打开蓝牙并配对这台 iPhone。这台车如果没有蓝牙数据口，无线要改选外置蓝牙。</string>
+    <string name="gap_car_bluetooth_no_adapter">选的是内置蓝牙，但车机蓝牙是关的，或者这个应用读不到它。打开车机蓝牙设置，打开蓝牙并配对这台 iPhone。</string>
     <string name="gap_adapter_missing">没检测到外置蓝牙。把蓝牙棒插到扶手箱 USB，允许 DiPlay 使用它，再查一次。</string>
-    <string name="adapter_step_not_plugged">外置蓝牙没插上，启动还没开始。把蓝牙棒插到扶手箱 USB，然后点再查一次。</string>
-    <string name="adapter_step_usb_permission">外置蓝牙已经检测到。启动卡在 USB 允许。屏幕上如果问是否允许 DiPlay 使用这个 USB 设备，点允许。没有弹窗就拔插蓝牙棒，再查一次。</string>
-    <string name="adapter_step_open_device">USB 已经允许。启动卡在打开蓝牙棒。拔下来重新插上，再查一次。</string>
-    <string name="adapter_step_claim_interface">启动卡在占用蓝牙棒。别的程序占着它。拔下来，关掉那个程序，重新插上，再查一次。</string>
-    <string name="adapter_step_no_endpoints">启动卡在识别蓝牙接口。这根棒没有可用的蓝牙口。换一根经典蓝牙棒。</string>
-    <string name="adapter_step_not_started">蓝牙棒在，启动还没开始。点再查一次。</string>
-    <string name="adapter_step_resetting">启动还没生效，卡在复位。等几秒再查。一直停在这里就把蓝牙棒拔插一次。</string>
-    <string name="adapter_step_advertise">启动还没生效，卡在广播名字 %1$s。拔插蓝牙棒后再查一次。</string>
-    <string name="adapter_step_hotspot_off">车机热点还没开，名字先不广播。先到车机设置里打开热点，再回到这里。名字出现后再在 iPhone 上配对。</string>
-    <string name="adapter_step_waiting_for_pair">启动已生效，正在广播 %1$s。流程还没生效，卡在配对。在 iPhone 上打开「设置 → 蓝牙 → 其他设备」，点这个名字。不要点车机原来的蓝牙。</string>
-    <string name="adapter_step_pairing">启动已生效。正在配对，在 iPhone 上点确认。</string>
-    <string name="adapter_step_pairing_stalled">启动已生效。流程卡在配对，手机没有配对完成。在 iPhone 蓝牙里忽略这个设备，再点一次 %1$s。</string>
-    <string name="adapter_step_not_paired">启动已生效。流程卡在还没有配上的 iPhone。先配对，再连接。</string>
-    <string name="adapter_step_acl_connect">启动已生效。流程卡在和 iPhone 建立蓝牙连接。把手机拿近，确认配对的是 %1$s，再连接一次。</string>
-    <string name="adapter_step_acl_authentication">启动已生效。流程卡在蓝牙加密，配对钥匙对不上。在 iPhone 上忽略 %1$s，重新配对。</string>
-    <string name="adapter_step_sdp">启动已生效。流程卡在查找 iPhone 的 CarPlay 蓝牙服务。手机要配对的是 %1$s，不是车机蓝牙。忽略后重新配对再试。</string>
-    <string name="adapter_step_rfcomm">启动已生效。流程卡在打开 iAP2 数据通道。在 iPhone 上忽略 %1$s，重新配对后再连接。</string>
-    <string name="adapter_step_ready">启动已生效，iAP2 通道已经打开。</string>
-    <string name="adapter_step_paired">启动已生效，这台 iPhone 已经配在外置蓝牙上。可以连接。</string>
-    <string name="adapter_step_failed">外置蓝牙启动失败（%1$s）。拔插蓝牙棒后再查一次。</string>
     <string name="no_phone_on_car_bluetooth">车机蓝牙上还没有 iPhone。先在车机蓝牙里连上这台 iPhone 的电话或音乐，再回到这里选它。</string>
 </resources>

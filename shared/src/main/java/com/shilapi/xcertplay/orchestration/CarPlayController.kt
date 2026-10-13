@@ -23,6 +23,7 @@ import com.shilapi.xcertplay.airplay.PairingStore
 import com.shilapi.xcertplay.hud.BydNavigationOutputs
 import com.shilapi.xcertplay.iap2.session.Iap2Session
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
+import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationException
 import com.shilapi.xcertplay.mfi.MfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.RemoteMfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
@@ -75,7 +76,7 @@ import com.shilapi.xcertplay.transport.WiredLinkFinding
 import com.shilapi.xcertplay.transport.WiredLinkObservation
 import com.shilapi.xcertplay.transport.WiredLinkStep
 import com.shilapi.xcertplay.transport.describeAppleUsbDevice
-import com.shilapi.xcertplay.transport.hci.ActionsHciHost
+import com.shilapi.xcertplay.transport.AdapterBluetoothHost
 import com.shilapi.xcertplay.transport.LinuxI2cTransport
 import com.shilapi.xcertplay.transport.LockdownCarKitClient
 import com.shilapi.xcertplay.transport.LockdownPairingClient
@@ -206,7 +207,7 @@ class CarPlayController(
     private val clearPairRecord: () -> Unit = {},
     private val locationProvider: Iap2LocationProvider? = null,
     private val vehicleStatusProvider: com.shilapi.xcertplay.transport.VehicleStatusProvider? = null,
-    private val adapterBluetooth: ActionsHciHost? = null,
+    private val adapterBluetooth: AdapterBluetoothHost? = null,
 ) : Closeable {
     init {
         require(!config.locationReportingEnabled || locationProvider != null) {
@@ -281,6 +282,22 @@ class CarPlayController(
     private val wirelessTunnelReady = AtomicBoolean(false)
     private val wirelessActiveReported = AtomicBoolean(false)
     private val wirelessGeneration = AtomicInteger(0)
+
+    /**
+     * How many bring-ups have already ended with the phone taking the certificate and never answering it.
+     *
+     * Starting the whole thing over is the one thing that failure has ever given way to: on the bench the
+     * same bytes that went unanswered were challenged on the next connection, twice, while nothing about
+     * the accessory's own frames differed. So this failure takes the bring-up back to its start instead of
+     * being reported at once -- which is also what a driver does by hand -- and the count is what keeps that
+     * from becoming a loop.
+     *
+     * The certificate is deliberately not re-sent on the same link as an alternative: that was measured, a
+     * phone that stayed silent through three connections was given the certificate as a new message with the
+     * next sequence number and answered nothing, and a re-send placed early actually costs the link's own
+     * repeat of the old number -- the one stimulus every answered run has answered.
+     */
+    private val wirelessAuthenticationAttempts = AtomicInteger(0)
     private val wirelessConnectionProof = WirelessConnectionProof<AirPlaySession>()
 
     private var permissionCloseable: Closeable? = null
@@ -414,6 +431,8 @@ class CarPlayController(
     /** Re-runs iPhone discovery/bring-up using the already-open MFi session. */
     fun reconnectIphone() = synchronized(lifecycleLock) {
         if (closed) return
+        // Asked for by hand, so it gets the whole budget again.
+        wirelessAuthenticationAttempts.set(0)
         if (mfiSession == null) {
             startMfi()
         } else if (config.transport == CarPlayTransport.WIRELESS) {
@@ -899,7 +918,32 @@ class CarPlayController(
         }
     }
 
+    /**
+     * Takes a bring-up whose authentication went unanswered back to its first step, within the budget.
+     *
+     * Returns false once the budget is spent, and then the caller fails exactly as it did before this
+     * existed. Nothing of the failed attempt is kept: the whole wireless bring-up runs again from the top.
+     */
+    private fun restartWirelessAfterSilentAuthentication(): Boolean {
+        val attempt = wirelessAuthenticationAttempts.incrementAndGet()
+        if (attempt >= MAXIMUM_WIRELESS_AUTHENTICATION_ATTEMPTS) {
+            debugLog("wireless authentication went unanswered $attempt times in a row; reporting the failure")
+            return false
+        }
+        debugLog(
+            "wireless authentication was not answered; starting the whole wireless bring-up over " +
+                "($attempt of $MAXIMUM_WIRELESS_AUTHENTICATION_ATTEMPTS done)",
+        )
+        restartWireless()
+        return true
+    }
+
     private fun runWireless(generation: Int) {
+        // A run superseded mid-flight still owns whatever it opened after the newer run's cleanup ran.
+        // The shared fields now belong to that newer run, so `closeWirelessStack()` would tear down the
+        // wrong session; these locals are what lets the losing run let go of its own.
+        var ownBonjour: CarPlayBonjour? = null
+        var ownStream: BlockingDuplexByteStream? = null
         try {
             debugLog("wireless bring-up generation=$generation starting")
             closeWirelessStack()
@@ -1052,6 +1096,22 @@ class CarPlayController(
                 return
             }
 
+            // Bluetooth before discovery: the iPhone opens this leg unprompted (the iAP2 bootstrap carries
+            // the Wi-Fi credentials it needs first), and discovery is the step that can fail outside here.
+            onStatus(CarPlayStatus.ConnectingBluetooth)
+            debugLog(
+                "wireless RFCOMM connecting address=${target.address} " +
+                    "uuid=$IAP2_IPHONE_UUID",
+            )
+            val stream = link.open().also { bluetoothStream = it }
+            ownStream = stream
+            debugLog("wireless RFCOMM connected address=${target.address}")
+            if (isStaleWirelessRun(generation)) {
+                releaseOwnWirelessResources(ownBonjour, ownStream)
+                closeWirelessStack()
+                return
+            }
+
             val bonjourClient = CarPlayBonjour(
                 context = appContext,
                 config = wirelessAirPlayConfig,
@@ -1064,26 +1124,17 @@ class CarPlayController(
                 onEvent = { event -> debugLog("wireless bonjour: ${event.diagnosticSummary()}") },
             )
             bonjour = bonjourClient
+            ownBonjour = bonjourClient
             bonjourClient.start()
             startedBonjour = bonjourClient
             diagnostics.start()
             debugLog("wireless Bonjour services started mode=interface iface=${hotspotInfo.interfaceName ?: "unknown"}")
             if (isStaleWirelessRun(generation)) {
+                releaseOwnWirelessResources(ownBonjour, ownStream)
                 closeWirelessStack()
                 return
             }
 
-            onStatus(CarPlayStatus.ConnectingBluetooth)
-            debugLog(
-                "wireless RFCOMM connecting address=${target.address} " +
-                    "uuid=$IAP2_IPHONE_UUID",
-            )
-            val stream = link.open().also { bluetoothStream = it }
-            debugLog("wireless RFCOMM connected address=${target.address}")
-            if (isStaleWirelessRun(generation)) {
-                closeWirelessStack()
-                return
-            }
             val channel = Iap2Session.openWireless(
                 stream,
                 traceContext = "wireless-rfcomm",
@@ -1091,6 +1142,7 @@ class CarPlayController(
             ).also { csm = it }
             debugLog("wireless iAP2 CSM channel opened over RFCOMM")
             if (isStaleWirelessRun(generation)) {
+                releaseOwnWirelessResources(ownBonjour, ownStream)
                 closeWirelessStack()
                 return
             }
@@ -1169,12 +1221,18 @@ class CarPlayController(
             }
         } catch (error: Throwable) {
             if (closed || generation != wirelessGeneration.get()) {
+                releaseOwnWirelessResources(ownBonjour, ownStream)
                 return
             }
             if (wirelessActiveReported.get() && error !is Error) {
                 debugLog("wireless RFCOMM control ended after tunnel handoff: ${error.message}")
             } else {
                 debugLog("wireless bring-up failed", error)
+                // The certificate went unanswered, which a fresh link has answered before: restart the whole
+                // thing rather than hand the driver a failure they would answer by pressing connect.
+                if (error is Iap2MfiAuthenticationException && restartWirelessAfterSilentAuthentication()) {
+                    return
+                }
                 closeWirelessStack()
                 if (error is Error) throw error
                 fail(error)
@@ -1296,6 +1354,8 @@ class CarPlayController(
     private fun maybeCompleteWirelessHandoff() {
         if (!wirelessHandoffRequested.get() || !wirelessTunnelReady.get()) return
         if (!wirelessActiveReported.compareAndSet(false, true)) return
+        // A bring-up that got all the way through is proof the next one starts from a clean budget.
+        wirelessAuthenticationAttempts.set(0)
         val generation = wirelessGeneration.get()
         Thread(
             {
@@ -1892,6 +1952,28 @@ class CarPlayController(
     private fun isStaleWirelessRun(generation: Int): Boolean =
         closed || phase != Phase.WIRELESS || generation != wirelessGeneration.get()
 
+    /**
+     * Closes what a superseded run opened for itself.
+     *
+     * [closeWirelessStack] releases the *shared* fields, which by the time a losing run notices it lost
+     * belong to the newer run — so it can close neither this run's Bonjour nor its RFCOMM stream. A
+     * Bonjour left behind keeps mDNS 5353 bound, and a bound mDNS socket rejects every later bind with
+     * EADDRINUSE, which ends discovery for the rest of the process.
+     */
+    private fun releaseOwnWirelessResources(
+        ownBonjour: CarPlayBonjour?,
+        ownStream: BlockingDuplexByteStream?,
+    ) {
+        if (ownBonjour != null) {
+            if (bonjour === ownBonjour) bonjour = null
+            closeBestEffort("superseded Bonjour") { ownBonjour.close() }
+        }
+        if (ownStream != null) {
+            if (bluetoothStream === ownStream) bluetoothStream = null
+            closeBestEffort("superseded Bluetooth link") { ownStream.close() }
+        }
+    }
+
     private fun closeWirelessStack(service: CarPlayVpnService? = vpnService) {
         val diagnostics = wirelessDiagnostics
         wirelessDiagnostics = null
@@ -2166,6 +2248,12 @@ class CarPlayController(
         private const val DEVICE_AVAILABILITY_POLL_INTERVAL_MILLIS = 2_000L
         private const val WIRELESS_HANDOFF_TIMEOUT_MILLIS = 45_000L
         private const val MAXIMUM_REENUMERATION_ATTEMPTS = 2
+
+        /**
+         * How many whole wireless bring-ups a phone that never answers the certificate gets before the
+         * failure is reported. Each one runs the bring-up from the top again.
+         */
+        private const val MAXIMUM_WIRELESS_AUTHENTICATION_ATTEMPTS = 3
 
         /**
          * How long the phone is given to come back in its CarPlay shape. A real re-enumeration takes

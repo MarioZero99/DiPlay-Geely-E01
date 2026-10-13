@@ -154,8 +154,8 @@ jobs:
             || fail 'no accessory identity in the APK — it would install but never connect'
           unzip -l "$APK" | grep -q 'assets/offline-mfi/certificate.p7b' \
             || fail 'no accessory certificate in the APK'
-          # This APK is published, so the log-upload key must not be in it. The packaging script
-          # clears the fields whenever CI is set; this is the check that the switch reached the build.
+          # This APK is published, so the log-upload key must not be in it. The build takes the key
+          # only when DIPLAY_CLOUD_LOGS=1, which nothing here sets; this is the check that it did not.
           if unzip -p "$APK" 'classes*.dex' \
             | grep -aE 'sb_publishable_|eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' >/dev/null; then
             fail 'the APK carries a Supabase key — a build made from git must not upload anything'

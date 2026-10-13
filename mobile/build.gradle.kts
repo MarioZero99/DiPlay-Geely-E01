@@ -126,3 +126,24 @@ val verifyVendorHop by tasks.registering {
 }
 tasks.named("preBuild") { mustRunAfter(verifyVendorHop) }
 tasks.named("assembleStandaloneDebug") { dependsOn(verifyVendorHop) }
+
+// The adapter stack is in the tree only when DIPLAY_ADAPTER_DIR names it, and nothing in the build asks
+// for it: without one the build is the published build, and a car-test APK still goes out carrying the car
+// hop's Bluetooth. So this is asked for by hand, and asking for it is a claim that this run means to have
+// the adapter — an unset variable is then a failure rather than a build that quietly has no adapter in it.
+val verifyAdapter by tasks.registering {
+    group = "verification"
+    description = "Require the adapter stack, for a run that means to carry it."
+    val directory = providers.environmentVariable("DIPLAY_ADAPTER_DIR").orNull?.let { file(it) }
+    doLast {
+        check(directory != null) {
+            "DIPLAY_ADAPTER_DIR is unset; this build carries no adapter stack."
+        }
+        check(directory.resolve("src/com/shilapi/xcertplay/adapter/UsbAdapterRoute.kt").isFile) {
+            "DIPLAY_ADAPTER_DIR does not hold the adapter route."
+        }
+        check(directory.resolve("jni/Android.mk").isFile) {
+            "DIPLAY_ADAPTER_DIR does not hold the adapter's native stack."
+        }
+    }
+}

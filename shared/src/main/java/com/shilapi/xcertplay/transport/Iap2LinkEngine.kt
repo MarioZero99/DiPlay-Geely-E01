@@ -125,6 +125,16 @@ class Iap2LinkEngine(
     private var sentSequence = INITIAL_SEQUENCE
     private var lastSentAcknowledged: Int? = null
     private var lastReceivedInOrder = 0
+
+    /**
+     * Whether the packet that holds [lastReceivedInOrder] carried a payload.
+     *
+     * The peer puts an acknowledgement and its data under one sequence number, so the same number
+     * can arrive twice with different contents. True is the reading that delivers nothing extra: a
+     * sequence whose payload this side never saw is not something to guess at.
+     */
+    private var lastReceivedSequenceCarriedPayload = true
+
     private var lastAcknowledgedReceived: Int? = null
     private var accumulatedAcknowledgements = 0
     private var writable = false
@@ -329,8 +339,17 @@ class Iap2LinkEngine(
         if ((header.control and CONTROL_EXTENDED_ACKNOWLEDGEMENT) != 0 && payload != null) {
             handleExtendedAcknowledgement(payload)
         }
-        if ((header.control and CONTROL_ACKNOWLEDGEMENT.inv()) == 0 && payload != null) {
-            handleData(Packet(header.sequence, header.sessionId, payload), nowMillis)
+        /*
+         * Every frame that is not an extended acknowledgement may carry data, whether or not it has a
+         * payload, and an acknowledgement-only frame is not exempt: the peer numbers it and expects an
+         * answer inside the acknowledgement timeout it advertised, and this side's acknowledgement
+         * field is what tells the peer it may keep sending. Treating a missing payload as "nothing to
+         * read here" left those frames unanswered for the life of the link -- a bench run where the
+         * phone answered our certificate with exactly such a frame saw forty seconds of silence after
+         * it, and the challenge that should have followed never came.
+         */
+        if ((header.control and CONTROL_ACKNOWLEDGEMENT.inv()) == 0) {
+            handleData(Packet(header.sequence, header.sessionId, payload ?: EMPTY_PAYLOAD), nowMillis)
         }
         if (peerSynchronization.maxAcknowledgements > 0 &&
             accumulatedAcknowledgements >= peerSynchronization.maxAcknowledgements
@@ -346,6 +365,7 @@ class Iap2LinkEngine(
         peerSynchronization = sync
         peerSynchronizationReceived = true
         lastReceivedInOrder = sequence
+        lastReceivedSequenceCarriedPayload = true
         lastAcknowledgedReceived = sequence
         sendAcknowledgement()
     }
@@ -399,7 +419,29 @@ class Iap2LinkEngine(
 
     private fun handleData(packet: Packet, nowMillis: Long) {
         val distance = sequenceDistance(packet.sequence, lastReceivedInOrder)
-        if (distance == 0 || distance > peerSynchronization.maxOutgoing + ACK_SLACK) {
+        if (distance == 0) {
+            /*
+             * The peer sends its acknowledgement and its data under one sequence number, and the
+             * radio decides which of the two this side reads first. When the payload-less one
+             * arrives first it takes the sequence, and the control-session frame that follows --
+             * same number, a moment later -- reads as a retransmission of a packet already seen.
+             * That is how the challenge that authenticates the accessory went missing while the
+             * phone waited for a signature: the run timed out with the challenge sitting in its
+             * own packet log. The number belongs to the frame carrying the data; the empty frame
+             * is only borrowing it, so deliver the data half instead of counting the sequence
+             * twice.
+             */
+            if (!lastReceivedSequenceCarriedPayload &&
+                packet.sessionId == CONTROL_SESSION_ID &&
+                packet.payload.isNotEmpty()
+            ) {
+                lastReceivedSequenceCarriedPayload = true
+                enqueueEvent(Event.Control(packet.payload))
+            }
+            sendAcknowledgement()
+            return
+        }
+        if (distance > peerSynchronization.maxOutgoing + ACK_SLACK) {
             sendAcknowledgement()
             return
         }
@@ -427,7 +469,10 @@ class Iap2LinkEngine(
         while (outOfOrder.isNotEmpty() && sequenceDistance(outOfOrder.first().sequence, lastReceivedInOrder) == 1) {
             val inOrder = outOfOrder.removeAt(0)
             lastReceivedInOrder = inOrder.sequence
-            if (inOrder.sessionId == CONTROL_SESSION_ID) enqueueEvent(Event.Control(inOrder.payload))
+            lastReceivedSequenceCarriedPayload = inOrder.payload.isNotEmpty()
+            if (inOrder.sessionId == CONTROL_SESSION_ID && inOrder.payload.isNotEmpty()) {
+                enqueueEvent(Event.Control(inOrder.payload))
+            }
         }
 
         if (peerSynchronization.maxAcknowledgements == 0) return
@@ -437,7 +482,17 @@ class Iap2LinkEngine(
             lastAcknowledgedReceived = lastReceivedInOrder
             sendAcknowledgement()
         } else {
-            sendAcknowledgementDeadlineMillis = nowMillis + peerSynchronization.acknowledgementTimeoutMillis
+            /*
+             * Half the peer's acknowledgement timeout, not the whole of it.
+             *
+             * The timeout is when the peer stops waiting, and the pump only reaches this deadline on
+             * its next pass, so firing on the deadline itself puts the acknowledgement on the wire
+             * after the peer has already given up: measured against the 500 ms an iPhone advertises,
+             * ours went out at 505 to 508 ms. Half the window leaves room for that pass and for the
+             * radio to carry it.
+             */
+            sendAcknowledgementDeadlineMillis =
+                nowMillis + peerSynchronization.acknowledgementTimeoutMillis / 2
         }
     }
 
@@ -486,6 +541,19 @@ class Iap2LinkEngine(
         writePacket(localSynchronization().encode(), sentSequence, CONTROL_SYNCHRONIZE, 0)
     }
 
+    /**
+     * An acknowledgement does not take a sequence number of its own: it goes out under the number of
+     * the last packet that carried data.
+     *
+     * That looks like a defect and is not one. Numbering acknowledgements in turn was tried on the
+     * bench, and the link died on it: the phone acknowledges only what it considers the next data
+     * packet, so with an acknowledgement consuming a number the frame after it arrives one ahead of
+     * what the phone expects, is held as a gap, and the accessory retransmits until it gives up
+     * (`iAP2 packet 101 was not acknowledged`, four attempts). Under the numbering below the phone
+     * acknowledges as it goes. The phone does the same thing on its own acknowledgement-only frames --
+     * it repeats the sequence of the packet it sent last, which `Iap2LinkEngineAcknowledgementTest`
+     * records from the bench.
+     */
     private fun sendAcknowledgement() {
         writePacket(null, sentSequence, CONTROL_ACKNOWLEDGEMENT, 0)
     }
@@ -651,6 +719,9 @@ class Iap2LinkEngine(
         private const val DEFAULT_MAX_RETRANSMISSIONS = 4
         private const val DEFAULT_MAX_ACKNOWLEDGEMENTS = 3
         private const val ACK_SLACK = 10
+
+        /** Stands in for the absent payload of an acknowledgement-only frame. */
+        private val EMPTY_PAYLOAD = ByteArray(0)
 
         private fun parseHeader(bytes: ByteArray): Header? {
             if (bytes.size != HEADER_BYTES || !checksumValid(bytes)) return null

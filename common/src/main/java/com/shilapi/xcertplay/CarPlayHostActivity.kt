@@ -98,8 +98,11 @@ import com.shilapi.xcertplay.transport.Iap2LocationProvider
 import com.shilapi.xcertplay.transport.UsbDeviceId
 import com.shilapi.xcertplay.transport.WiredLinkFinding
 import com.shilapi.xcertplay.transport.WiredLinkReport
-import com.shilapi.xcertplay.transport.hci.ActionsBluetooth
-import com.shilapi.xcertplay.transport.hci.AdapterBluetoothState
+import com.shilapi.xcertplay.transport.WirelessBluetoothName
+import com.shilapi.xcertplay.transport.WirelessBluetoothHop
+import com.shilapi.xcertplay.transport.adapter.AdapterPage
+import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
+import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -179,7 +182,11 @@ class CarPlayHostActivity : ComponentActivity() {
         remoteMfiServer = remoteMfiServer.trim().takeIf { it.isNotEmpty() },
         remoteMfiToken = remoteMfiToken.takeIf { it.isNotEmpty() },
         identification = Iap2IdentificationConfig(
-            name = "DiPlay",
+            // Apple's §18.4 requires the name given in the identification exchange to be the name the
+            // accessory advertises, and over Bluetooth that is the one in the EIR and the local name
+            // (`WirelessBluetoothName.ADVERTISED`). A wired exchange has no EIR to agree with, and its name
+            // is what the phone already shows for this accessory, so that side is left as it is.
+            name = if (wirelessEnabled) WirelessBluetoothName.ADVERTISED else "DiPlay",
             modelIdentifier = normalizedModel(),
             manufacturer = normalizedManufacturer(),
             serialNumber = "DIPLAY-" + DiPlayBootstrap.deviceId(airPlayIdentity).replace(":", ""),
@@ -270,12 +277,11 @@ class CarPlayHostActivity : ComponentActivity() {
     private var lastUsbList = ""
 
     /** Owns the USB Bluetooth adapter for as long as this page is alive. */
-    private var adapterSession: ActionsAdapterSession? = null
+    private var adapterPage: AdapterPage? = null
 
     /** The adapter's broadcast name and its pairing hint; both stay hidden until the name is written. */
     private var adapterNameView: TextView? = null
     private var adapterHintView: TextView? = null
-    private var adapterNamed = false
 
     /** Where the adapter is in plain words. On the car there is often no adb, so the screen is the log. */
     private var adapterStatusView: TextView? = null
@@ -873,8 +879,8 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        adapterSession?.dispose()
-        adapterSession = null
+        adapterPage?.close()
+        adapterPage = null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) clusterMonitor?.stop()
         dismissClusterPresentation()
         mainHandler.removeCallbacks(applyDisplaySize)
@@ -1100,7 +1106,7 @@ class CarPlayHostActivity : ComponentActivity() {
     private fun buildDiagnosticColumn(): View {
         val column = card()
         val adapterName = TextView(this).apply {
-            text = ActionsBluetooth.BROADCAST_NAME
+            text = WirelessBluetoothName.ADVERTISED
             textSize = 26f
             gravity = Gravity.CENTER
             setTextColor(CONNECTION_PRIMARY)
@@ -1427,43 +1433,31 @@ class CarPlayHostActivity : ComponentActivity() {
         currentSurfaceTexture = null
     }
 
-    /** Replaces the on-screen USB list. A changed bus is also written into the handshake log. */
-    private fun onAdapterState(state: AdapterBluetoothState, reason: String) {
-        val line = "adapter-bt: $state ($reason)"
-        // The log first, and from whatever thread the stack reports on: it must not depend on the screen being there.
+    /**
+     * Every line the adapter reports, and the log first: it must not depend on the screen being there. The
+     * state that explains a failed attempt arrives on the stack's reader or pairing-watchdog thread.
+     */
+    private fun onAdapterLine(line: String) {
         appendLog(line)
-        // The state that explains a failed attempt arrives on the stack's reader or pairing-watchdog thread, and a
-        // view may only be touched from the UI thread — a setText from anywhere else throws, and that throw landed
-        // inside the state machine, so the line never reached the screen or the log.
+        adapterUi.run { showHandshakeLine(line) }
+    }
+
+    /**
+     * The adapter's step, already worded by the adapter, and whether its name is on the air.
+     *
+     * The name is only worth showing once the radio is advertising under it, and it should stay up while the
+     * iPhone is being paired so the two names can be matched. Unplugging, or a fresh reset that leaves the
+     * radio undiscoverable, takes it away again — the adapter decides that, since it is its own state.
+     */
+    private fun onAdapterStatus(seen: WirelessAdapterStatus) {
         adapterUi.run {
-            showHandshakeLine(line)
-            // The name is only worth showing once the adapter is advertising under it, and it should stay up while
-            // the iPhone is being paired so the two names can be matched. Unplugging or a fresh reset takes it away.
-            when (state) {
-                AdapterBluetoothState.BROADCASTING -> adapterNamed = true
-                AdapterBluetoothState.IDLE,
-                AdapterBluetoothState.RESETTING,
-                AdapterBluetoothState.UNADVERTISED,
-                -> adapterNamed = false
-                else -> Unit
-            }
-            val visibility = if (adapterNamed) View.VISIBLE else View.GONE
+            val visibility = if (seen.named) View.VISIBLE else View.GONE
             adapterNameView?.visibility = visibility
             adapterHintView?.visibility = visibility
             // The name and hint say which device to tap. This sentence says whether startup finished and which step is stuck.
-            val report = com.shilapi.xcertplay.transport.AdapterBringUpAssessment.assess(
-                com.shilapi.xcertplay.transport.AdapterObservation(
-                    plugged = state != AdapterBluetoothState.IDLE || reason != "adapter-unplugged",
-                    permissionGranted = reason != "usb-permission-denied",
-                    state = state,
-                    reason = reason,
-                    paired = adapterSession?.host?.pairedTarget() != null,
-                ),
-            )
-            val status = adapterBringUpText(this@CarPlayHostActivity, report)
-            adapterStatusView?.text = status
+            adapterStatusView?.text = seen.sentence
             adapterStatusView?.visibility = View.VISIBLE
-            if (adapterSession?.bringUpFinished == true) maybeStartCarPlay()
+            if (adapterPage?.bringUpFinished == true) maybeStartCarPlay()
         }
     }
 
@@ -1497,31 +1491,34 @@ class CarPlayHostActivity : ComponentActivity() {
      * The name is broadcast only once the car hotspot is known on. A hidden hotspot state does not block it.
      */
     private fun openAdapterIfPresent() {
-        if (!com.shilapi.xcertplay.transport.ExternalBluetoothRoute.enabled) return
-        val selected = com.shilapi.xcertplay.transport.AdapterDiscovery.runs(
-            DiPlayPreferences.bluetoothHop(this),
-        )
+        if (!AdapterRoutes.available) return
+        val selected = DiPlayPreferences.bluetoothHop(this) == WirelessBluetoothHop.USB_ADAPTER
         if (!wirelessEnabled || !selected) {
             if (!selected) {
-                adapterSession?.dispose()
-                adapterSession = null
+                adapterPage?.close()
+                adapterPage = null
             }
             return
         }
-        val session = adapterSession
-            ?: ActionsAdapterSession(this, ::onAdapterState, ::appendLog).also { adapterSession = it }
+        val page = adapterPage ?: newAdapterPage() ?: return
         // An adapter that is not on the bus is reported by the session's own bring-up, which settles the
         // page on "adapter unplugged" and finishes the wait. Returning here instead left the page waiting
         // for a bring-up it had never asked for, with nothing on screen to say why.
-        val advertise = com.shilapi.xcertplay.transport.AdapterDiscovery.shouldAdvertise(
-            com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this),
-        )
-        session.ensureOpen(advertise)
+        page.refresh(com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this))
+    }
+
+    private fun newAdapterPage(): AdapterPage? {
+        val route = AdapterRoutes.active ?: return null
+        return route.page(
+            context = this,
+            onStatus = ::onAdapterStatus,
+            onLine = ::onAdapterLine,
+        ).also { adapterPage = it }
     }
 
     /** A finished or failed session must not leave the adapter undiscoverable. */
     private fun resumeAdapterDiscovery() {
-        adapterSession?.host?.resumeDiscovery()
+        adapterPage?.resumeDiscovery()
         openAdapterIfPresent()
     }
 
@@ -2223,11 +2220,7 @@ class CarPlayHostActivity : ComponentActivity() {
             } else {
                 null
             },
-            adapterBluetooth = if (com.shilapi.xcertplay.transport.ExternalBluetoothRoute.enabled) {
-                adapterSession?.host
-            } else {
-                null
-            },
+            adapterBluetooth = adapterPage?.host,
         )
         controller = next
         CarPlayMediaKeys.attach(this, next)
@@ -2338,11 +2331,9 @@ class CarPlayHostActivity : ComponentActivity() {
     /** Wireless with the external radio waits until that radio's start attempt has finished. */
     private fun waitingForSelectedAdapter(): Boolean {
         if (!wirelessEnabled) return false
-        if (!com.shilapi.xcertplay.transport.ExternalBluetoothRoute.enabled) return false
-        if (!com.shilapi.xcertplay.transport.AdapterDiscovery.runs(DiPlayPreferences.bluetoothHop(this))) {
-            return false
-        }
-        return adapterSession?.bringUpFinished != true
+        if (!AdapterRoutes.available) return false
+        if (DiPlayPreferences.bluetoothHop(this) != WirelessBluetoothHop.USB_ADAPTER) return false
+        return adapterPage?.bringUpFinished != true
     }
 
     private fun reconnectAfterLoss(reason: String) {
@@ -2666,9 +2657,9 @@ class CarPlayHostActivity : ComponentActivity() {
         // write goes through the same bounded queue, so a transport thread still never waits on a disk.
         DiagSink.attach { line -> enqueueSessionLine(activeLog, line) }
         // The pairing half of the chain ran on the connection page, whose session is gone by now and whose lines
-        // this log's reset just discarded. They are the ones the adapter's run is judged by, so they are carried
-        // over instead — see AdapterDiagnostics.
-        val carried = AdapterDiagnostics.drain()
+        // this log's reset just discarded. They are the ones the adapter's run is judged by, so the adapter is
+        // asked for whatever it logged before a session existed and they are carried over.
+        val carried = AdapterRoutes.active?.drainDiagnostics().orEmpty()
         if (carried.isNotEmpty()) {
             activeLog.append("--- adapter lines from the connection page, before this run ---")
             carried.forEach(activeLog::append)

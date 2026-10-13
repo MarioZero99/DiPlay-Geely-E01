@@ -4,14 +4,11 @@ plugins {
     id("com.android.library")
 }
 
-// Local test upload only. Absent on CI and on any machine that did not opt in,
-// so a published build keeps the on-device report and never contacts Supabase.
-//
-// An absent local.properties is not on its own a guarantee about the released APK: a workspace can
-// hold one for reasons that have nothing to do with the build being made in it, and a build off a git
-// checkout would carry the key out with it. scripts/package-geely.sh therefore sets
-// DIPLAY_CLOUD_LOGS=0 for the builds it makes from git and leaves local compiles alone.
-val cloudLogs = System.getenv("DIPLAY_CLOUD_LOGS") != "0"
+// The Supabase key exists for local runs that need the on-device "generate and upload report"
+// button. It is off unless the caller asks for it with DIPLAY_CLOUD_LOGS=1, so no build carries the
+// key by accident — not a CI build, not a bare compile, and not a workspace that happens to hold a
+// local.properties for reasons that have nothing to do with the build being made in it.
+val cloudLogs = System.getenv("DIPLAY_CLOUD_LOGS") == "1"
 
 val supabaseLocal = Properties().apply {
     val file = rootProject.file("local.properties")

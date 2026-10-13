@@ -17,26 +17,9 @@
     <string name="gap_radio">Bluetooth is not chosen yet. Tap Choose iPhone and pick external Bluetooth or the car Bluetooth, then pick the phone. External Bluetooth pairs to the adapter name. Car Bluetooth pairs to the car.</string>
     <string name="gap_phone">Bluetooth is chosen, but the iPhone is not. Tap Choose iPhone and tap the phone you want.</string>
     <string name="gap_car_bluetooth">Car Bluetooth is selected, but it is off or this app cannot read it. Open the car Bluetooth settings, turn Bluetooth on, and pair this iPhone. If this car has no Bluetooth data socket, choose external Bluetooth for wireless.</string>
+    <!-- The same thing minus the last sentence, for a build whose page offers no external Bluetooth to
+         choose: it is shown in every build, so it must not name a choice the page does not have. -->
+    <string name="gap_car_bluetooth_no_adapter">Car Bluetooth is selected, but it is off or this app cannot read it. Open the car Bluetooth settings, turn Bluetooth on, and pair this iPhone.</string>
     <string name="gap_adapter_missing">No external Bluetooth adapter was found. Plug it into the armrest USB port, allow DiPlay to use it, then check again.</string>
-    <string name="adapter_step_not_plugged">External Bluetooth is not plugged in, so startup has not begun. Plug the adapter into the armrest USB port, then check again.</string>
-    <string name="adapter_step_usb_permission">External Bluetooth is plugged in. Startup is stuck on USB permission. If a prompt asks to let DiPlay use the USB device, tap Allow. If no prompt appears, unplug the adapter, plug it back in, and check again.</string>
-    <string name="adapter_step_open_device">USB permission is granted. Startup is stuck on opening the adapter. Unplug it, plug it back in, and check again.</string>
-    <string name="adapter_step_claim_interface">Startup is stuck on taking the adapter. Another program is holding it. Unplug it, close the other program, plug it back in, and check again.</string>
-    <string name="adapter_step_no_endpoints">Startup is stuck on finding a Bluetooth interface. This adapter has no usable Bluetooth port. Use a classic Bluetooth adapter.</string>
-    <string name="adapter_step_not_started">The adapter is present and startup has not begun. Tap Check again.</string>
-    <string name="adapter_step_resetting">Startup has not finished. It is stuck on reset. Wait a few seconds and check again. If it stays here, unplug the adapter and plug it back in.</string>
-    <string name="adapter_step_advertise">Startup has not finished. It is stuck on broadcasting the name %1$s. Unplug the adapter and plug it back in, then check again.</string>
-    <string name="adapter_step_hotspot_off">The car hotspot is off, so the adapter is not broadcasting yet. Turn the hotspot on in the car settings, then come back. Pair the iPhone after the name appears.</string>
-    <string name="adapter_step_waiting_for_pair">Startup is working and the adapter is broadcasting %1$s. The connection flow is not done. It is stuck on pairing. On the iPhone open Settings, Bluetooth, Other Devices, and tap that name. Do not tap the car Bluetooth entry.</string>
-    <string name="adapter_step_pairing">Startup is working. Pairing is in progress. Confirm it on the iPhone.</string>
-    <string name="adapter_step_pairing_stalled">Startup is working. The flow is stuck on pairing because the phone did not finish. On the iPhone, forget this device, then tap %1$s again.</string>
-    <string name="adapter_step_not_paired">Startup is working. The flow is stuck because no iPhone is paired yet. Pair it, then connect.</string>
-    <string name="adapter_step_acl_connect">Startup is working. The flow is stuck opening the Bluetooth link to the iPhone. Bring the phone closer, make sure it is paired to %1$s, and connect again.</string>
-    <string name="adapter_step_acl_authentication">Startup is working. The flow is stuck on Bluetooth encryption. The pairing key does not match. On the iPhone, forget %1$s and pair it again.</string>
-    <string name="adapter_step_sdp">Startup is working. The flow is stuck looking for the iPhone CarPlay Bluetooth service. The phone must be paired to %1$s, not to the car Bluetooth. Forget it, pair again, and retry.</string>
-    <string name="adapter_step_rfcomm">Startup is working. The flow is stuck opening the iAP2 data channel. Forget %1$s on the iPhone, pair it again, and connect.</string>
-    <string name="adapter_step_ready">Startup is working and the iAP2 channel is open.</string>
-    <string name="adapter_step_paired">Startup is working and this iPhone is paired on the external adapter. You can connect.</string>
-    <string name="adapter_step_failed">External Bluetooth failed to start (%1$s). Unplug the adapter, plug it back in, and check again.</string>
     <string name="no_phone_on_car_bluetooth">No iPhone is on the car Bluetooth yet. On the car Bluetooth page connect this iPhone for phone or music, then choose it here.</string>
 </resources>

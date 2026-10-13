@@ -4,4 +4,5 @@
     <application android:label="DiPlay HUD Test" tools:replace="android:label">
     <receiver android:name="com.shilapi.xcertplay.hud.StarterBridgeReceiver" android:exported="true" android:permission="android.permission.DUMP" />
     <activity android:name="com.shilapi.xcertplay.hud.StandaloneHudDemoActivity" android:exported="true" android:permission="android.permission.DUMP" />
+    <activity android:name="com.shilapi.xcertplay.rig.AirPlayDisplayHeadActivity" android:exported="true" android:permission="android.permission.DUMP" android:theme="@android:style/Theme.NoTitleBar.Fullscreen" android:launchMode="singleTask" android:configChanges="orientation|screenSize|keyboardHidden" />
     </application></manifest>

@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.SystemClock
 import com.shilapi.xcertplay.carhop.CarBluetoothHops
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
+import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import java.util.UUID
 
 /**
@@ -124,7 +125,7 @@ internal object DeviceConnectionSupport {
             hotspotApi = wifi != null && hotspotSwitchExists(),
             bluetooth = bluetooth,
             rfcommSocket = rfcommSocketExists(),
-            adapterRfcomm = UsbBluetoothRadios.present(context),
+            adapterRfcomm = AdapterRoutes.active?.present(context) == true,
             vendorHopRfcomm = vendorHopRfcomm(context),
         )
     }
