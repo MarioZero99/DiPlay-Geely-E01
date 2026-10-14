@@ -11,6 +11,8 @@ import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -21,11 +23,16 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * The settings area is a hub with one page per bucket. These lock in what the split is for: every
- * page opens from the hub, back goes to the hub rather than all the way home, and an action is
- * offered once rather than on whichever pages happened to want it.
+ * The settings area is one page that carries every bucket, and the bucket routes it used to open.
  *
- * What the pages say is pinned to a build with no adapter stack. These assertions are about the split
+ * These lock in both halves. The page has to show what each bucket has -- hotspot, phone, the connect
+ * step, display, audio, diagnostics, firmware, language -- because hunting for which bucket a setting
+ * was filed under is what the hub cost, and the hub's entry cards going away is the other half of that
+ * assertion. The routes have to keep working, because the connect flow lands on the wireless one when
+ * something is missing; back from a route is the settings page, not home, and no page offers the same
+ * action twice.
+ *
+ * What the pages say is pinned to a build with no adapter stack. These assertions are about the page
  * and the wording of the gaps, and a page that offers an external radio words several of them
  * differently — so without the pin the same test would pass or fail according to whether the machine
  * that ran it had the adapter mounted, and a suite that is green either way is evidence of nothing.
@@ -38,11 +45,19 @@ class SettingsPagesUiTest {
 
     @After fun giveTheBuildItsOwnAnswerBack() = AdapterRoutes.resetOverride()
 
+    /**
+     * The buckets: the route that still opens each one, its heading, and a control only it has.
+     *
+     * The heading stands in for the control where a bucket's own is conditional -- the wired card is
+     * only drawn on a head unit with a USB host, and Robolectric's answer to that is not this test's to
+     * depend on. The controls are matched by prefix because a `choice` draws its own title and its
+     * current value in one label ("Resolution · Native"), not the title alone.
+     */
     private val bucket = listOf(
-        Triple("Open wireless settings", "Wireless settings", "wireless"),
-        Triple("Open wired settings", "Wired settings", "wired"),
-        Triple("Open display and audio", "Display and audio", "display"),
-        Triple("Open system settings", "System settings", "system"),
+        Triple("wireless", "Wireless settings", "1 · Car hotspot (Wi-Fi)"),
+        Triple("wired", "Wired settings", null),
+        Triple("display", "Display and audio", "Resolution"),
+        Triple("system", "System settings", "Save diagnostic report"),
     )
 
     private fun open(page: String): DiPlayActivity {
@@ -81,44 +96,55 @@ class SettingsPagesUiTest {
         return found.single()
     }
 
-    @Test fun theHubOffersEveryBucketAndNothingElse() {
-        val hub = texts(open("settings"))
-        bucket.forEach { (action, _, _) -> assertTrue("the hub offers '$action'", action in hub) }
-        // The old single settings page is gone: its contents are behind the buckets now.
-        assertFalse("no diagnostic button on the hub", "Save diagnostic report" in hub)
-        assertFalse("no display control on the hub", "Resolution" in hub)
+    /**
+     * Everything a bucket has, on the settings page the driver reaches by tapping the gear.
+     *
+     * This is the assertion that would have caught the hub: it is not enough for the page to be a
+     * list of ways in. Each bucket's own controls have to be drawn, and the entry cards that stood in
+     * for them have to be gone.
+     */
+    @Test fun theSettingsPageCarriesEveryBucket() {
+        val settings = texts(open("settings"))
+        bucket.forEach { (_, heading, control) ->
+            assertTrue("the settings page shows the '$heading' bucket", heading in settings)
+            assertTrue("and what '$heading' holds", control == null || settings.any { it.startsWith(control) })
+        }
+        bucket.forEach { (_, heading, _) ->
+            assertFalse("no way in to '$heading' is left to tap", "Open $heading" in settings)
+        }
+        assertFalse("the hub's entry cards are gone", "Open wireless settings" in settings)
     }
 
-    @Test fun everyBucketOpensItsOwnPage() {
-        bucket.forEach { (action, heading, _) ->
-            val activity = open("settings")
-            onlyButton(activity, action).performClick()
-            val shown = texts(activity)
-            assertTrue("'$action' opens the page headed '$heading'", heading in shown)
-            bucket.filter { it.first != action }.forEach { (other, _, _) ->
-                assertFalse("'$action' leaves the hub, so '$other' is gone", other in shown)
+    /** The routes are still there, each one still its own page: the connect flow lands on one. */
+    @Test fun everyBucketRouteStillOpensItsOwnPage() {
+        bucket.forEach { (page, heading, control) ->
+            val shown = texts(open(page))
+            assertTrue("'$page' is headed '$heading'", heading in shown)
+            assertTrue("'$page' still holds its own controls", control == null || shown.any { it.startsWith(control) })
+            bucket.filter { it.first != page }.forEach { (_, other, _) ->
+                assertFalse("'$page' is not '$other'", other in shown)
             }
         }
     }
 
-    @Test fun backFromAPageReturnsToTheHubNotHome() {
-        bucket.forEach { (action, _, _) ->
-            val activity = open("settings")
-            onlyButton(activity, action).performClick()
+    @Test fun backFromABucketReturnsToTheSettingsPage() {
+        bucket.forEach { (page, _, _) ->
+            val activity = open(page)
             activity.onBackPressedDispatcher.onBackPressed()
+            val shown = texts(activity)
             assertTrue(
-                "'$action' goes back to the hub",
-                bucket.all { (entry, _, _) -> entry in texts(activity) },
+                "'$page' goes back to the settings page",
+                bucket.all { (_, heading, _) -> heading in shown },
             )
             assertFalse("back from a bucket does not leave the app", activity.isFinishing)
         }
     }
 
-    /** The hub is a page, not the bottom of the stack: back from it is the home page. */
-    @Test fun backFromTheHubReturnsToTheHomePage() {
+    /** The settings page is not the bottom of the stack either: back from it is the home page. */
+    @Test fun backFromTheSettingsPageReturnsToTheHomePage() {
         val activity = open("settings")
         assertTrue(
-            "a page inside settings offers Back",
+            "the settings page offers Back",
             views<Button>(activity).any { it.text?.toString() == "Back" },
         )
         activity.onBackPressedDispatcher.onBackPressed()
@@ -126,8 +152,42 @@ class SettingsPagesUiTest {
             "the home page is shown",
             views<Button>(activity).any { it.text?.toString() == "Car home" },
         )
-        assertFalse("the hub is behind us", "Open wireless settings" in texts(activity))
-        assertFalse("back from the hub does not leave the app", activity.isFinishing)
+        assertFalse("the settings page is behind us", "Wireless settings" in texts(activity))
+        assertFalse("back from the settings page does not leave the app", activity.isFinishing)
+    }
+
+    /** The card a section heading sits in: the label, the heading's own row, then the card that holds it. */
+    private fun cardTitled(activity: DiPlayActivity, title: String): View {
+        val heading = views<TextView>(activity).first { it.text?.toString() == title }
+        return (heading.parent as View).parent as View
+    }
+
+    /**
+     * One column where the head unit is narrow, two where it is wide.
+     *
+     * The settings page carries everything now, and a 1920 px head unit is 1200 dp: drawn one to a
+     * row, every card is stretched across the full 1856 px and the page runs to several screens. The
+     * pairing is the whole of that fix, so it is pinned here rather than left to a screenshot -- two
+     * cards in one row are two cards in one row, whether or not the machine running this has a head
+     * unit attached.
+     */
+    @Test fun onANarrowScreenTheSettingsCardsAreOneToARow() {
+        val activity = open("settings")
+        assertSame(
+            "a narrow head unit keeps the single column",
+            cardTitled(activity, "1 · Car hotspot (Wi-Fi)").parent,
+            cardTitled(activity, "2 · Bluetooth and phone").parent,
+        )
+    }
+
+    @Test
+    @Config(sdk = [28], qualifiers = "en-w1200dp-h720dp")
+    fun onAWideScreenTheSettingsCardsArePairedIntoRowsOfTwo() {
+        val activity = open("settings")
+        val first = cardTitled(activity, "1 · Car hotspot (Wi-Fi)")
+        val second = cardTitled(activity, "2 · Bluetooth and phone")
+        assertNotSame("a paired card is not in the same cell as the next", first.parent, second.parent)
+        assertSame("the pair shares one row", first.parent.parent, second.parent.parent)
     }
 
     @Test fun noPageOffersTheSameActionTwice() {
@@ -140,14 +200,16 @@ class SettingsPagesUiTest {
 
     /**
      * The permission deep link used to sit on the connection page, on the wired section and on the
-     * settings page at once. It lives on the system page now; this is the assertion that keeps it
-     * from creeping back.
+     * settings page at once. It lives in the system bucket's permissions card now, so it is on the
+     * settings page (which carries that card) and on the system route (which is that card's own page)
+     * and nowhere else: the two are one card drawn twice, not two ways in.
      */
     @Test fun theAppPermissionsLinkIsOfferedInOnePlace() {
-        listOf("settings", "wireless", "wired", "display").forEach { page ->
-            assertFalse("$page does not offer App permissions", "App permissions" in texts(open(page)))
+        assertTrue("the settings page offers it, through the system bucket", "App permissions" in texts(open("settings")))
+        assertTrue("the system route is that bucket's own page", "App permissions" in texts(open("system")))
+        listOf("wireless", "wired", "display").forEach { page ->
+            assertFalse("$page carries no permissions card", "App permissions" in texts(open(page)))
         }
-        assertTrue("the system page offers App permissions", "App permissions" in texts(open("system")))
     }
 
     /**
@@ -159,9 +221,18 @@ class SettingsPagesUiTest {
         assertFalse("the system page leaves Bluetooth to the wireless page", "Bluetooth settings" in texts(open("system")))
     }
 
-    /** The phone is chosen where the radio it is paired to is chosen, and nowhere else. */
-    @Test fun thePhoneChooserIsOnlyOnTheWirelessPage() {
-        listOf("settings", "wired", "display", "system").forEach { page ->
+    /**
+     * The phone is chosen in the Bluetooth card, and the pages that do not carry that card offer no
+     * chooser.
+     *
+     * This used to say "the wireless page and nothing else", which the settings page now contradicts on
+     * purpose: it carries the same card. What is left to guard is that the chooser was not spread any
+     * further. It is drawn from what the probe says this head unit has, and this test head unit has no
+     * radio at all — so on it no page draws a chooser, and the assertion below is weaker here than it
+     * reads. The card itself is pinned by [theSettingsPageCarriesEveryBucket].
+     */
+    @Test fun noPageOutsideTheBluetoothCardOffersAPhoneChooser() {
+        listOf("wired", "display", "system").forEach { page ->
             val labels = views<Button>(open(page)).mapNotNull { it.text?.toString() }
             assertFalse(
                 "$page does not offer a phone chooser",
@@ -246,11 +317,12 @@ class SettingsPagesUiTest {
             "the unsaved hotspot is named",
             texts(activity).any { it.startsWith("The hotspot name and password are not saved") },
         )
-        // The driver saves them, then looks again the way the app offers: out to the hub and back in.
+        // The driver saves them, then looks again the way the app offers: back to the settings page,
+        // which carries the same connect step, and press it there.
         AirPlayPersistence.saveManualHotspotSsid(activity, "MyCar")
         AirPlayPersistence.saveManualHotspotPassphrase(activity, "hunter2hunter2")
         onlyButton(activity, "Back").performClick()
-        onlyButton(activity, "Open wireless settings").performClick()
+        onlyButton(activity, "Connect phone").performClick()
         // The card is still raised -- other gaps remain -- so its absence below is recomputation, not the card
         // having gone away, which is the shape that would make this assertion pass for the wrong reason.
         assertTrue("the card is still there", "Wireless is not ready" in texts(activity))

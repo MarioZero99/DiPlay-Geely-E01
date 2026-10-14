@@ -2,11 +2,7 @@
     <string name="built_in_car_hotspot">Built-in car hotspot</string>
     <string name="display_and_audio">Display and audio</string>
     <string name="display_and_audio_hint">Size, resolution, frame rate, codec, audio routing, and the instrument cluster map.</string>
-    <string name="open_display_settings">Open display and audio</string>
-    <string name="open_system_settings">Open system settings</string>
-    <string name="open_wired_settings">Open wired settings</string>
-    <string name="open_wireless_settings">Open wireless settings</string>
-    <string name="settings_hub_hint">Wireless, wired, display and audio, and system settings, each on its own page.</string>
+    <string name="settings_hint">Every setting is on this page.</string>
     <string name="system_settings">System settings</string>
     <string name="system_settings_hint">Startup, location reporting, debug logs, language, and diagnostic reports.</string>
     <string name="wifi_direct" tools:ignore="MissingTranslation">Wi-Fi Direct</string>
@@ -392,7 +388,6 @@
     <string name="wireless_hotspot_off">Wireless hotspot: off</string>
     <string name="wireless_permissions">Wireless permissions</string>
     <string name="wireless_settings">Wireless settings</string>
-    <string name="wireless_settings_hint">Hotspot mode and credentials, the Bluetooth radio, and the paired iPhone.</string>
     <string name="wpa2" tools:ignore="MissingTranslation">WPA2</string>
     <string name="wpa2_wpa3_password_must_be_8_63_characters">WPA2/WPA3 password must be 8-63 characters</string>
     <string name="wpa3" tools:ignore="MissingTranslation">WPA3</string>

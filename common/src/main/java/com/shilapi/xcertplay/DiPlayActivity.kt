@@ -265,10 +265,10 @@ class DiPlayActivity : ComponentActivity() {
         content.addView(header)
         content.addView(space(24))
         when (page) {
-            "wireless" -> wirelessSetup(content)
-            "wired" -> wiredSetup(content)
-            "display" -> displaySettings(content)
-            "system" -> systemSettings(content)
+            "wireless" -> wirelessSetup(CardColumns(content))
+            "wired" -> wiredSetup(CardColumns(content))
+            "display" -> displaySettings(CardColumns(content))
+            "system" -> systemSettings(CardColumns(content))
             "settings" -> settings(content)
             "about" -> about(content)
             else -> home(content)
@@ -306,7 +306,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun home(content: LinearLayout) {
-        val wide = resources.configuration.screenWidthDp >= 850
+        val wide = resources.configuration.screenWidthDp >= WIDE_LAYOUT_MIN_WIDTH_DP
         val body = column()
         val left = column()
         left.addView(label(getString(R.string.your_phone_your_drive), 12, ACCENT, true).apply {
@@ -452,34 +452,66 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     /**
-     * The hub. Each bucket is a page of its own: the two connection methods ask different things of
-     * the driver and the rest of the settings have nothing to do with either, so they were only ever
-     * sharing a scroll.
+     * Every setting there is, on the page the driver reaches by tapping the gear.
+     *
+     * It used to be a hub of four entry cards, each opening a page of its own, on the argument that the
+     * two connection methods ask different things of the driver and the rest of the settings have
+     * nothing to do with either. What that cost is the reason it is one page again: a setting the driver
+     * came here for is now behind a guess about which bucket it was put in, and the head unit is wide
+     * enough to show the cards together -- see [CardColumns]. The pages the hub used to open are still
+     * routes, because the connect flow lands on the wireless one when something is missing.
+     *
+     * The four buckets keep their own headings, so the order below is the order the pages had: the two
+     * connection steps first, then everything else.
      */
     private fun settings(content: LinearLayout) {
-        content.addView(label(getString(R.string.your_drive_your_way), 34, TEXT, true))
-        content.addView(label(getString(R.string.settings_hub_hint), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
-        settingsEntry(content, R.string.wireless_settings, R.string.wireless_settings_hint, R.string.open_wireless_settings, R.drawable.ic_dp_connection, "wireless")
-        settingsEntry(content, R.string.wired_settings, R.string.wired_settings_hint, R.string.open_wired_settings, R.drawable.ic_dp_connection, "wired")
-        settingsEntry(content, R.string.display_and_audio, R.string.display_and_audio_hint, R.string.open_display_settings, R.drawable.ic_dp_display, "display")
-        settingsEntry(content, R.string.system_settings, R.string.system_settings_hint, R.string.open_system_settings, R.drawable.ic_dp_permissions, "system")
-    }
-
-    private fun settingsEntry(parent: LinearLayout, title: Int, hint: Int, action: Int, icon: Int, destination: String) {
-        section(parent, getString(title), icon) { card ->
-            card.addView(label(getString(hint), 16, MUTED))
-            card.addView(button(getString(action), false) { page = destination; render() }, matchButton(12, 60))
+        val columns = CardColumns(content)
+        columns.line(label(getString(R.string.your_drive_your_way), 34, TEXT, true))
+        columns.line(label(getString(R.string.settings_hint), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(8)) })
+        columns.line(supportedConnectionLabel().apply { setPadding(0, 0, 0, dp(8)) })
+        if (!hasWirelessRadio()) {
+            columns.line(
+                label(getString(R.string.this_head_unit_is_not_supported_for_wireless_carplay), 16, WARNING)
+                    .apply { setPadding(0, 0, 0, dp(8)) },
+            )
         }
+        // One readiness for the whole page, read once so the cards and the connect step cannot disagree.
+        val readiness = currentWirelessReadiness()
+        if (wirelessBlocked && readiness.gaps.isNotEmpty()) gapsCard(columns.raw(), readiness)
+
+        bucket(columns, R.string.wireless_settings, R.string.set_up_once_your_details_stay_saved_for_the_next_drive_cha)
+        wirelessCards(columns, readiness)
+
+        // The heading and its hint are drawn wherever the bucket is, exactly as on the bucket's own
+        // route: what is conditional is the card, and [wiredCards] is where that is decided.
+        bucket(columns, R.string.wired_settings, R.string.wired_settings_hint)
+        wiredCards(columns)
+
+        bucket(columns, R.string.display_and_audio, R.string.display_and_audio_hint, R.string.apply_reconnects_carplay_for_size_resolution_music_buffer)
+        displayCards(columns)
+
+        bucket(columns, R.string.system_settings, R.string.system_settings_hint)
+        systemCards(columns)
     }
 
-    private fun systemSettings(content: LinearLayout) {
-        content.addView(label(getString(R.string.system_settings), 34, TEXT, true))
-        content.addView(label(getString(R.string.system_settings_hint), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
+    /** A bucket's heading and hints, one size below the page's own title, since the page holds four. */
+    private fun bucket(columns: CardColumns, title: Int, vararg hints: Int) {
+        columns.line(label(getString(title), 26, TEXT, true).apply { setPadding(0, dp(24), 0, dp(6)) })
+        hints.forEach { columns.line(label(getString(it), 16, MUTED).apply { setPadding(0, 0, 0, dp(14)) }) }
+    }
+
+    private fun systemSettings(columns: CardColumns) {
+        columns.line(label(getString(R.string.system_settings), 34, TEXT, true))
+        columns.line(label(getString(R.string.system_settings_hint), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
+        systemCards(columns)
+    }
+
+    private fun systemCards(columns: CardColumns) {
         // The certificate source and the identity the iPhone is shown are deliberately not on this
         // page. Both decide whether the car authenticates as an Apple-licensed accessory, a wrong
         // value costs CarPlay outright, and no driver can diagnose that from the screen. They stay
         // at their built-in values.
-        section(content, getString(R.string.diagnostics), R.drawable.ic_dp_diagnostics) { card ->
+        columns.card(R.string.diagnostics, R.drawable.ic_dp_diagnostics) { card ->
             exportButton = button(if (exportInProgress) getString(R.string.saving_report) else getString(R.string.save_diagnostic_report), false) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) exportDiagnostics()
                 else chooseReportDestination()
@@ -496,23 +528,23 @@ class DiPlayActivity : ComponentActivity() {
             val destination = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) getString(R.string.reports_save_to_downloads_diplay) else getString(R.string.choose_where_to_save_your_report)
             card.addView(label(destination + getString(R.string.nothing_is_sent_automatically_protocol_payloads_and_creden), 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
         }
-        section(content, getString(R.string.automatic_connection), R.drawable.ic_dp_automation) { card ->
+        columns.card(R.string.automatic_connection, R.drawable.ic_dp_automation) { card ->
             toggle(card, getString(R.string.open_after_the_car_starts), getString(R.string.availability_depends_on_your_head_unit_s_startup_settings), AirPlayPersistence.loadAutoStartOnBoot(this)) { AirPlayPersistence.saveAutoStartOnBoot(this, it) }
             toggle(card, getString(R.string.report_location_to_iphone), getString(R.string.report_android_location_to_the_iphone), locationReportingEnabled) { setLocationReporting(it) }
             toggle(card, getString(R.string.debug_logs), getString(R.string.show_on_screen_debug_logs), AirPlayPersistence.loadDebugLogsEnabled(this)) {
                 AirPlayPersistence.saveDebugLogsEnabled(this, it)
             }
         }
-        section(content, getString(R.string.permissions_and_connection_help), R.drawable.ic_dp_permissions) { card ->
+        columns.card(R.string.permissions_and_connection_help, R.drawable.ic_dp_permissions) { card ->
             card.addView(label(getString(R.string.nearby_devices_connects_your_iphone_microphone_enables_sir), 16, MUTED))
             card.addView(button(getString(R.string.app_permissions), false) { openSystem(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }, matchButton(16, 60))
             if (deviceSupportsWireless()) card.addView(button(getString(R.string.wireless_connection_help), false) { wirelessHelp() }, matchButton(10, 60))
         }
-        hopMaintenanceSection(content)
-        section(content, getString(R.string.about), R.drawable.ic_dp_about) { card ->
+        hopMaintenanceCards(columns)
+        columns.card(R.string.about, R.drawable.ic_dp_about) { card ->
             card.addView(button(getString(R.string.about_diplay), false) { page = "about"; render() }, matchButton(0, 60))
         }
-        languageSettings(content)
+        languageCards(columns)
     }
 
     /**
@@ -528,11 +560,15 @@ class DiPlayActivity : ComponentActivity() {
         CarPlayBackgroundSession.exit { android.os.Process.killProcess(android.os.Process.myPid()) }
     }
 
-    private fun displaySettings(content: LinearLayout) {
-        content.addView(label(getString(R.string.display_and_audio), 34, TEXT, true))
-        content.addView(label(getString(R.string.display_and_audio_hint), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(8)) })
-        content.addView(label(getString(R.string.apply_reconnects_carplay_for_size_resolution_music_buffer), 17, MUTED).apply { setPadding(0, 0, 0, dp(24)) })
-        section(content, getString(R.string.display_and_performance), R.drawable.ic_dp_display) { card ->
+    private fun displaySettings(columns: CardColumns) {
+        columns.line(label(getString(R.string.display_and_audio), 34, TEXT, true))
+        columns.line(label(getString(R.string.display_and_audio_hint), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(8)) })
+        columns.line(label(getString(R.string.apply_reconnects_carplay_for_size_resolution_music_buffer), 17, MUTED).apply { setPadding(0, 0, 0, dp(24)) })
+        displayCards(columns)
+    }
+
+    private fun displayCards(columns: CardColumns) {
+        columns.card(R.string.display_and_performance, R.drawable.ic_dp_display) { card ->
             carPlaySizeControl(card)
             choice(card, getString(R.string.resolution), listOf(getString(R.string.resolution_native), getString(R.string.s_80_lighter_load), getString(R.string.s_60_lightest_load)), listOf(10, 8, 6).indexOf(AirPlayPersistence.loadDisplayScaleTenths(this)).coerceAtLeast(0)) { AirPlayPersistence.saveDisplayScaleTenths(this, listOf(10, 8, 6)[it]) }
             val bufferPresets = com.shilapi.xcertplay.media.MediaAudioBuffer.presets
@@ -572,7 +608,10 @@ class DiPlayActivity : ComponentActivity() {
                 AirPlayPersistence.saveWidthPhysicalMm(this, widthPhysicalMm)
             }
         }
-        section(content, getString(R.string.audio_routing)) { card ->
+        // Full width by necessity, not by rank: the stream-type grid measures each of its seven cells
+        // against the screen rather than against the card it is in, so half a row would push it out of
+        // its own card. Nothing else here is that wide.
+        columns.card(R.string.audio_routing, fullWidth = true) { card ->
             val channelTitle = label(getString(R.string.navigation_stream_type), 18, TEXT, true)
             val channelHint = label(getString(R.string.tap_a_number_to_test_14_driver_speaker_on_byd), 14, MUTED)
             val grid = channelSelector()
@@ -611,7 +650,7 @@ class DiPlayActivity : ComponentActivity() {
         // The cluster map keeps a gate of its own: it draws AirPlay's alt-screen stream on a public
         // presentation display, so what it needs is that display, not the car's HUD services. It used
         // to sit inside the BYD section and was hidden wherever those services were absent.
-        if (ClusterMapPresentation.findDisplay(this) != null) section(content, getString(R.string.instrument_cluster_map), R.drawable.ic_dp_navigation) { card ->
+        if (ClusterMapPresentation.findDisplay(this) != null) columns.card(R.string.instrument_cluster_map, R.drawable.ic_dp_navigation) { card ->
             toggle(card, getString(R.string.carplay_map_on_instrument_cluster_experimental),
                 getString(R.string.shows_the_iphone_s_cluster_map_on_the_instrument_cluster_c),
                 AirPlayPersistence.loadClusterMapEnabled(this)) {
@@ -727,16 +766,16 @@ class DiPlayActivity : ComponentActivity() {
      * hotspot calls do not answer still gets the whole page; it is told what is missing, in the step
      * that is missing it, instead of the step being taken away.
      */
-    private fun wirelessSetup(content: LinearLayout) {
-        content.addView(label(getString(R.string.wireless_settings), 34, TEXT, true))
-        content.addView(label(getString(R.string.set_up_once_your_details_stay_saved_for_the_next_drive_cha), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
-        content.addView(supportedConnectionLabel().apply { setPadding(0, 0, 0, dp(16)) })
+    private fun wirelessSetup(columns: CardColumns) {
+        columns.line(label(getString(R.string.wireless_settings), 34, TEXT, true))
+        columns.line(label(getString(R.string.set_up_once_your_details_stay_saved_for_the_next_drive_cha), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
+        columns.line(supportedConnectionLabel().apply { setPadding(0, 0, 0, dp(16)) })
         // Said alongside the steps rather than instead of them. A head unit with no radio that could carry
         // the leg is worth saying so about, but the driver can still turn the car's hotspot on in the car's
         // own settings and type its name in, and a probe that reads the Bluetooth leg wrong must not take
         // that away — which is exactly what this page used to lose.
         if (!hasWirelessRadio()) {
-            content.addView(
+            columns.line(
                 label(getString(R.string.this_head_unit_is_not_supported_for_wireless_carplay), 16, WARNING)
                     .apply { setPadding(0, 0, 0, dp(16)) },
             )
@@ -745,10 +784,22 @@ class DiPlayActivity : ComponentActivity() {
         // so laying the page out asks the adapter and the hotspot only once. The card hides itself as soon as
         // nothing is missing, which is what stops it outliving the reason it was raised for.
         val readiness = currentWirelessReadiness()
-        if (wirelessBlocked && readiness.gaps.isNotEmpty()) gapsCard(content, readiness)
-        section(content, getString(R.string.s_1_car_hotspot)) { card -> hotspotControls(card) }
-        section(content, getString(R.string.s_2_bluetooth_and_phone)) { card -> bluetoothControls(card) }
-        section(content, getString(R.string.s_3_connect)) { card ->
+        if (wirelessBlocked && readiness.gaps.isNotEmpty()) gapsCard(columns.raw(), readiness)
+        wirelessCards(columns, readiness)
+    }
+
+    /**
+     * The two connection steps and the connect control, as cards.
+     *
+     * The numbering stays: these are the steps of setting the car's own hotspot and Bluetooth up, and the
+     * order is the whole of their meaning. It is the page they sit on that changed -- the settings page
+     * shows them too, so the driver who came for one of these settings does not have to know which bucket
+     * the hub would have filed it under.
+     */
+    private fun wirelessCards(columns: CardColumns, readiness: WirelessReadiness) {
+        columns.card(R.string.s_1_car_hotspot) { card -> hotspotControls(card) }
+        columns.card(R.string.s_2_bluetooth_and_phone) { card -> bluetoothControls(card) }
+        columns.card(R.string.s_3_connect) { card ->
             readinessLines(card, readiness)
             card.addView(label(getString(R.string.return_from_car_settings_to_diplay_then_connect_accept_the), 16, MUTED).apply { setPadding(0, dp(8), 0, 0) })
             card.addView(button(getString(R.string.connect_phone), true) { connect(true) }, matchButton(12, 60))
@@ -760,12 +811,16 @@ class DiPlayActivity : ComponentActivity() {
      * its own. What is left is the instruction, the button, and the permission the phone needs — the
      * last of which lives on the system page rather than being said twice.
      */
-    private fun wiredSetup(content: LinearLayout) {
-        content.addView(label(getString(R.string.wired_settings), 34, TEXT, true))
-        content.addView(label(getString(R.string.wired_settings_hint), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
-        content.addView(supportedConnectionLabel().apply { setPadding(0, 0, 0, dp(16)) })
+    private fun wiredSetup(columns: CardColumns) {
+        columns.line(label(getString(R.string.wired_settings), 34, TEXT, true))
+        columns.line(label(getString(R.string.wired_settings_hint), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
+        columns.line(supportedConnectionLabel().apply { setPadding(0, 0, 0, dp(16)) })
+        wiredCards(columns)
+    }
+
+    private fun wiredCards(columns: CardColumns) {
         if (UsableConnection.USB !in connectionReport().usable) return
-        section(content, getString(R.string.connect_with_usb)) { card ->
+        columns.card(R.string.connect_with_usb) { card ->
             card.addView(label(getString(R.string.use_a_usb_data_cable_and_the_car_s_usb_data_port_unlock_yo), 16, MUTED))
             card.addView(button(getString(R.string.connect_with_usb), false) { connect(false) }, matchButton(12, 60))
         }
@@ -1032,14 +1087,14 @@ class DiPlayActivity : ComponentActivity() {
      * Absent everywhere else — the published tree, CI, any other head unit — because [vendorHop]
      * answers null there and this draws nothing.
      */
-    private fun hopMaintenanceSection(content: LinearLayout) {
+    private fun hopMaintenanceCards(columns: CardColumns) {
         val hop = vendorHop(this) ?: return
         val maintenance = hopMaintenance
         if (maintenance == null) {
             refreshHopMaintenance(hop)
             return
         }
-        section(content, maintenance.title, R.drawable.ic_dp_diagnostics) { card ->
+        columns.card(maintenance.title, R.drawable.ic_dp_diagnostics) { card ->
             card.addView(label(maintenance.state, 18, TEXT))
             maintenance.detail?.let {
                 card.addView(label(it, 15, MUTED).apply { setPadding(0, dp(6), 0, 0) })
@@ -1144,7 +1199,7 @@ class DiPlayActivity : ComponentActivity() {
             lone.description?.let { parent.addView(label(it, 15, MUTED).apply { setPadding(0, dp(6), 0, dp(12)) }) }
             return
         }
-        val wide = resources.configuration.screenWidthDp >= 850
+        val wide = resources.configuration.screenWidthDp >= WIDE_LAYOUT_MIN_WIDTH_DP
         val choices = if (wide) row().apply { gravity = Gravity.TOP } else column()
         parent.addView(choices)
         options.forEachIndexed { index, option ->
@@ -2017,8 +2072,8 @@ class DiPlayActivity : ComponentActivity() {
     }
     private fun version() = packageManager.getPackageInfo(packageName, 0).versionName ?: "0.1.0-beta.1"
 
-    private fun languageSettings(content: LinearLayout) {
-        section(content, getString(R.string.language_section_title)) { card ->
+    private fun languageCards(columns: CardColumns) {
+        columns.card(R.string.language_section_title) { card ->
             card.addView(label(getString(R.string.language_hint), 14, MUTED))
             val current = AppLocale.preference(this)
             val languageButton = button("${getString(R.string.language_app_language)} · ${AppLocale.displayName(this, current)}", false) { }
@@ -2041,6 +2096,71 @@ class DiPlayActivity : ComponentActivity() {
         build(card)
         parent.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(18) })
     }
+
+    /**
+     * A page's cards, laid out across the width it has.
+     *
+     * One column is what a page of four entry cards wants, and it is what every page here used to get.
+     * The settings page carries everything now -- hotspot, phone, the two connect steps, display, audio,
+     * diagnostics, firmware, language -- and a card stretched across the whole 1856 px of a 1920 px head
+     * unit leaves most of its own row empty while the page runs to several screens. On a wide screen the
+     * cards are placed two to a row instead.
+     *
+     * Pairs, not two independent columns: a row is then as tall as its taller card and the page still
+     * reads left to right, which filling one whole column before the next does not give. A narrow head
+     * unit keeps the single column it always had, and so does anything added through [fullWidth] --
+     * the audio card measures its own grid against the screen rather than against the card it sits in,
+     * and half a row would put that grid straight out of the card.
+     */
+    private inner class CardColumns(private val content: LinearLayout) {
+        private val wide = resources.configuration.screenWidthDp >= WIDE_LAYOUT_MIN_WIDTH_DP
+        private var openRow: LinearLayout? = null
+        private var inRow = 0
+
+        /** A full-width line between the cards: the page's own headings and hints. */
+        fun line(view: View) {
+            openRow = null
+            inRow = 0
+            content.addView(view)
+        }
+
+        /** A section card, titled and iconed as [section] does it. */
+        fun card(title: Int, icon: Int? = null, fullWidth: Boolean = false, build: (LinearLayout) -> Unit) =
+            card(getString(title), icon, fullWidth, build)
+
+        /** The same, for a title that is not a resource -- the hop's own words for the firmware. */
+        fun card(title: String, icon: Int? = null, fullWidth: Boolean = false, build: (LinearLayout) -> Unit) {
+            section(cellFor(fullWidth), title, icon, build)
+        }
+
+        /** The full-width lane itself, for what is not a section card -- the readiness card, say. */
+        fun raw(): LinearLayout {
+            openRow = null
+            inRow = 0
+            return content
+        }
+
+        private fun cellFor(fullWidth: Boolean): LinearLayout {
+            if (!wide || fullWidth) {
+                openRow = null
+                inRow = 0
+                return content
+            }
+            var row = openRow
+            if (row == null || inRow >= 2) {
+                row = row().apply { gravity = Gravity.TOP }
+                content.addView(row)
+                openRow = row
+                inRow = 0
+            }
+            val first = inRow == 0
+            inRow++
+            return column().also { cell ->
+                row.addView(cell, LinearLayout.LayoutParams(0, -2, 1f).apply { if (!first) marginStart = dp(18) })
+            }
+        }
+    }
+
     /**
      * A two-state row.
      *
@@ -2120,6 +2240,14 @@ class DiPlayActivity : ComponentActivity() {
     private fun space(height: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(height)) }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     companion object {
+        /**
+         * The width at which a page is given two columns instead of one.
+         *
+         * A 1920 px head unit at 160 dpi is 1200 dp, so this is what "wide" means here; a head unit
+         * narrower than this keeps the single column, where a halved card could not hold its own labels.
+         */
+        private const val WIDE_LAYOUT_MIN_WIDTH_DP = 850
+
         private const val HOP_DEVICES_TTL_MILLIS = 10_000L
 
         /** How long a hop's maintenance answer is reused before it is asked for again. */
