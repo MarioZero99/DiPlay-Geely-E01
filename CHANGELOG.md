@@ -11,6 +11,36 @@ alignment line, not the base line, is what says how current a release is.
 
 ---
 
+## 4.1-geely — 2026-10-14
+
+**Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
+
+**The settings are one page again.** The hub that went in after 4.0 sent the driver through four
+entry cards to guess which bucket a setting had been filed under. All thirteen are on the settings
+page now, the four bucket headings and the wireless route's `1 · 2 · 3` kept, and they are drawn two
+to a row — this head unit is 1200 dp wide, so one column was several screens of scrolling.
+
+**Wireless.** A head unit with no radio that could carry the leg is told so, rather than handed a
+list of things to fix that no action of the driver's could fix. Refusing the hotspot no longer takes
+the car's Wi-Fi with it: Wi-Fi was dropped unconditionally on the retry, so a hotspot the firmware
+had refused left the driver's own network — and Wi-Fi debugging — down, with nothing to put it back.
+A superseded attempt no longer leaves its own discovery responder behind; one process holds one.
+Failure reasons on this route now reach the diagnostic report.
+
+**Wired.** The USB receive queue had no ceiling anywhere in the stack, on a head unit that runs with
+26–33 MB free. A peer that stops reading can now fill 1 MiB before the connection is torn down, by
+the same route an RST from the peer takes. A phone showing its authorisation prompt is no longer
+reported as a write fault.
+
+**Removed.** BYD's HUD, battery and charging output, which have no counterpart on this head unit.
+
+**⚠️ Wireless changes the head unit's own Bluetooth.** To carry CarPlay's data path, DiPlay takes
+over the Bluetooth process the head unit is running — and it does so **at every app start**, not
+only when wireless is used. `/system` is not written, a head unit restart puts the original back,
+and there is no undo in the app. Whether the head unit's own calling and Bluetooth audio still
+behave against it **has not been checked on the car**. The firmware version this was built against
+and the disclaimer are in `docs/release-notes/v4.1-geely.md`.
+
 ## 4.0-geely-rc — 2026-10-10
 
 **Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
