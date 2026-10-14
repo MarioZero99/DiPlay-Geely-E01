@@ -1320,6 +1320,11 @@ class CarPlayController(
 
     private fun wirelessSessionListener(generation: Int): AirPlaySessionListener =
         object : AirPlaySessionListener by sessionListener {
+            override fun onConnectionAccepted() {
+                if (isStaleWirelessRun(generation)) return
+                wirelessDiagnostics?.connectionAccepted()
+            }
+
             override fun onSessionActive(session: AirPlaySession) {
                 if (isStaleWirelessRun(generation)) return
                 wirelessDiagnostics?.let {

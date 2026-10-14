@@ -26,6 +26,16 @@ data class AirPlayDeviceInfo(
 
 /** Session lifecycle and command callbacks for the driver/UI layer. */
 interface AirPlaySessionListener {
+    /**
+     * A TCP connection was accepted on the AirPlay listening socket, before a session is built from it.
+     *
+     * Nothing else on the path sees this happen: the startup diagnostic measures "how long after the
+     * car asked for a session did the phone open one", and its answer was a permanent zero because
+     * nothing called it. It is a connection, not a session — the phone can open one and never speak
+     * the protocol — which is exactly the state the diagnostic is there to name.
+     */
+    fun onConnectionAccepted() {}
+
     fun onSessionActive(session: AirPlaySession) {}
     fun onSessionEnded(session: AirPlaySession) {}
     fun onVideoFrameRendered(session: AirPlaySession) {}
@@ -128,7 +138,7 @@ class AirPlaySession(
         try {
             media.onSessionClosed(this)
         } catch (error: Exception) {
-            Log.w(TAG, "airplay media stream teardown failed", error)
+            failureLog("airplay media stream teardown failed", error)
         }
         teardown()
         if (notified.compareAndSet(false, true)) listener.onSessionEnded(this)
@@ -168,7 +178,7 @@ class AirPlaySession(
             output.flush()
             true
         } catch (error: Exception) {
-            Log.w(TAG, "airplay event command failed type=${command["type"]}", error)
+            failureLog("airplay event command failed type=${command["type"]}", error)
             close()
             false
         }
@@ -190,7 +200,7 @@ class AirPlaySession(
                     "(${first?.x},${first?.y},down=${first?.down}) report=${report.toHexString()}",
             )
         } else if (!sent && touchSendFailureLogged.compareAndSet(false, true)) {
-            Log.w(TAG, "airplay touch dropped: event channel is not ready")
+            failureLog("airplay touch dropped: event channel is not ready")
         }
         return sent
     }
@@ -314,7 +324,7 @@ class AirPlaySession(
                         !path.endsWith("/feedback") &&
                             !(request.method == "POST" && path.endsWith("/command"))
                     debugLog(
-                        "airplay rx ${request.method} ${request.path} cseq=$cseq body=${request.body.size}",
+                        "airplay rx ${request.method} ${request.path} cseq=$cseq bodyBytes=${request.body.size}",
                         showInDebugOverlay,
                     )
                     trace(
@@ -324,15 +334,14 @@ class AirPlaySession(
                     val response = try {
                         handle(request)
                     } catch (error: Exception) {
-                        Log.e(
-                            TAG,
+                        failureLog(
                             "airplay handler failed ${request.method} ${request.path} cseq=$cseq",
                             error,
                         )
                         RtspMessage.Response(status = 500)
                     }
                     debugLog(
-                        "airplay tx status=${response.status ?: 200} cseq=$cseq body=${response.body.size}",
+                        "airplay tx status=${response.status ?: 200} cseq=$cseq bodyBytes=${response.body.size}",
                         showInDebugOverlay,
                     )
                     val wire = RtspMessage.buildResponse(request, response)
@@ -423,7 +432,7 @@ class AirPlaySession(
         try {
             media.onSetupResponseSent(this)
         } catch (error: Exception) {
-            Log.w(TAG, "airplay SETUP response callback failed", error)
+            failureLog("airplay SETUP response callback failed", error)
         }
     }
 
@@ -445,11 +454,31 @@ class AirPlaySession(
         }
     }
 
+    /**
+     * A failure the report has to carry, not only logcat.
+     *
+     * Everything here used to go to logcat and nowhere else, which on a head unit with no adb is the
+     * same as not logging it: a link that came up and then produced nothing left the report with the
+     * session's ordinary lines and no reason. The sentence goes to the session log through [debugLog],
+     * and the throwable stays on the logcat entry where a stack trace belongs.
+     *
+     * The message must not contain `body=`, `payload=`, `hex=` or `ssid`: the report's redactor replaces
+     * any line carrying one of those with a placeholder, so a size written as `body=42` never arrives.
+     * Spelled `bytes=`/`plistBytes=` it does.
+     */
+    private fun failureLog(message: String, error: Throwable? = null) {
+        if (error == null) Log.e(TAG, message) else Log.e(TAG, message, error)
+        debugLog(
+            if (error == null) message
+            else "$message: ${error.message ?: error.javaClass.simpleName}",
+        )
+    }
+
     private fun handleSetup(request: RtspMessage.Request): RtspMessage.Response {
         val dict = try {
             asMap(BplistCodec.decode(request.body)) ?: return RtspMessage.Response(status = 400)
         } catch (error: Exception) {
-            Log.e(TAG, "airplay SETUP plist decode failed body=${request.body.size}", error)
+            failureLog("airplay SETUP plist decode failed plistBytes=${request.body.size}", error)
             return RtspMessage.Response(status = 400)
         }
         debugLog("airplay SETUP keys=${dict.keys.sorted()}")
@@ -643,7 +672,7 @@ class AirPlaySession(
             eventSocket = socket
             val shared = pairVerify.shared
             if (shared == null) {
-                Log.e(TAG, "airplay event rejected: pair-verify shared secret unavailable")
+                failureLog("airplay event rejected: pair-verify shared secret unavailable")
                 safeClose(socket)
                 close()
                 return
@@ -667,7 +696,7 @@ class AirPlaySession(
             runEventRead(socket)
         } catch (error: Exception) {
             if (!closed.get()) {
-                Log.e(TAG, "airplay event accept failed", error)
+                failureLog("airplay event accept failed", error)
                 close()
             }
         }
@@ -688,7 +717,7 @@ class AirPlaySession(
                 val decrypted = try {
                     cipher.decrypt(encrypted)
                 } catch (error: Exception) {
-                    Log.e(TAG, "airplay event decrypt failed encrypted=${encrypted.size}", error)
+                    failureLog("airplay event decrypt failed encryptedBytes=${encrypted.size}", error)
                     break
                 }
                 encrypted = decrypted.rest
@@ -698,7 +727,7 @@ class AirPlaySession(
                 for (message in parsed.messages) {
                     if (message.method.startsWith("RTSP/") || message.method.startsWith("HTTP/")) continue
                     debugLog(
-                        "airplay event rx ${message.method} ${message.path} cseq=${message.headers["cseq"] ?: "-"} body=${message.body.size}",
+                        "airplay event rx ${message.method} ${message.path} cseq=${message.headers["cseq"] ?: "-"} bodyBytes=${message.body.size}",
                     )
                     val response = RtspMessage.buildResponse(message, RtspMessage.Response(status = 200))
                     trace(
@@ -713,7 +742,7 @@ class AirPlaySession(
                 }
             }
         } catch (error: Exception) {
-            if (!closed.get()) Log.e(TAG, "airplay event read failed", error)
+            if (!closed.get()) failureLog("airplay event read failed", error)
         } finally {
             debugLog("airplay event connection closed")
             if (eventSocket === socket) eventSocket = null

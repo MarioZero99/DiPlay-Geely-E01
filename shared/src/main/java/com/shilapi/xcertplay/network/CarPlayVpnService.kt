@@ -193,6 +193,10 @@ class CarPlayVpnService : VpnService() {
             while (active.get()) {
                 val socket: Socket = server.accept()
                 DiagLog.i(TAG, "airplay connection accepted from ${socket.remoteSocketAddress}")
+                // Read the volatile field the way the transport-error path does: the attachment this
+                // connection belongs to is whoever is attached right now, and a run that was replaced
+                // filters itself out on the listener's own side.
+                attachment?.listener?.onConnectionAccepted()
                 socket.tcpNoDelay = true
                 socket.keepAlive = true
                 socket.setSoLinger(true, 0)
