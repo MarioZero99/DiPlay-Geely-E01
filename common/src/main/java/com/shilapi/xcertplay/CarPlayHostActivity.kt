@@ -1842,10 +1842,21 @@ class CarPlayHostActivity : ComponentActivity() {
         appendLog(requestSummary)
         appendLog(support.details)
         appendLog(effectiveSummary)
+        // What this accessory declares its own radio to be: the AirPlay `bluetoothIDs` and the iAP2
+        // Bluetooth transport's MAC both come from here. The iPhone matches it against the Bluetooth
+        // link it arrived on, and a value from a different radio has the same shape as the right one --
+        // so which service answered, or that none did and this is the AirPlay identity, is part of the
+        // reading rather than a detail about how the line was produced.
+        val localBluetooth = DiPlayBluetooth.localAddress(this)
+        val airPlayDeviceId = DiPlayBootstrap.deviceId(airPlayIdentity)
+        appendLog(
+            "Bluetooth local address value=${localBluetooth?.value ?: airPlayDeviceId} " +
+                "source=${localBluetooth?.source ?: "airplay-identity"}",
+        )
         return AirPlayConfig(
             deviceName = "DiPlay",
-            deviceId = DiPlayBootstrap.deviceId(airPlayIdentity),
-            btMac = DiPlayBluetooth.localAddress(this) ?: DiPlayBootstrap.deviceId(airPlayIdentity),
+            deviceId = airPlayDeviceId,
+            btMac = localBluetooth?.value ?: airPlayDeviceId,
             sourceVersion = "950.7.1",
             main = display,
             cluster = clusterDisplayConfig(),
