@@ -11,7 +11,7 @@ alignment line, not the base line, is what says how current a release is.
 
 ---
 
-## 4.1-geely — 2026-10-14
+## 0.4.1-geely — 2026-10-14
 
 **Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
 
@@ -39,9 +39,9 @@ over the Bluetooth process the head unit is running — and it does so **at ever
 only when wireless is used. `/system` is not written, a head unit restart puts the original back,
 and there is no undo in the app. Whether the head unit's own calling and Bluetooth audio still
 behave against it **has not been checked on the car**. The firmware version this was built against
-and the disclaimer are in `docs/release-notes/v4.1-geely.md`.
+and the disclaimer are in `docs/release-notes/v0.4.1-geely.md`.
 
-## 4.0-geely-rc — 2026-10-10
+## 0.4.0-geely-rc — 2026-10-10
 
 **Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
 
