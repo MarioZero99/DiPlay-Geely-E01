@@ -47,6 +47,7 @@ import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeBasis
 import com.shilapi.xcertplay.airplay.CarPlayClusterDisplay
 import com.shilapi.xcertplay.carhop.CarBluetoothHop
 import com.shilapi.xcertplay.carhop.CarBluetoothHops
+import com.shilapi.xcertplay.carhop.CarBluetoothMaintenanceStatus
 import com.shilapi.xcertplay.carhop.CarBluetoothMaintenance
 import com.shilapi.xcertplay.carhop.CarBluetoothPhone
 import com.shilapi.xcertplay.host.BuildConfig
@@ -204,11 +205,15 @@ class DiPlayActivity : ComponentActivity() {
         navigationStreamType = AirPlayPersistence.loadNavigationStreamType(this)
         loadConnectionSettings()
         render()
+        openOntoRunningFirmwareOperation()
         handleWirelessRecovery()
         startVendorHopInBackground()
         wakeCarHotspotInBackground()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // The firmware page is left by its own control and by nothing else while a write is in
+                // flight: back would take the driver off the one screen that says what is happening.
+                if (page == PAGE_FIRMWARE && firmwareRunning()) return
                 val parent = parentOf(page)
                 if (parent != null) { page = parent; render() }
                 else { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
@@ -259,12 +264,18 @@ class DiPlayActivity : ComponentActivity() {
         val header = row().apply { gravity = Gravity.CENTER_VERTICAL }
         header.addView(ImageView(this).apply { setImageResource(R.drawable.ic_carplay); contentDescription = getString(R.string.carplay) }, LinearLayout.LayoutParams(dp(36), dp(36)))
         header.addView(label(getString(R.string.diplay), 26, TEXT, true).apply { setPadding(dp(12), 0, 0, 0) }, LinearLayout.LayoutParams(0, dp(56), 1f))
-        header.addView(button(if (parentOf(page) == null) getString(R.string.car_home) else getString(R.string.back), false) {
-            val parent = parentOf(page)
-            if (parent == null) startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
-            else { page = parent; render() }
-        }, LinearLayout.LayoutParams(dp(130), dp(56)))
-        header.addView(button(getString(R.string.close_app), false) { closeTheApp() }, LinearLayout.LayoutParams(dp(130), dp(56)).apply { marginStart = dp(10) })
+        // The firmware page is the one page with no way off it from the header. It is drawn while a
+        // script is writing to /system, and both of those controls would take the driver somewhere
+        // that cannot show them what is happening — the second of them out of the app entirely. What
+        // leaves it is its own control, which appears once there is nothing left to wait for.
+        if (page != PAGE_FIRMWARE) {
+            header.addView(button(if (parentOf(page) == null) getString(R.string.car_home) else getString(R.string.back), false) {
+                val parent = parentOf(page)
+                if (parent == null) startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
+                else { page = parent; render() }
+            }, LinearLayout.LayoutParams(dp(130), dp(56)))
+            header.addView(button(getString(R.string.close_app), false) { closeTheApp() }, LinearLayout.LayoutParams(dp(130), dp(56)).apply { marginStart = dp(10) })
+        }
         content.addView(header)
         content.addView(space(24))
         when (page) {
@@ -274,6 +285,7 @@ class DiPlayActivity : ComponentActivity() {
             "system" -> systemSettings(CardColumns(content))
             "settings" -> settings(content)
             "about" -> about(content)
+            PAGE_FIRMWARE -> firmwareProgress(content)
             else -> home(content)
         }
         setContentView(scroll)
@@ -290,6 +302,7 @@ class DiPlayActivity : ComponentActivity() {
         "home" -> null
         "settings" -> "home"
         "about" -> "system"
+        PAGE_FIRMWARE -> "system"
         else -> "settings"
     }
 
@@ -1025,18 +1038,48 @@ class DiPlayActivity : ComponentActivity() {
                 if (isFinishing) return@runOnUiThread
                 hopMaintenance = maintenance
                 hopMaintenanceAt = SystemClock.elapsedRealtime()
-                if (page == "system") render()
+                // Where the page belongs, given what the hop now says. Onto the waiting page while a
+                // write runs — including one this process never started, because the script is the
+                // head unit's and runs on while this app is gone — and off it when there is neither a
+                // write nor an ending to report, which is a page a restored intent can still name and
+                // not a place to leave anyone standing.
+                when (maintenance?.status) {
+                    CarBluetoothMaintenanceStatus.RUNNING -> {
+                        startWatchingMaintenance(hop)
+                        if (page != PAGE_FIRMWARE) page = PAGE_FIRMWARE
+                    }
+                    CarBluetoothMaintenanceStatus.NONE ->
+                        if (page == PAGE_FIRMWARE && hopMaintenanceRunning == null) page = "system"
+                    else -> Unit
+                }
+                if (page == "system" || page == PAGE_FIRMWARE) render()
             }
         }, "car-hop-maintenance").apply { isDaemon = true }.start()
     }
 
     /**
-     * Carries out one action and keeps the page current while it runs.
+     * Whether a firmware write is in flight right now.
      *
-     * The call blocks on the head unit, and an install can end with the head unit restarting, so the
-     * work goes to a thread and nothing is read back from it until it returns. What the page shows
-     * meanwhile comes from the hop's own state, which is why it is re-asked on a timer instead of
-     * waiting for the call: an operation that takes a minute should not look like a dead screen.
+     * Three answers, cheapest first, and each covers a gap the one before it has. The card knows, but
+     * is a round trip behind; the launch flag knows about the moment just after a tap, before the card
+     * has been asked again; and the hop's own file read covers an operation that began in an earlier
+     * life of this process. None of the three touches the head unit.
+     */
+    private fun firmwareRunning(): Boolean {
+        if (hopMaintenance?.status == CarBluetoothMaintenanceStatus.RUNNING) return true
+        if (hopMaintenanceRunning != null) return true
+        val hop = vendorHop(this) ?: return false
+        return runCatching { hop.operationRunning(this) }.getOrDefault(false)
+    }
+
+    /**
+     * Starts one action and follows it wherever it runs.
+     *
+     * The work goes to a thread because the launch itself costs a root round trip. What comes back is
+     * not the outcome: the firmware script goes out into the background, so the call answers as soon
+     * as it is running, and everything after that is read from the hop's own progress file. That is
+     * what lets the page show an operation this process did not live through — and what makes a write
+     * that outlasts the app something the driver can still be told about.
      */
     private fun runHopMaintenance(hop: CarBluetoothHop, action: CarBluetoothMaintenance.Action) {
         if (hopMaintenanceRunning != null) return
@@ -1050,28 +1093,57 @@ class DiPlayActivity : ComponentActivity() {
         }
         hopMaintenanceRunning = action.id
         hopMaintenanceResult = null
+        startWatchingMaintenance(hop)
         render()
-        val watch = object : Runnable {
-            override fun run() {
-                if (hopMaintenanceRunning == null || isFinishing) return
-                hopMaintenanceAt = 0L
-                refreshHopMaintenance(hop)
-                handler.postDelayed(this, HOP_MAINTENANCE_WATCH_MILLIS)
-            }
-        }
-        handler.postDelayed(watch, HOP_MAINTENANCE_WATCH_MILLIS)
         Thread({
             val message = runCatching { hop.performMaintenance(this, action.id) }
                 .getOrElse { it.message ?: it.javaClass.simpleName }
             runOnUiThread {
                 hopMaintenanceRunning = null
-                hopMaintenanceResult = message
                 hopMaintenanceAt = 0L
                 if (isFinishing) return@runOnUiThread
+                // A launch that went out is followed on the page that says so. A refusal has nothing to
+                // follow, and its reason is the card's to report where the buttons are.
+                if (firmwareRunning()) page = PAGE_FIRMWARE else hopMaintenanceResult = message
                 refreshHopMaintenance(hop)
-                if (page == "system") render()
+                if (page == "system" || page == PAGE_FIRMWARE) render()
             }
         }, "car-hop-maintenance-run").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * Keeps the card and the firmware page current while an operation runs.
+     *
+     * Driven by the operation and not by who asked for it, which is the whole point: the script is the
+     * head unit's and goes on writing whether or not this process is alive, so the page has to be able
+     * to pick up one it never started — after the app was killed, or after the driver went home.
+     *
+     * The tick keeps re-arming only while there is something to watch. It stops on its own when the
+     * operation ends, and starts again when the page finds another one.
+     */
+    private var maintenanceWatched: CarBluetoothHop? = null
+
+    private val maintenanceTick = object : Runnable {
+        override fun run() {
+            val hop = maintenanceWatched ?: return
+            if (isFinishing) return
+            hopMaintenanceAt = 0L
+            refreshHopMaintenance(hop)
+            if (firmwareRunning()) handler.postDelayed(this, HOP_MAINTENANCE_WATCH_MILLIS)
+        }
+    }
+
+    /**
+     * Arms the tick, or re-arms it.
+     *
+     * Not a one-shot: the tick stops itself the moment there is nothing running, and the next launch —
+     * or the next operation found in a state file — has to be able to start it again. Removing first
+     * keeps two chains from running at once if this is reached while one is already armed.
+     */
+    private fun startWatchingMaintenance(hop: CarBluetoothHop) {
+        maintenanceWatched = hop
+        handler.removeCallbacks(maintenanceTick)
+        handler.postDelayed(maintenanceTick, HOP_MAINTENANCE_WATCH_MILLIS)
     }
 
     /** These change the head unit, so what the hop says it does is shown before it does it. */
@@ -1102,18 +1174,17 @@ class DiPlayActivity : ComponentActivity() {
             maintenance.detail?.let {
                 card.addView(label(it, 15, MUTED).apply { setPadding(0, dp(6), 0, 0) })
             }
-            if (maintenance.steps.isNotEmpty()) {
-                maintenance.steps.forEachIndexed { index, step ->
-                    val current = index == maintenance.currentStep
-                    val color = when {
-                        current && maintenance.failed -> WARNING
-                        current -> ACCENT
-                        else -> MUTED
-                    }
-                    card.addView(label(step, 15, color, current).apply { setPadding(dp(4), dp(8), 0, 0) })
-                }
+            maintenance.steps.forEachIndexed { index, step ->
+                card.addView(stepLine(step, index, maintenance))
             }
-            val busy = hopMaintenanceRunning != null
+            if (maintenance.status == CarBluetoothMaintenanceStatus.INTERRUPTED) {
+                card.addView(
+                    label(getString(R.string.firmware_interrupted), 15, WARNING)
+                        .apply { setPadding(0, dp(12), 0, 0) },
+                )
+            }
+            val busy = hopMaintenanceRunning != null ||
+                maintenance.status == CarBluetoothMaintenanceStatus.RUNNING
             // Nothing is offered while a session is live, which is the reference's own rule and the
             // one the hop cannot check for itself: the session flag lives in this module.
             val sessionLive = CarPlayBackgroundSession.hasSession()
@@ -1138,6 +1209,125 @@ class DiPlayActivity : ComponentActivity() {
                 card.addView(label(it, 15, MUTED).apply { setPadding(0, dp(12), 0, 0) })
             }
         }
+    }
+
+    /**
+     * One line of an operation's steps, drawn in whichever of three states it is in.
+     *
+     * Three, not two, and the third is what was missing. A step the operation has finished is not the
+     * one it is on, and an operation that finished is not one still sitting on its last step — drawn
+     * with two, an install that had completed looked exactly like one that had not started: one line
+     * lit, every line before it grey, and no way to tell the two apart.
+     */
+    private fun stepLine(step: String, index: Int, maintenance: CarBluetoothMaintenance): View {
+        val status = maintenance.status
+        val onIt = index == maintenance.currentStep &&
+            status != CarBluetoothMaintenanceStatus.NONE &&
+            status != CarBluetoothMaintenanceStatus.DONE
+        val done = index < maintenance.currentStep ||
+            (status == CarBluetoothMaintenanceStatus.DONE && index <= maintenance.currentStep)
+        val color = when {
+            onIt && status != CarBluetoothMaintenanceStatus.RUNNING -> WARNING
+            onIt || done -> ACCENT
+            else -> MUTED
+        }
+        return label(if (done) "✓  $step" else step, 15, color, onIt || done)
+            .apply { setPadding(dp(4), dp(8), 0, 0) }
+    }
+
+    /**
+     * The page a write to `/system` is followed on, and the only page with no way off it from the
+     * header.
+     *
+     * It exists because the alternative is what it replaces: the card sitting on the settings page
+     * while the driver goes looking at other pages, and an operation that finishes somewhere they are
+     * not. Here there is one thing to read, it is the thing that is happening, and the control that
+     * leaves appears once there is nothing left to wait for.
+     */
+    private fun firmwareProgress(content: LinearLayout) {
+        val columns = CardColumns(content)
+        columns.line(label(getString(R.string.firmware_in_progress), 34, TEXT, true))
+        columns.line(
+            label(getString(R.string.firmware_in_progress_hint), 17, MUTED)
+                .apply { setPadding(0, dp(8), 0, dp(24)) },
+        )
+        val maintenance = hopMaintenance
+        if (maintenance == null) {
+            columns.line(label(getString(R.string.maintenance_working), 18, MUTED))
+            // Asked for from here and not only from the card. A restored intent can name this page
+            // with nothing behind it, and a page that only ever drew would sit on "Working…" for ever
+            // with no way off it.
+            vendorHop(this)?.let { refreshHopMaintenance(it) }
+            return
+        }
+        columns.card(maintenance.title, R.drawable.ic_dp_diagnostics, fullWidth = true) { card ->
+            card.addView(label(maintenance.state, 18, TEXT))
+            maintenance.steps.forEachIndexed { index, step ->
+                card.addView(stepLine(step, index, maintenance))
+            }
+            firmwareOutcome(card, maintenance)
+        }
+    }
+
+    /**
+     * What there is to say once the steps are drawn, and the control that leaves.
+     *
+     * [CarBluetoothMaintenanceStatus.INTERRUPTED] is the one that carries a second line, because it is
+     * the only ending the driver has to do something about: nothing is running, nothing reported an
+     * outcome, and the head unit is in a state this app cannot watch to the end. That is also why the
+     * control is offered on every ending but [CarBluetoothMaintenanceStatus.RUNNING]: the page is a
+     * place to wait, not a place to be.
+     */
+    private fun firmwareOutcome(card: LinearLayout, maintenance: CarBluetoothMaintenance) {
+        when (maintenance.status) {
+            CarBluetoothMaintenanceStatus.RUNNING -> card.addView(
+                label(getString(R.string.maintenance_working), 18, ACCENT)
+                    .apply { setPadding(0, dp(12), 0, 0) },
+            )
+            CarBluetoothMaintenanceStatus.DONE -> card.addView(
+                label(getString(R.string.firmware_finished), 18, ACCENT)
+                    .apply { setPadding(0, dp(12), 0, 0) },
+            )
+            CarBluetoothMaintenanceStatus.FAILED -> card.addView(
+                label(maintenance.detail ?: getString(R.string.firmware_not_done), 18, WARNING)
+                    .apply { setPadding(0, dp(12), 0, 0) },
+            )
+            CarBluetoothMaintenanceStatus.INTERRUPTED -> {
+                card.addView(
+                    label(getString(R.string.firmware_interrupted), 18, WARNING)
+                        .apply { setPadding(0, dp(12), 0, 0) },
+                )
+                card.addView(
+                    label(getString(R.string.firmware_interrupted_hint), 15, MUTED)
+                        .apply { setPadding(0, dp(8), 0, 0) },
+                )
+            }
+            CarBluetoothMaintenanceStatus.NONE -> Unit
+        }
+        if (maintenance.status == CarBluetoothMaintenanceStatus.RUNNING) return
+        card.addView(
+            button(getString(R.string.back), true) {
+                page = "system"
+                hopMaintenanceAt = 0L
+                render()
+            },
+            matchButton(16, 60),
+        )
+    }
+
+    /**
+     * Opens onto a write already under way, when there is one.
+     *
+     * Asked of the hop's own file read rather than of the card, which costs a round trip that the
+     * first frame cannot wait for. A hop with nothing long-running answers false, and every other head
+     * unit answers false because there is no hop at all.
+     */
+    private fun openOntoRunningFirmwareOperation() {
+        val hop = vendorHop(this) ?: return
+        if (!runCatching { hop.operationRunning(this) }.getOrDefault(false)) return
+        page = PAGE_FIRMWARE
+        startWatchingMaintenance(hop)
+        render()
     }
 
     /** The hop this build ships, when it is for this head unit. */
@@ -2329,6 +2519,15 @@ class DiPlayActivity : ComponentActivity() {
          * narrower than this keeps the single column, where a halved card could not hold its own labels.
          */
         private const val WIDE_LAYOUT_MIN_WIDTH_DP = 850
+
+        /**
+         * The page a write to the head unit's `/system` is followed on.
+         *
+         * Not one of the buckets: it is reached by asking for a firmware action, or by opening the app
+         * onto one already running, and it is left by its own control. Nothing routes to it from the
+         * header, which is why it draws none.
+         */
+        private const val PAGE_FIRMWARE = "firmware"
 
         private const val HOP_DEVICES_TTL_MILLIS = 10_000L
 

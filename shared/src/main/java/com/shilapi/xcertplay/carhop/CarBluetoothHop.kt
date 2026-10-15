@@ -30,8 +30,16 @@ data class CarBluetoothMaintenance(
     val steps: List<String> = emptyList(),
     /** Index into [steps] being attempted, or -1 when nothing is running. */
     val currentStep: Int = NO_STEP,
-    /** True when [currentStep] is the step that failed. */
-    val failed: Boolean = false,
+    /**
+     * How that operation stands.
+     *
+     * Separate from [currentStep] because the step alone cannot say it: an operation that finished
+     * successfully and one that is still on its last step are the same index, and an operation whose
+     * script died without unwinding is the same index again. The page draws all three differently —
+     * the first marks every step done, the second marks the one it is on, the third says nothing is
+     * happening any more — and only the hop can tell them apart.
+     */
+    val status: CarBluetoothMaintenanceStatus = CarBluetoothMaintenanceStatus.NONE,
 ) {
     /** One thing the hop can do. [id] is the hop's own and comes back to it unchanged. */
     data class Action(
@@ -46,6 +54,32 @@ data class CarBluetoothMaintenance(
     companion object {
         const val NO_STEP = -1
     }
+}
+
+/**
+ * How the operation [CarBluetoothMaintenance.steps] describes stands.
+ *
+ * [INTERRUPTED] is the one that has to exist and could not be inferred: the hop's script writes its
+ * own progress to a file, and a file left mid-operation by a script that was killed — or by a head
+ * unit that restarted underneath it — says exactly what a running one says. Telling those apart is
+ * about the reading rather than the text, so it is the hop's answer to give and not the page's to
+ * guess at.
+ */
+enum class CarBluetoothMaintenanceStatus {
+    /** Nothing has been attempted: [CarBluetoothMaintenance.steps] describes no operation. */
+    NONE,
+
+    /** Running right now. The page waits for it and offers nothing else. */
+    RUNNING,
+
+    /** Finished, with nothing unwound. */
+    DONE,
+
+    /** Stopped and unwound, or is unwinding: [CarBluetoothMaintenance.currentStep] is where. */
+    FAILED,
+
+    /** Started and never reported an outcome. Nothing is running; what it left behind is the state line's. */
+    INTERRUPTED,
 }
 
 /**
@@ -128,6 +162,18 @@ interface CarBluetoothHop {
      * would be built on a socket that is about to move.
      */
     fun busy(context: Context): Boolean
+
+    /**
+     * Whether one of [CarBluetoothMaintenance.actions] is running right now.
+     *
+     * Cheap and safe to ask on the main thread, and answered from state the hop already holds rather
+     * than from a round trip — the same progress file the card is built from. It exists because the
+     * page has to decide whether to lock itself the instant a launch returns, and asking for the whole
+     * card there would be a round trip standing in front of the screen it is trying to draw.
+     *
+     * A hop with nothing that runs for longer than a moment leaves this false.
+     */
+    fun operationRunning(context: Context): Boolean = false
 
     /** Hands the head unit's radio back once the session is over. */
     fun idleAfterSession(context: Context)

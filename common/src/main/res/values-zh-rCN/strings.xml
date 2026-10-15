@@ -247,6 +247,12 @@
     <string name="maintenance_continue">继续</string>
     <string name="maintenance_session_active">CarPlay 正在运行。结束会话后再改动车机固件。</string>
     <string name="maintenance_working">正在执行…</string>
+    <string name="firmware_in_progress">正在改动车机固件</string>
+    <string name="firmware_in_progress_hint">写入 /system 期间请不要离开这一页。脚本跑在车机上，关掉应用也不会让它停下来。</string>
+    <string name="firmware_finished">已完成</string>
+    <string name="firmware_not_done">没有做成</string>
+    <string name="firmware_interrupted">这次写入没有回报结果 —— 脚本可能被打断了。</string>
+    <string name="firmware_interrupted_hint">要确定它真的停了，重启车机是唯一的办法。车机现在是什么状态，返回后看那张卡片。</string>
     <string name="make_diplay_feel_right_for_your_car">按需调整 DiPlay 设置。</string>
     <string name="manual_hotspot">手动热点</string>
     <string name="manual_mode_match_the_cluster_theme_here_the_map_cannot_fo">手动模式：在此匹配仪表盘主题。没有使用访问权限时，地图无法跟随卡片显示状态。</string>

@@ -247,6 +247,12 @@
     <string name="maintenance_continue">Continue</string>
     <string name="maintenance_session_active">CarPlay is running. End the session before changing the head unit\'s firmware.</string>
     <string name="maintenance_working">Working…</string>
+    <string name="firmware_in_progress">Changing the head unit\'s firmware</string>
+    <string name="firmware_in_progress_hint">Stay on this page while /system is being written. The script runs on the head unit, so closing the app does not stop it.</string>
+    <string name="firmware_finished">Done</string>
+    <string name="firmware_not_done">It did not finish</string>
+    <string name="firmware_interrupted">This write never reported an outcome — the script was probably interrupted.</string>
+    <string name="firmware_interrupted_hint">Restarting the head unit is the only way to be sure it has stopped. What state it is in is on the card behind this page.</string>
     <string name="make_diplay_feel_right_for_your_car">Make DiPlay feel right for your car.</string>
     <string name="manual_hotspot">Manual hotspot</string>
     <string name="manual_mode_match_the_cluster_theme_here_the_map_cannot_fo">Manual mode: match the cluster theme here. The map cannot follow card visibility without Usage Access.</string>
