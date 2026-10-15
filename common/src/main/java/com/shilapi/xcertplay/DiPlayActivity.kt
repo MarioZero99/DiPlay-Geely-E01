@@ -1483,16 +1483,14 @@ class DiPlayActivity : ComponentActivity() {
         // offered set keeps the mode drawn and the mode in use the same one, and leaves a way back to the mode
         // that does not need those calls.
         val saved = AirPlayPersistence.loadWirelessHotspotMode(this)
-        val mode = if (pendingCarHotspotSetup) WirelessHotspotMode.MANUAL else saved.takeIf { it in modes } ?: modes.first()
+        val mode = displayedHotspotMode(pendingCarHotspotSetup, saved, modes)
         legChoices(card, modes.map { WirelessLegOption(wirelessModeTitle(it), wirelessModeDescription(it), it == mode) }) { index ->
             val candidate = modes[index]
-            if (candidate == WirelessHotspotMode.MANUAL) {
-                pendingCarHotspotSetup = true
-                render()
-            } else {
-                pendingCarHotspotSetup = false
-                applyWirelessLink(candidate)
-            }
+            // The choice is written down here, at the moment it is made, for both modes. It used to be
+            // written for every mode but the car hotspot, which left the page drawing one mode while
+            // storage — and so the connection, and the readiness lines — still held another.
+            pendingCarHotspotSetup = candidate == WirelessHotspotMode.MANUAL
+            applyWirelessLink(candidate)
         }
         blockerLines(card, bluetoothLeg = false)
         if (mode == WirelessHotspotMode.MANUAL) {
@@ -1764,20 +1762,6 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun applyWirelessLink(mode: WirelessHotspotMode) {
         AirPlayPersistence.saveWirelessHotspotMode(this, mode)
-        if (mode == WirelessHotspotMode.EXISTING_WIFI) {
-            // The car cannot hold its own hotspot up and be on the driver's network at the same time,
-            // and the switch that opens one at startup is not even drawn in this mode — so it would
-            // be a setting the driver can no longer see, still armed for the day they switch back.
-            // Written back here rather than at session start so it happens once, where the driver
-            // made the choice. Logged because nothing on this page shows it happening.
-            if (AirPlayPersistence.loadAutoCarHotspot(this)) {
-                AirPlayPersistence.saveAutoCarHotspot(this, false)
-                DiagLog.i(
-                    TAG_CAR_HOTSPOT,
-                    "same Wi-Fi network chosen: switching the car hotspot on at start is now off",
-                )
-            }
-        }
         render()
         toast(getString(R.string.saved_for_your_next_connection))
     }
@@ -1817,7 +1801,12 @@ class DiPlayActivity : ComponentActivity() {
             }
             wirelessBlocked = false
         }
-        if (wireless && pendingCarHotspotSetup) { toast(getString(R.string.save_your_hotspot_details_in_connection_setup_first)); page = "wireless"; render(); return }
+        if (wireless && hotspotSetupBlocksConnect(AirPlayPersistence.loadWirelessHotspotMode(this), pendingCarHotspotSetup)) {
+            toast(getString(R.string.save_your_hotspot_details_in_connection_setup_first))
+            page = "wireless"
+            render()
+            return
+        }
         if (setupError != null) { toast(setupError!!); return }
         if (wireless && AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL &&
             hotspotError(hotspotSsid(), hotspotPassword()) != null) {
@@ -1971,8 +1960,9 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     /**
-     * Leaves setup mode without saving anything. The unsaved details are still unsaved, and the readiness line
-     * below still says so, so nothing is hidden by leaving it -- only the demand to save before connecting goes.
+     * Leaves setup mode without saving any details. The car hotspot stays the chosen mode — that is what the
+     * driver picked — and its unsaved name and password are still unsaved, with the readiness line below
+     * saying so; only the demand to save before connecting goes.
      */
     private fun cancelCarHotspotSetup() {
         pendingCarHotspotSetup = false
