@@ -30,6 +30,24 @@ class CarHotspotAutoStartTest {
         )
     }
 
+    /**
+     * The mode that joins a network somebody else owns is the one mode that needs the car's hotspot
+     * *off*, and it is the one mode whose access point DiPlay does not bring up.
+     *
+     * Pinned rather than left to the `== MANUAL` comparison that happens to produce it: the answer
+     * here is not "this mode has its own access point", it is "waking one would take the radio this
+     * mode is about to use".
+     */
+    @Test
+    fun doesNotWakeTheCarHotspotForTheModeThatJoinsSomeoneElsesNetwork() {
+        assertFalse(
+            shouldWakeCarHotspotOnStartup(
+                autoEnabled = true,
+                mode = WirelessHotspotMode.EXISTING_WIFI,
+            ),
+        )
+    }
+
     @Test
     fun leavesTheModesThatBringUpTheirOwnAccessPointAlone() {
         // Wi-Fi Direct and the local-only hotspot are started when a session starts, so waking one at

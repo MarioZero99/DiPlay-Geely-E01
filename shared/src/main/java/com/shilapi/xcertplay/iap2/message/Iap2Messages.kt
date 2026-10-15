@@ -23,17 +23,26 @@ object Iap2Messages {
     fun reader(frame: Iap2Frame): Iap2BodyReader = Iap2BodyReader.of(frame)
 }
 
-/** Parameters carried by the optional `wireless` group of 0x4301. */
+/**
+ * Parameters carried by the optional `wireless` group of 0x4301.
+ *
+ * [passphrase] is null when the accessory has no password to give — it joined a network somebody
+ * else owns and could not read theirs. The parameter is optional in the catalog, so the field is
+ * then left out entirely. An empty string is not this case: it is a network with no password, which
+ * the security type says instead.
+ */
 data class Iap2WirelessSessionParameters(
     val ssid: String,
-    val passphrase: String,
+    val passphrase: String?,
     val channel: Int,
     val ipAddresses: List<String>,
     val securityType: Int,
 ) {
     init {
         require(ssid.isNotBlank()) { "wireless SSID must not be blank" }
-        require(passphrase.isNotBlank()) { "wireless passphrase must not be blank" }
+        require(passphrase == null || '\u0000' !in passphrase) {
+            "wireless passphrase must not contain U+0000"
+        }
         require(channel in 0..0xff) { "wireless channel must be in 0..255" }
         require(ipAddresses.isNotEmpty()) { "wireless IP address list must not be empty" }
         require(securityType in 0..0xff) { "wireless security type must be in 0..255" }
@@ -78,7 +87,7 @@ object Iap2CarPlayMessages {
             wireless?.let {
                 group(1) {
                     string(0, it.ssid)
-                    string(1, it.passphrase)
+                    optionalString(1, it.passphrase)
                     u8(2, it.channel)
                     it.ipAddresses.forEach { address -> string(3, address) }
                     u8(4, it.securityType)
@@ -152,16 +161,23 @@ data class Iap2CarPlayAvailability(
 
 /** Typed codecs for Wi-Fi sharing and Wireless CarPlay notifications. */
 object Iap2WirelessMessages {
+    /**
+     * 0x5703, the network the phone is asked to join.
+     *
+     * A null [passphrase] means the accessory has none to give — it is on a network somebody else
+     * owns — and the parameter is left out rather than sent empty. Non-null values are written
+     * exactly as before.
+     */
     fun accessoryWiFiConfiguration(
         ssid: String,
-        passphrase: String,
+        passphrase: String?,
         channel: Int,
         securityType: Int,
         bssid: ByteArray? = null,
     ): Iap2Frame = Iap2Messages.build(Iap2Endpoints.ACCESSORY_WIFI_CONFIGURATION) {
         optionalBytes(0, bssid)
         string(1, ssid)
-        string(2, passphrase)
+        optionalString(2, passphrase)
         u8(3, securityType)
         u8(4, channel)
     }

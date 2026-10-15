@@ -29,6 +29,8 @@ import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import com.shilapi.xcertplay.network.AirPlayPorts
 import com.shilapi.xcertplay.network.CarPlayBonjour
 import com.shilapi.xcertplay.network.CarHotspotController
+import com.shilapi.xcertplay.network.CarHotspotStatus
+import com.shilapi.xcertplay.network.ExistingWifiManager
 import com.shilapi.xcertplay.network.HotspotStartResult
 import com.shilapi.xcertplay.network.diagnosticSummary
 import com.shilapi.xcertplay.network.CarPlayVpnService
@@ -1906,13 +1908,7 @@ class CarPlayController(
             type.equals("disable-bluetooth", ignoreCase = true)
 
     private fun startWirelessHotspot(generation: Int): WirelessHotspotInfo {
-        val hotspotMode = when {
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.O &&
-                config.wirelessHotspotMode != WirelessHotspotMode.MANUAL -> WirelessHotspotMode.MANUAL
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
-                config.wirelessHotspotMode == WirelessHotspotMode.WIFI_P2P -> WirelessHotspotMode.LOCAL_ONLY_HOTSPOT
-            else -> config.wirelessHotspotMode
-        }
+        val hotspotMode = effectiveHotspotMode(config.wirelessHotspotMode, Build.VERSION.SDK_INT)
         if (hotspotMode == WirelessHotspotMode.MANUAL) {
             val started = CarHotspotController(appContext)
                 .ensureEnabled(CAR_HOTSPOT_ENABLE_TIMEOUT_MILLIS)
@@ -1922,6 +1918,23 @@ class CarPlayController(
                         "Turn it on in the car settings and connect again.",
                 )
             }
+        }
+        if (hotspotMode == WirelessHotspotMode.EXISTING_WIFI) {
+            // One radio cannot be a station and an access point at once, so the car's own hotspot has
+            // to go before the car can join the driver's network. This is the only place DiPlay
+            // switches a hotspot off, and it never switches one on.
+            val wasOn = CarHotspotStatus.isEnabled(appContext) == true
+            val refused = CarHotspotController(appContext).releaseForStationMode()
+            if (refused != null) {
+                throw IOException(
+                    "The car hotspot is on and DiPlay could not switch it off: $refused. " +
+                        "Turn it off in the car settings and connect again.",
+                )
+            }
+            debugLog(
+                "wireless car hotspot ${if (wasOn) "switched off" else "already off"}; " +
+                    "the car will join the driver's Wi-Fi network instead",
+            )
         }
         val manager: WirelessHotspotManager = when (hotspotMode) {
             WirelessHotspotMode.WIFI_P2P -> {
@@ -1942,6 +1955,21 @@ class CarPlayController(
                 security = config.manualHotspotSecurity,
                 onDiagnostic = ::debugLog,
             )
+            WirelessHotspotMode.EXISTING_WIFI -> {
+                // Not reachable through the settings page, which does not offer this mode below
+                // Android 5; reachable by a stored setting carried over from a newer platform.
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+                    throw IOException("Joining an existing Wi-Fi network requires Android 5 or newer")
+                }
+                ExistingWifiManager(
+                    context = appContext,
+                    onDiagnostic = ::debugLog,
+                    // The network the whole session is built on went away or moved: the addresses in
+                    // the messages already sent are stale, so the bring-up starts over rather than
+                    // sitting on a link the phone can no longer reach.
+                    onNetworkChanged = { if (!closed && phase == Phase.WIRELESS) restartWireless() },
+                )
+            }
         }
         hotspot = manager
         val timeoutMillis = if (hotspotMode == WirelessHotspotMode.WIFI_P2P) {

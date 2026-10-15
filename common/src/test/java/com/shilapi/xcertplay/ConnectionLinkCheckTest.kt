@@ -30,7 +30,7 @@ class DeviceConnectionSupportTest {
     @Test fun android5Through9CanUseUsbAndCarHotspotWhenTheCallsAnswer() {
         val report = DeviceConnectionSupport.assess(ready(22))
         assertEquals(listOf(UsableConnection.USB, UsableConnection.CAR_HOTSPOT), report.usable)
-        assertEquals(listOf(WirelessHotspotMode.MANUAL), report.wirelessModes)
+        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.EXISTING_WIFI), report.wirelessModes)
         assertTrue(report.wirelessCapable)
         assertTrue(report.carHotspotNotes.isEmpty())
     }
@@ -41,7 +41,7 @@ class DeviceConnectionSupportTest {
             listOf(UsableConnection.USB, UsableConnection.CAR_HOTSPOT, UsableConnection.WIFI_DIRECT),
             report.usable,
         )
-        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.WIFI_P2P), report.wirelessModes)
+        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.EXISTING_WIFI, WirelessHotspotMode.WIFI_P2P), report.wirelessModes)
         assertTrue(report.wirelessCapable)
     }
 
@@ -52,26 +52,57 @@ class DeviceConnectionSupportTest {
 
     @Test fun theManualHotspotIsOfferedOnAHeadUnitWhoseBluetoothCannotBeCalled() {
         val missing = DeviceConnectionSupport.assess(ready(22).copy(bluetooth = BluetoothRead.MISSING))
-        assertEquals(listOf(WirelessHotspotMode.MANUAL), missing.wirelessModes)
+        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.EXISTING_WIFI), missing.wirelessModes)
         assertFalse("the route itself is not capable", missing.wirelessCapable)
 
         val failed = DeviceConnectionSupport.assess(ready(22).copy(bluetooth = BluetoothRead.FAILED))
-        assertEquals(listOf(WirelessHotspotMode.MANUAL), failed.wirelessModes)
+        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.EXISTING_WIFI), failed.wirelessModes)
         assertFalse(failed.wirelessCapable)
     }
 
     @Test fun theManualHotspotIsOfferedWithoutAHotspotSwitch() {
         val report = DeviceConnectionSupport.assess(ready(22).copy(hotspotApi = false))
         assertEquals(listOf(CarHotspotBlocker.NO_HOTSPOT_API), report.carHotspotNotes)
-        assertEquals(listOf(WirelessHotspotMode.MANUAL), report.wirelessModes)
+        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.EXISTING_WIFI), report.wirelessModes)
         assertFalse("we cannot drive the switch, so the route is not capable", report.wirelessCapable)
     }
 
     @Test fun theManualHotspotIsOfferedWithoutABluetoothDataSocket() {
         val report = DeviceConnectionSupport.assess(ready(22).copy(rfcommSocket = false))
         assertEquals(listOf(CarHotspotBlocker.NO_RFCOMM), report.carHotspotNotes)
-        assertEquals(listOf(WirelessHotspotMode.MANUAL), report.wirelessModes)
+        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.EXISTING_WIFI), report.wirelessModes)
         assertFalse(report.wirelessCapable)
+    }
+
+    /**
+     * The mode that asks nothing of ours is offered wherever there is Wi-Fi at all.
+     *
+     * Joining a network that already exists makes no access point and drives no vendor call, so a head
+     * unit that refuses the hotspot API, has no Bluetooth service to call and no RFCOMM socket still
+     * gets it. It is deliberately not gated on [ConnectionSupportReport.wirelessCapable], which is
+     * about the calls *we* make: the driver makes this one, in the car's own Wi-Fi settings.
+     */
+    @Test fun joiningAnExistingNetworkIsOfferedWhereNothingOfOursCanBeDriven() {
+        val bare = ready(22).copy(
+            hotspotApi = false,
+            rfcommSocket = false,
+            bluetooth = BluetoothRead.MISSING,
+            adapterRfcomm = false,
+            vendorHopRfcomm = false,
+        )
+        val report = DeviceConnectionSupport.assess(bare)
+        assertTrue(WirelessHotspotMode.EXISTING_WIFI in report.wirelessModes)
+        assertFalse("we cannot drive the route, but the driver can still set it up", report.wirelessCapable)
+    }
+
+    /**
+     * And it is not offered on a platform that cannot describe one Wi-Fi network at a time, which is
+     * this project's Android 4.4 floor. Nothing there could run it, so offering it would be a step
+     * the driver could complete and the car could not.
+     */
+    @Test fun joiningAnExistingNetworkIsNotOfferedBelowAndroid5() {
+        assertFalse(WirelessHotspotMode.EXISTING_WIFI in DeviceConnectionSupport.assess(ready(19)).wirelessModes)
+        assertTrue(WirelessHotspotMode.EXISTING_WIFI in DeviceConnectionSupport.assess(ready(21)).wirelessModes)
     }
 
     @Test fun withNoWifiServiceThereIsNothingToSetUp() {
@@ -99,7 +130,7 @@ class DeviceConnectionSupportTest {
         val report = DeviceConnectionSupport.assess(ready(22).copy(bluetooth = BluetoothRead.OFF))
         assertEquals(listOf(UsableConnection.USB), report.usable)
         assertEquals(listOf(CarHotspotBlocker.BLUETOOTH_OFF), report.carHotspotNotes)
-        assertEquals(listOf(WirelessHotspotMode.MANUAL), report.wirelessModes)
+        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.EXISTING_WIFI), report.wirelessModes)
         assertTrue(report.wirelessCapable)
     }
 

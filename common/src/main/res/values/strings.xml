@@ -9,6 +9,7 @@
     <string name="hotspot_hint_manual">Built-in car hotspot · Keep the car hotspot, Bluetooth and your iPhone’s Wi-Fi on.</string>
     <string name="hotspot_hint_local">Open Connection setup to save your built-in car hotspot details.</string>
     <string name="hotspot_hint_p2p">Wi-Fi Direct · Keep the car’s Wi-Fi switch, Bluetooth and your iPhone’s Wi-Fi on.</string>
+    <string name="hotspot_hint_existing">Same Wi-Fi network · Connect the car and the iPhone to one Wi-Fi network in the car’s settings, and keep Bluetooth on.</string>
     <string name="cluster_size_standard">Standard · sharpest</string>
     <string name="cluster_size_larger">Larger · default</string>
     <string name="cluster_size_largest">Largest</string>
@@ -19,6 +20,11 @@
     <string name="marker_centre_default">Centre · default</string>
     <string name="hotspot_mode_manual_desc">Use the car’s own hotspot. Select 5 GHz in car settings if available.</string>
     <string name="hotspot_mode_p2p_desc">Alternative setup. Requires the car’s Wi-Fi switch on; a 2.4 GHz connection may stutter.</string>
+    <string name="same_wifi_network">Same Wi-Fi network</string>
+    <string name="hotspot_mode_existing_wifi_desc">Join a Wi-Fi network that already exists — a phone hotspot or a router. The iPhone joins the same one. The car’s own hotspot is switched off and not used.</string>
+    <string name="existing_wifi_hint">Connect the car to the same Wi-Fi as your iPhone, in the car’s own Wi-Fi settings: an Android phone’s hotspot, a router, or the iPhone’s personal hotspot. Nothing else to set up here — DiPlay reads the network’s name and details from the car.</string>
+    <string name="existing_wifi_joined">Car is on · %1$s</string>
+    <string name="existing_wifi_not_joined">Car is not on any Wi-Fi yet · Connect it in the car’s Wi-Fi settings.</string>
     <string name="hotspot_details_off">Hotspot is off · Turn it on in car settings.</string>
     <string name="hotspot_details_saved">Details saved · Check that the car hotspot is on before connecting.</string>
     <string name="permission_enabled_ready">Permission enabled · ready to use</string>

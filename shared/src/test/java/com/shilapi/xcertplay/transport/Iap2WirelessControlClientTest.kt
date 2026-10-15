@@ -8,6 +8,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,6 +33,40 @@ class Iap2WirelessControlClientTest {
                 "61626263630000080005312e3000",
             frame.encodedFrame().hex(),
         )
+    }
+
+    /**
+     * The session joined a network it does not own and could not read the password for.
+     *
+     * The parameter is optional in the catalog, so it is left out — not sent empty, which would tell
+     * the phone that a secured network has no password. The two vector tests above are the other half
+     * of this: a password that *is* known still goes out byte for byte as it always did.
+     */
+    @Test
+    fun accessoryWiFiConfigurationWithoutAPasswordLeavesTheParameterOut() {
+        val body = Iap2ParameterList.parse(
+            Iap2WirelessControlClient.accessoryWiFiConfiguration(endpoint(passphrase = null)).payload,
+        ).asList()
+
+        assertEquals(listOf(1, 3, 4), body.map { it.id })
+        assertEquals("LIVI\u0000", body.single { it.id == 1 }.payload.decodeToString())
+    }
+
+    @Test
+    fun carPlayStartSessionWithoutAPasswordLeavesTheParameterOut() {
+        val wireless = Iap2ParameterList.parse(
+            Iap2WirelessControlClient.carPlayStartSession(endpoint(passphrase = null)).payload,
+        ).asList().single { it.id == 1 }
+        val group = Iap2ParameterList.parse(wireless.payload).asList()
+
+        assertEquals(listOf(0, 2, 3, 4), group.map { it.id })
+        assertEquals("LIVI\u0000", group.single { it.id == 0 }.payload.decodeToString())
+    }
+
+    /** Omitting the password is a decision, not a licence to announce a secured network without one. */
+    @Test
+    fun aSecuredNetworkWithAnEmptyPasswordIsStillRefused() {
+        assertThrows(IllegalArgumentException::class.java) { endpoint(passphrase = "") }
     }
 
     @Test
@@ -105,9 +140,10 @@ class Iap2WirelessControlClientTest {
         assertTrue(0x4300 in u16Values(parameters.single { it.id == 7 }.payload))
     }
 
-    private fun endpoint(): Iap2WirelessCarPlayEndpoint = Iap2WirelessCarPlayEndpoint(
+    private fun endpoint(passphrase: String? = "secret123"): Iap2WirelessCarPlayEndpoint =
+        Iap2WirelessCarPlayEndpoint(
         ssid = "LIVI",
-        passphrase = "secret123",
+        passphrase = passphrase,
         channel = 36,
         security = Iap2WirelessSecurity.WPA3_TRANSITION,
         ipAddresses = listOf("192.168.2.1"),

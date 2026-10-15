@@ -22,6 +22,13 @@ enum class WirelessHotspotMode {
     WIFI_P2P,
     LOCAL_ONLY_HOTSPOT,
     MANUAL,
+
+    /**
+     * Join a Wi-Fi network that already exists — the car is a station on it, and the iPhone joins the
+     * same one. Nothing is created here, so there is nothing to configure: see
+     * [com.shilapi.xcertplay.network.ExistingWifiManager].
+     */
+    EXISTING_WIFI,
 }
 
 enum class ManualHotspotBand {

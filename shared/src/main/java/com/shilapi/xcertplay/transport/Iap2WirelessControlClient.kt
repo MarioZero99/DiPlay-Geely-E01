@@ -389,10 +389,17 @@ enum class Iap2WirelessSecurity(val wireValue: Int) {
     WPA3_ONLY(4),
 }
 
-/** Wireless hotspot and AirPlay endpoint sent in 0x5703 and 0x4301. */
+/**
+ * Wireless network and AirPlay endpoint sent in 0x5703 and 0x4301.
+ *
+ * [passphrase] is null only where the session joined a network this accessory does not own and
+ * could not read its password; the parameter is then omitted from both messages. Every network the
+ * accessory creates itself still supplies one, and a secured network whose password is merely
+ * unknown is not allowed to pass as either open or password-less.
+ */
 class Iap2WirelessCarPlayEndpoint(
     val ssid: String,
-    val passphrase: String,
+    val passphrase: String?,
     val channel: Int,
     val security: Iap2WirelessSecurity,
     ipAddresses: List<String>,
@@ -406,9 +413,15 @@ class Iap2WirelessCarPlayEndpoint(
     init {
         require(ssid.isNotBlank()) { "ssid is required and must not be blank" }
         require('\u0000' !in ssid) { "ssid must not contain U+0000" }
-        require('\u0000' !in passphrase) { "passphrase must not contain U+0000" }
+        require(passphrase == null || '\u0000' !in passphrase) {
+            "passphrase must not contain U+0000"
+        }
         if (security != Iap2WirelessSecurity.NONE) {
-            require(passphrase.isNotEmpty()) { "passphrase is required for secured Wi-Fi" }
+            // Non-null and empty is the one combination that means nothing: it would announce a
+            // secured network with no password. Null is the honest "we have none to give".
+            require(passphrase == null || passphrase.isNotEmpty()) {
+                "passphrase is required for secured Wi-Fi"
+            }
         }
         require(channel in 0..0xff) { "channel must be in 0..255" }
         require(ipAddresses.isNotEmpty()) { "At least one wireless IP address is required" }

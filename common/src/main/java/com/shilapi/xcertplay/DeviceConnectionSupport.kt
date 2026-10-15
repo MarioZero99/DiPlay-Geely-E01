@@ -134,6 +134,14 @@ internal object DeviceConnectionSupport {
             // any head unit with Wi-Fi — the hotspot API and the Bluetooth radio decide what else is
             // available here, not whether the route can be configured at all.
             if (probe.wifiManager) add(WirelessHotspotMode.MANUAL)
+            // Joining a network that already exists needs no hotspot call of ours and no radio of
+            // ours, so it is offered wherever there is Wi-Fi at all and the platform is new enough
+            // to describe one network at a time (Android 5). It is also the one mode that asks
+            // nothing of the driver's Bluetooth, which on a head unit whose stack cannot carry iAP2
+            // is the difference between a route that can be set up and one that cannot.
+            if (probe.wifiManager && probe.sdkInt >= Build.VERSION_CODES.LOLLIPOP) {
+                add(WirelessHotspotMode.EXISTING_WIFI)
+            }
             if (callsAnswer && probe.sdkInt >= Build.VERSION_CODES.Q) add(WirelessHotspotMode.WIFI_P2P)
         }
         val radios = buildList {

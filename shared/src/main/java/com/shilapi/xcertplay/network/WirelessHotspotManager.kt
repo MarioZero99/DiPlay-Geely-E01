@@ -8,12 +8,21 @@ enum class WirelessHotspotBackend(val label: String) {
     WIFI_P2P("Wi-Fi P2P"),
     LOCAL_ONLY_HOTSPOT("LocalOnlyHotspot"),
     MANUAL_HOTSPOT("Manual hotspot"),
+    EXISTING_WIFI("Existing Wi-Fi / Same LAN"),
 }
 
-/** The live Wi-Fi credentials and interface details for one wireless CarPlay hotspot. */
+/** The live Wi-Fi credentials and interface details for one wireless CarPlay network. */
 class WirelessHotspotInfo(
     val ssid: String,
-    val passphrase: String,
+    /**
+     * The network's password, or null when this backend cannot supply one.
+     *
+     * The three hotspot backends create their own access point and so always know it. Joining a
+     * network somebody else owns is the case this exists for: the password is not readable, and a
+     * silent empty string would announce a secured network as an open one. Null says "not
+     * available", which the iAP2 side turns into an omitted field rather than a wrong value.
+     */
+    val passphrase: String?,
     val security: Iap2WirelessSecurity,
     val channel: Int,
     val frequencyMHz: Int?,

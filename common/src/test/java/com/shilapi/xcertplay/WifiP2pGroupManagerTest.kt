@@ -92,7 +92,7 @@ class WifiP2pGroupManagerTest {
             manager.onCarPlayConfirmed()
             assertEquals(record, memory.getString("confirmed", null))
             assertTrue(record.startsWith("frequency|2437|2437|5180|"))
-            assertFalse(record.contains(info.ssid) || record.contains(info.passphrase))
+            assertFalse(record.contains(info.ssid) || record.contains(info.passphrase!!))
         }
         radio.requests.clear()
         val logs = mutableListOf<String>()
@@ -194,7 +194,7 @@ class WifiP2pGroupManagerTest {
             assertEquals("2.4 GHz", info.bandLabel)
             assertEquals(info.ssid, context.getSharedPreferences("carplay_wifi_p2p", Context.MODE_PRIVATE).getString("owned_ssid", null))
             assertTrue(logs.all { DiagnosticRedactor.redact(it) != null })
-            assertFalse(logs.any { it.contains(info.ssid) || it.contains(info.passphrase) })
+            assertFalse(logs.any { it.contains(info.ssid) || it.contains(info.passphrase!!) })
         }
         assertEquals(1, radio.removals)
     }
@@ -214,7 +214,7 @@ class WifiP2pGroupManagerTest {
             assertTrue(logs.any { it.contains("ready mode=FIXED_2_GHZ") })
             assertTrue(logs.any { it.contains("requestedMHz=2437 actualMHz=2437 matched=true") })
             assertTrue(logs.all { DiagnosticRedactor.redact(it) != null })
-            assertFalse(logs.any { it.contains(info.ssid) || it.contains(info.passphrase) })
+            assertFalse(logs.any { it.contains(info.ssid) || it.contains(info.passphrase!!) })
         }
         assertEquals(1, radio.removals)
         assertTrue(context.getSystemService(WifiManager::class.java).isWifiEnabled)

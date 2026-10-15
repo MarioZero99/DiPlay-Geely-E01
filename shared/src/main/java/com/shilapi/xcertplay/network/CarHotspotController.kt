@@ -155,9 +155,35 @@ class CarHotspotController(context: Context) {
         deniedOrFailed(error)
     }
 
+    /**
+     * Switches the car's own hotspot off.
+     *
+     * This is the only place DiPlay touches the car's hotspot in the off direction, and it is
+     * deliberately one-way: joining an existing Wi-Fi network needs the radio, and a hotspot holding
+     * it is the one thing that can be in the way — but nothing here ever switches a hotspot on. A
+     * firmware that refuses is reported and the session fails with that reason, rather than the app
+     * reaching for another way to spend the driver's radio.
+     *
+     * @return why it could not be switched off, or null when it is off (or already was).
+     */
+    fun releaseForStationMode(): String? {
+        if (CarHotspotStatus.isEnabled(appContext) != true) return null
+        val wifi = wifi ?: return "there is no Wi-Fi service"
+        val setAp = setApEnabled ?: return "this firmware does not expose the hotspot API"
+        return try {
+            if (setAp.invoke(wifi, null, false) as Boolean) null else "the car refused the request"
+        } catch (error: ReflectiveOperationException) {
+            refusalReason(error)
+        } catch (error: SecurityException) {
+            refusalReason(error)
+        } catch (error: RuntimeException) {
+            refusalReason(error)
+        }
+    }
+
     /** A SecurityException, direct or inside the InvocationTargetException, is the firmware gating us. */
     private fun deniedOrFailed(error: Exception): Boolean? {
-        val denied = error is SecurityException || error.cause is SecurityException
+        val denied = deniedByFirmware(error)
         DiagLog.w(
             TAG,
             if (denied) "the firmware refused the hotspot permission"
@@ -166,6 +192,24 @@ class CarHotspotController(context: Context) {
         )
         return if (denied) null else false
     }
+
+    private fun refusalReason(error: Exception): String {
+        val denied = deniedByFirmware(error)
+        DiagLog.w(
+            TAG,
+            if (denied) "the firmware refused the hotspot permission"
+            else "the hotspot API rejected the call",
+            error,
+        )
+        return if (denied) {
+            "the firmware does not give DiPlay permission to switch it off"
+        } else {
+            "the hotspot API rejected the call"
+        }
+    }
+
+    private fun deniedByFirmware(error: Exception): Boolean =
+        error is SecurityException || error.cause is SecurityException
 
     private fun awaitEnabled(timeoutMillis: Long): Boolean {
         val deadline = SystemClock.elapsedRealtime() + timeoutMillis

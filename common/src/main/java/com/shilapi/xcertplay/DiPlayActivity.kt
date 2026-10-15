@@ -20,6 +20,7 @@ import android.hardware.usb.UsbManager
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -1296,10 +1297,38 @@ class DiPlayActivity : ComponentActivity() {
             // Off by default, and offered only here: switching the car's hotspot on spends the car's
             // Wi-Fi, so it is not something to start doing on a head unit whose driver never asked.
             toggle(card, getString(R.string.auto_open_car_hotspot), getString(R.string.auto_open_car_hotspot_help), AirPlayPersistence.loadAutoCarHotspot(this)) { AirPlayPersistence.saveAutoCarHotspot(this, it) }
+        } else if (mode == WirelessHotspotMode.EXISTING_WIFI) {
+            card.addView(label(getString(R.string.existing_wifi_hint), 16, MUTED))
+            card.addView(button(getString(R.string.open_car_wi_fi_settings), false) { openCarClientWifiSettings() }, matchButton(12, 60))
+            // The one thing the driver has to get right is being on the same network as the iPhone,
+            // and the car's own screen is where they set it. Saying which network the car is on now
+            // is what turns "I think I did that" into something they can check before connecting.
+            val joined = joinedWifiName()
+            card.addView(
+                label(
+                    if (joined == null) getString(R.string.existing_wifi_not_joined)
+                    else getString(R.string.existing_wifi_joined, joined),
+                    15,
+                    if (joined == null) WARNING else MUTED,
+                ).apply { setPadding(0, dp(12), 0, 0) },
+            )
         } else {
             card.addView(label(getString(R.string.turn_the_car_s_wi_fi_switch_on_allow_location_nearby_devic), 16, MUTED))
             card.addView(button(getString(R.string.open_car_wi_fi_settings), false) { openCarClientWifiSettings() }, matchButton(12, 60))
         }
+    }
+
+    /**
+     * The Wi-Fi network the car is on right now, or null when it is on none.
+     *
+     * Read only: this page never joins a network. It exists so the driver can see whether the step
+     * they just did in the car's settings took.
+     */
+    private fun joinedWifiName(): String? {
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
+        @Suppress("DEPRECATION")
+        val ssid = runCatching { wifi.connectionInfo?.ssid }.getOrNull()?.removeSurrounding("\"")
+        return ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
     }
 
     private fun hotspotSsid() = hotspot().first
@@ -1425,6 +1454,20 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun applyWirelessLink(mode: WirelessHotspotMode) {
         AirPlayPersistence.saveWirelessHotspotMode(this, mode)
+        if (mode == WirelessHotspotMode.EXISTING_WIFI) {
+            // The car cannot hold its own hotspot up and be on the driver's network at the same time,
+            // and the switch that opens one at startup is not even drawn in this mode — so it would
+            // be a setting the driver can no longer see, still armed for the day they switch back.
+            // Written back here rather than at session start so it happens once, where the driver
+            // made the choice. Logged because nothing on this page shows it happening.
+            if (AirPlayPersistence.loadAutoCarHotspot(this)) {
+                AirPlayPersistence.saveAutoCarHotspot(this, false)
+                DiagLog.i(
+                    TAG_CAR_HOTSPOT,
+                    "same Wi-Fi network chosen: switching the car hotspot on at start is now off",
+                )
+            }
+        }
         render()
         toast(getString(R.string.saved_for_your_next_connection))
     }
@@ -1571,12 +1614,14 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun wirelessModeTitle(mode: WirelessHotspotMode): String = when (mode) {
         WirelessHotspotMode.MANUAL -> getString(R.string.built_in_car_hotspot)
+        WirelessHotspotMode.EXISTING_WIFI -> getString(R.string.same_wifi_network)
         WirelessHotspotMode.WIFI_P2P -> getString(R.string.wifi_direct)
         WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> getString(R.string.localonlyhotspot)
     }
 
     private fun wirelessModeDescription(mode: WirelessHotspotMode): String = when (mode) {
         WirelessHotspotMode.MANUAL -> getString(R.string.hotspot_mode_manual_desc)
+        WirelessHotspotMode.EXISTING_WIFI -> getString(R.string.hotspot_mode_existing_wifi_desc)
         WirelessHotspotMode.WIFI_P2P -> getString(R.string.hotspot_mode_p2p_desc)
         WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> getString(R.string.hotspot_hint_local)
     }
@@ -1628,6 +1673,7 @@ class DiPlayActivity : ComponentActivity() {
     private fun wirelessEntryHint(): String = when (AirPlayPersistence.loadWirelessHotspotMode(this)) {
         WirelessHotspotMode.MANUAL -> getString(R.string.hotspot_hint_manual)
         WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> getString(R.string.hotspot_hint_local)
+        WirelessHotspotMode.EXISTING_WIFI -> getString(R.string.hotspot_hint_existing)
         else -> getString(R.string.hotspot_hint_p2p)
     }
 

@@ -9,6 +9,7 @@
     <string name="hotspot_hint_manual">车载热点 · 保持车载热点、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
     <string name="hotspot_hint_local">打开“连接设置”以保存车载热点信息。</string>
     <string name="hotspot_hint_p2p">Wi-Fi Direct · 保持车机 Wi-Fi 开关、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
+    <string name="hotspot_hint_existing">同一网络 · 在车机设置里把车机和 iPhone 连到同一张 Wi-Fi，并保持蓝牙开启。</string>
     <string name="cluster_size_standard">标准 · 最清晰</string>
     <string name="cluster_size_larger">更大 · 默认</string>
     <string name="cluster_size_largest">最大</string>
@@ -19,6 +20,11 @@
     <string name="marker_centre_default">居中 · 默认</string>
     <string name="hotspot_mode_manual_desc">使用车机自带热点。若车机支持，请在车机设置中选择 5 GHz。</string>
     <string name="hotspot_mode_p2p_desc">备选方案。需要打开车机 Wi-Fi 开关；2.4 GHz 连接可能会卡顿。</string>
+    <string name="same_wifi_network">同一网络（Wi-Fi 直连）</string>
+    <string name="hotspot_mode_existing_wifi_desc">车机加入一张已经存在的 Wi-Fi（手机热点或路由器），iPhone 连同一张网。车机自带热点会被关掉，不使用。</string>
+    <string name="existing_wifi_hint">在车机自己的 Wi-Fi 设置里，把车机连到和 iPhone 同一张 Wi-Fi：安卓手机的热点、路由器，或 iPhone 的个人热点。这里不需要再设置什么——网名和网络信息由 DiPlay 自己从车机读取。</string>
+    <string name="existing_wifi_joined">车机已连接 · %1$s</string>
+    <string name="existing_wifi_not_joined">车机还没连上任何 Wi-Fi · 请在车机 Wi-Fi 设置里连接。</string>
     <string name="hotspot_details_off">热点已关闭 · 请在车机设置中开启。</string>
     <string name="hotspot_details_saved">详情已保存 · 连接前请确认车载热点已开启。</string>
     <string name="permission_enabled_ready">权限已启用 · 可以使用</string>
