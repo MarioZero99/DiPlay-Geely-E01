@@ -1936,10 +1936,11 @@ class CarPlayController(
                     true -> "switched off"
                     false -> "already off"
                     // The same unreadable answer that let releaseForStationMode() return without
-                    // trying. Calling it "already off" would be reporting a failed reflection as a
-                    // fact about the hotspot, and the next thing the driver sees is a Wi-Fi that will
-                    // not come up — looking for a network problem instead of a hotspot left on.
-                    null -> "state unreadable, asked to switch it off"
+                    // trying — and "without trying" is what has to be said. Calling it "already off"
+                    // reports a failed reflection as a fact about the hotspot; calling it "switched
+                    // off" claims a request that was never sent. Both would send the driver looking
+                    // for a network problem while the hotspot is still holding the radio.
+                    null -> "state unreadable, left as it is"
                 } + "; the car will join the driver's Wi-Fi network instead",
             )
         }

@@ -20,7 +20,7 @@
     <string name="marker_centre_default">居中 · 默认</string>
     <string name="hotspot_mode_manual_desc">使用车机自带热点。若车机支持，请在车机设置中选择 5 GHz。</string>
     <string name="hotspot_mode_p2p_desc">备选方案。需要打开车机 Wi-Fi 开关；2.4 GHz 连接可能会卡顿。</string>
-    <string name="same_wifi_network">同一网络（Wi-Fi 直连）</string>
+    <string name="same_wifi_network">同一 Wi-Fi 网络</string>
     <string name="hotspot_mode_existing_wifi_desc">车机加入一张已经存在的 Wi-Fi（手机热点或路由器），iPhone 连同一张网。车机自带热点会被关掉，不使用。</string>
     <string name="existing_wifi_hint">在车机自己的 Wi-Fi 设置里，把车机连到和 iPhone 同一张 Wi-Fi：安卓手机的热点、路由器，或 iPhone 的个人热点。这里不需要再设置什么——网名和网络信息由 DiPlay 自己从车机读取。</string>
     <string name="existing_wifi_joined">车机已连接 · %1$s</string>
