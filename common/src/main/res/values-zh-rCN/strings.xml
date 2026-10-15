@@ -359,6 +359,8 @@
     <string name="sends_precise_android_location_as_carplay_gps_data_when_th">iPhone 请求时，将 Android 精确位置作为 CarPlay GPS 数据发送。</string>
     <string name="set">设置</string>
     <string name="set_up_once_your_details_stay_saved_for_the_next_drive_cha">只需设置一次，信息会保存供下次驾驶使用。更改将在下次连接时生效。</string>
+    <string name="open_settings">去设置</string>
+    <string name="carplay_is_running_this_needs_it_closed">CarPlay 正在运行。要改这一项，请先在首页断开连接。</string>
     <string name="settings">设置</string>
     <string name="setup_needs_attention">设置需要处理</string>
     <string name="share">分享</string>

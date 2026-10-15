@@ -23,14 +23,17 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * The settings area is one page that carries every bucket, and the bucket routes it used to open.
+ * The settings area is one page that carries every bucket, and the two routes still left.
  *
- * These lock in both halves. The page has to show what each bucket has -- hotspot, phone, the connect
- * step, display, audio, diagnostics, firmware, language -- because hunting for which bucket a setting
- * was filed under is what the hub cost, and the hub's entry cards going away is the other half of that
- * assertion. The routes have to keep working, because the connect flow lands on the wireless one when
- * something is missing; back from a route is the settings page, not home, and no page offers the same
- * action twice.
+ * The page has to show what each bucket has -- hotspot, phone, the connect step, display, audio,
+ * diagnostics, firmware, language -- because hunting for which bucket a setting was filed under is
+ * what the hub cost, and the hub's entry cards going away is the other half of that assertion.
+ *
+ * Wireless and wired are buckets and nothing else. They used to be pages of their own as well, and
+ * having two ways in is what made "which settings page am I on" a question: a connect that found
+ * something missing moved the driver to the wireless page, and back from there went to the settings
+ * page rather than home. What is asserted here is that they are drawn on the settings page and
+ * nowhere else, and that back means the home page from every page there is.
  *
  * What the pages say is pinned to a build with no adapter stack. These assertions are about the page
  * and the wording of the gaps, and a page that offers an external radio words several of them
@@ -60,6 +63,12 @@ class SettingsPagesUiTest {
         Triple("system", "System settings", "Save diagnostic report"),
     )
 
+    /**
+     * The buckets that are still pages of their own. The first two are the settings page's, and only
+     * the settings page's: [everyBucketRouteStillOpensItsOwnPage] is the other half of that.
+     */
+    private val bucketRoute = listOf("display", "system")
+
     private fun open(page: String): DiPlayActivity {
         val intent = Intent(RuntimeEnvironment.getApplication(), DiPlayActivity::class.java)
             .putExtra("page", page)
@@ -69,7 +78,7 @@ class SettingsPagesUiTest {
     /** Setup mode is restored from saved state, which is how a driver who left the page mid-setup returns to it. */
     private fun openInHotspotSetup(): DiPlayActivity {
         val intent = Intent(RuntimeEnvironment.getApplication(), DiPlayActivity::class.java)
-            .putExtra("page", "wireless")
+            .putExtra("page", "settings")
         val pending = Bundle().apply { putBoolean("pending_car_hotspot", true) }
         return Robolectric.buildActivity(DiPlayActivity::class.java, intent).setup(pending).get()
     }
@@ -115,9 +124,9 @@ class SettingsPagesUiTest {
         assertFalse("the hub's entry cards are gone", "Open wireless settings" in settings)
     }
 
-    /** The routes are still there, each one still its own page: the connect flow lands on one. */
+    /** The routes that are still routes, each one still its own page. */
     @Test fun everyBucketRouteStillOpensItsOwnPage() {
-        bucket.forEach { (page, heading, control) ->
+        bucket.filter { it.first in bucketRoute }.forEach { (page, heading, control) ->
             val shown = texts(open(page))
             assertTrue("'$page' is headed '$heading'", heading in shown)
             assertTrue("'$page' still holds its own controls", control == null || shown.any { it.startsWith(control) })
@@ -127,16 +136,33 @@ class SettingsPagesUiTest {
         }
     }
 
-    @Test fun backFromABucketReturnsToTheSettingsPage() {
-        bucket.forEach { (page, _, _) ->
+    /**
+     * The wireless and wired buckets are on the settings page and nowhere else.
+     *
+     * They were pages as well as buckets, and that is what the connect flow used to move the driver
+     * onto — so pressing Connect, the one control whose job is to connect, landed on a settings page.
+     * Asking for the old route by name now gets the home page, which is the same statement from the
+     * other side: there is no second settings page to be sent to.
+     */
+    @Test fun theConnectionBucketsAreOnlyOnTheSettingsPage() {
+        listOf("wireless", "wired").forEach { route ->
+            val shown = texts(open(route))
+            assertFalse("'$route' is no longer a page of its own", "Wireless settings" in shown)
+            assertTrue("'$route' falls through to the home page", "A familiar drive." in shown)
+        }
+    }
+
+    /** Back means one thing everywhere: the home page, and out of the app from there. */
+    @Test fun backGoesToTheHomePageFromEveryPage() {
+        (bucketRoute + "settings" + "about").forEach { page ->
             val activity = open(page)
+            assertTrue("'$page' offers Back", views<Button>(activity).any { it.text?.toString() == "Back" })
             activity.onBackPressedDispatcher.onBackPressed()
-            val shown = texts(activity)
             assertTrue(
-                "'$page' goes back to the settings page",
-                bucket.all { (_, heading, _) -> heading in shown },
+                "'$page' goes back to the home page",
+                views<Button>(activity).any { it.text?.toString() == "Car home" },
             )
-            assertFalse("back from a bucket does not leave the app", activity.isFinishing)
+            assertFalse("back from '$page' does not leave the app", activity.isFinishing)
         }
     }
 
@@ -191,7 +217,7 @@ class SettingsPagesUiTest {
     }
 
     @Test fun noPageOffersTheSameActionTwice() {
-        listOf("settings", "wireless", "wired", "display", "system", "about").forEach { page ->
+        listOf("settings", "display", "system", "about").forEach { page ->
             val labels = views<Button>(open(page)).mapNotNull { it.text?.toString() }
             val repeated = labels.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
             assertTrue("$page repeats $repeated", repeated.isEmpty())
@@ -207,7 +233,7 @@ class SettingsPagesUiTest {
     @Test fun theAppPermissionsLinkIsOfferedInOnePlace() {
         assertTrue("the settings page offers it, through the system bucket", "App permissions" in texts(open("settings")))
         assertTrue("the system route is that bucket's own page", "App permissions" in texts(open("system")))
-        listOf("wireless", "wired", "display").forEach { page ->
+        listOf("display").forEach { page ->
             assertFalse("$page carries no permissions card", "App permissions" in texts(open(page)))
         }
     }
@@ -232,7 +258,7 @@ class SettingsPagesUiTest {
      * reads. The card itself is pinned by [theSettingsPageCarriesEveryBucket].
      */
     @Test fun noPageOutsideTheBluetoothCardOffersAPhoneChooser() {
-        listOf("wired", "display", "system").forEach { page ->
+        listOf("display", "system").forEach { page ->
             val labels = views<Button>(open(page)).mapNotNull { it.text?.toString() }
             assertFalse(
                 "$page does not offer a phone chooser",
@@ -249,7 +275,7 @@ class SettingsPagesUiTest {
      * types its name in. The probe half of that is pinned in DeviceConnectionSupportTest; this is the page.
      */
     @Test fun theWirelessPageCarriesBothLegsAndTheConnectStep() {
-        val shown = texts(open("wireless"))
+        val shown = texts(open("settings"))
         assertTrue("the hotspot leg is a step", "1 · Car hotspot (Wi-Fi)" in shown)
         assertTrue("the Bluetooth leg is a step", "2 · Bluetooth and phone" in shown)
         assertTrue("the connect step is there", "3 · Connect" in shown)
@@ -266,7 +292,7 @@ class SettingsPagesUiTest {
      * This test head unit has no Bluetooth service at all, so both halves run on the same page.
      */
     @Test fun aHeadUnitWithNoRadioIsToldSoAndKeepsItsSteps() {
-        val shown = texts(open("wireless"))
+        val shown = texts(open("settings"))
         assertTrue(
             "the unsupported line is said",
             shown.any { it.startsWith("This head unit is not supported") },
@@ -285,13 +311,13 @@ class SettingsPagesUiTest {
     @Test fun theCarHotspotIsOfferedASwitchToComeUpOnItsOwn() {
         assertTrue(
             "the switch is offered where the car hotspot is the mode",
-            "Turn on the car hotspot at start" in texts(open("wireless")),
+            "Turn on the car hotspot at start" in texts(open("settings")),
         )
     }
 
     /** The step is named for the leg it is, not for the gesture the leg used to hide behind. */
     @Test fun theWirelessStepsAreNamedForTheirLegs() {
-        val shown = texts(open("wireless"))
+        val shown = texts(open("settings"))
         assertFalse("nothing is called a connection choice", "1 · Choose your connection" in shown)
         assertFalse("nothing is called just a pairing", "2 · Pair your iPhone" in shown)
     }
@@ -307,7 +333,7 @@ class SettingsPagesUiTest {
     @Config(sdk = [33], qualifiers = "en")
     fun aSavedHotspotModeThatIsNoLongerOfferedFallsBackToTheOneThatIs() {
         AirPlayPersistence.saveWirelessHotspotMode(RuntimeEnvironment.getApplication(), WirelessHotspotMode.WIFI_P2P)
-        val activity = open("wireless")
+        val activity = open("settings")
         val shown = texts(activity)
         assertTrue("the manual mode's own controls are drawn", "Open car hotspot settings" in shown)
         assertFalse("the Wi-Fi Direct controls are not drawn", "Open car Wi-Fi settings" in shown)
@@ -324,18 +350,17 @@ class SettingsPagesUiTest {
      * the connect step below it said nothing was missing.
      */
     @Test fun aRefusedConnectLeadsWithWhyAndStopsSayingItOnceItIsFixed() {
-        val activity = open("wireless")
+        val activity = open("settings")
         onlyButton(activity, "Connect phone").performClick()
         assertTrue("the refusal is led with", "Wireless is not ready" in texts(activity))
         assertTrue(
             "the unsaved hotspot is named",
             texts(activity).any { it.startsWith("The hotspot name and password are not saved") },
         )
-        // The driver saves them, then looks again the way the app offers: back to the settings page,
-        // which carries the same connect step, and press it there.
+        // The driver saves them and presses Connect again. They are still on the page they pressed it
+        // on: a refusal says why and leaves them there, which is the whole of the change.
         AirPlayPersistence.saveManualHotspotSsid(activity, "MyCar")
         AirPlayPersistence.saveManualHotspotPassphrase(activity, "hunter2hunter2")
-        onlyButton(activity, "Back").performClick()
         onlyButton(activity, "Connect phone").performClick()
         // The card is still raised -- other gaps remain -- so its absence below is recomputation, not the card
         // having gone away, which is the shape that would make this assertion pass for the wrong reason.

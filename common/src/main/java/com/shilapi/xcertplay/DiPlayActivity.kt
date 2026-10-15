@@ -118,6 +118,9 @@ class DiPlayActivity : ComponentActivity() {
 
     /** The head unit probe, held for the length of one redraw so laying the page out reads it once. */
     private var cachedReport: ConnectionSupportReport? = null
+
+    /** The session and the gaps, held for the length of one redraw. See [pageState]. */
+    private var cachedPageState: WirelessPageState? = null
     private var initialLaunch = true
     private var notificationTransport = true
     private var exportInProgress = false
@@ -214,9 +217,7 @@ class DiPlayActivity : ComponentActivity() {
                 // The firmware page is left by its own control and by nothing else while a write is in
                 // flight: back would take the driver off the one screen that says what is happening.
                 if (page == PAGE_FIRMWARE && firmwareRunning()) return
-                val parent = parentOf(page)
-                if (parent != null) { page = parent; render() }
-                else { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
+                goBack()
             }
         })
     }
@@ -274,6 +275,7 @@ class DiPlayActivity : ComponentActivity() {
         // One probe per redraw: laying the page out asks what the head unit supports several times over.
         cachedReport = null
         cachedHotspot = null
+        cachedPageState = null
         pageScroll?.let { if (scrollYPage == page) pageScrollY = it.scrollY }
         if (scrollYPage != page) { scrollYPage = page; pageScrollY = 0 }
         val scroll = ScrollView(this).apply { setBackgroundColor(BG); isFillViewport = true; clipToPadding = false }
@@ -287,18 +289,18 @@ class DiPlayActivity : ComponentActivity() {
         // that cannot show them what is happening — the second of them out of the app entirely. What
         // leaves it is its own control, which appears once there is nothing left to wait for.
         if (page != PAGE_FIRMWARE) {
-            header.addView(button(if (parentOf(page) == null) getString(R.string.car_home) else getString(R.string.back), false) {
-                val parent = parentOf(page)
-                if (parent == null) startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
-                else { page = parent; render() }
+            header.addView(button(if (page == "home") getString(R.string.car_home) else getString(R.string.back), false) {
+                // Named "Car home" rather than "Back" on the home page, because that is where it goes:
+                // out to the head unit's own launcher, the same key it is everywhere else but a
+                // different place to land.
+                if (page == "home") startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
+                else goBack()
             }, LinearLayout.LayoutParams(dp(130), dp(56)))
             header.addView(button(getString(R.string.close_app), false) { closeTheApp() }, LinearLayout.LayoutParams(dp(130), dp(56)).apply { marginStart = dp(10) })
         }
         content.addView(header)
         content.addView(space(24))
         when (page) {
-            "wireless" -> wirelessSetup(CardColumns(content))
-            "wired" -> wiredSetup(CardColumns(content))
             "display" -> displaySettings(CardColumns(content))
             "system" -> systemSettings(CardColumns(content))
             "settings" -> settings(content)
@@ -313,15 +315,16 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     /**
-     * The page the back control returns to, or null where there is nothing behind it. The hub is a
-     * page like any other, so back from it is the home page rather than the hub again.
+     * Back means one thing: the home page, and out of the app from there.
+     *
+     * There used to be a table of parents, one entry per page, and the pages the connect flow could
+     * land on were not all in it — so back from the connection page went to the settings page, and the
+     * settings page was reachable both from the gear and from a connect that had nothing to connect
+     * with. Two ways in and a table to say which way out is what made "which settings page am I on"
+     * a question at all. There is one page now, and back is the same key everywhere.
      */
-    private fun parentOf(from: String): String? = when (from) {
-        "home" -> null
-        "settings" -> "home"
-        "about" -> "system"
-        PAGE_FIRMWARE -> "system"
-        else -> "settings"
+    private fun goBack() {
+        if (page == "home") finish() else { page = "home"; render() }
     }
 
     /**
@@ -383,6 +386,7 @@ class DiPlayActivity : ComponentActivity() {
                 },
                 note = if (wireless && carHotspotOff()) getString(R.string.msg_car_hotspot_off, hotspotSsid()) else null,
                 action = getString(R.string.connect_phone),
+                enabled = sessionIsIdle(),
                 onClick = { connect(true) },
             ),
         )
@@ -396,12 +400,25 @@ class DiPlayActivity : ComponentActivity() {
                 },
                 note = null,
                 action = getString(R.string.connect_phone),
+                enabled = sessionIsIdle(),
                 onClick = { connect(false) },
             ),
         )
         if (chosen > 0) {
             card.addView(entries, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
         }
+        // A refused connection says why here, under the button that was pressed, rather than sending the
+        // driver to a settings page to find out. "Open settings" is theirs to press: the page is not
+        // chosen for them.
+        val readiness = pageState().readiness
+        if (wirelessBlocked && readiness.gaps.isNotEmpty()) {
+            gapsCard(card, readiness)
+            card.addView(
+                button(getString(R.string.open_settings), false) { page = "settings"; render() },
+                matchButton(12, 60),
+            )
+        }
+        liveSessionNote(card)
         connectButton = button(getString(R.string.open_carplay), true) { openProjection() }
             .apply { visibility = View.GONE }
         card.addView(connectButton, matchButton(18, 68))
@@ -516,7 +533,7 @@ class DiPlayActivity : ComponentActivity() {
             )
         }
         // One readiness for the whole page, read once so the cards and the connect step cannot disagree.
-        val readiness = currentWirelessReadiness()
+        val readiness = pageState().readiness
         if (wirelessBlocked && readiness.gaps.isNotEmpty()) gapsCard(columns.raw(), readiness)
 
         bucket(columns, R.string.wireless_settings, R.string.set_up_once_your_details_stay_saved_for_the_next_drive_cha)
@@ -796,45 +813,11 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     /**
-     * The wireless half of the old connection page. It keeps its three steps: a first-time setup is
-     * read in order, and the steps are named as steps because that is what they are — but named for
-     * the two legs they really are, the car's hotspot and the Bluetooth radio that pairs the phone,
-     * rather than for a "connection" and a "pairing" that hid what was being chosen.
-     *
-     * Neither leg is gated on the probe. Turning the car's hotspot on in the car's own settings and
-     * typing its name in is done by hand and needs nothing from us, so a head unit whose Bluetooth or
-     * hotspot calls do not answer still gets the whole page; it is told what is missing, in the step
-     * that is missing it, instead of the step being taken away.
-     */
-    private fun wirelessSetup(columns: CardColumns) {
-        columns.line(label(getString(R.string.wireless_settings), 34, TEXT, true))
-        columns.line(label(getString(R.string.set_up_once_your_details_stay_saved_for_the_next_drive_cha), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
-        columns.line(supportedConnectionLabel().apply { setPadding(0, 0, 0, dp(16)) })
-        // Said alongside the steps rather than instead of them. A head unit with no radio that could carry
-        // the leg is worth saying so about, but the driver can still turn the car's hotspot on in the car's
-        // own settings and type its name in, and a probe that reads the Bluetooth leg wrong must not take
-        // that away — which is exactly what this page used to lose.
-        if (!hasWirelessRadio()) {
-            columns.line(
-                label(getString(R.string.this_head_unit_is_not_supported_for_wireless_carplay), 16, WARNING)
-                    .apply { setPadding(0, 0, 0, dp(16)) },
-            )
-        }
-        // One readiness for the whole page, read once so the card and the connect step cannot disagree, and
-        // so laying the page out asks the adapter and the hotspot only once. The card hides itself as soon as
-        // nothing is missing, which is what stops it outliving the reason it was raised for.
-        val readiness = currentWirelessReadiness()
-        if (wirelessBlocked && readiness.gaps.isNotEmpty()) gapsCard(columns.raw(), readiness)
-        wirelessCards(columns, readiness)
-    }
-
-    /**
      * The two connection steps and the connect control, as cards.
      *
      * The numbering stays: these are the steps of setting the car's own hotspot and Bluetooth up, and the
-     * order is the whole of their meaning. It is the page they sit on that changed -- the settings page
-     * shows them too, so the driver who came for one of these settings does not have to know which bucket
-     * the hub would have filed it under.
+     * order is the whole of their meaning. They have one home now, the settings page's wireless bucket,
+     * rather than a page of their own that the connect flow could also land on.
      */
     private fun wirelessCards(columns: CardColumns, readiness: WirelessReadiness) {
         columns.card(R.string.s_1_car_hotspot) { card -> hotspotControls(card) }
@@ -842,20 +825,13 @@ class DiPlayActivity : ComponentActivity() {
         columns.card(R.string.s_3_connect) { card ->
             readinessLines(card, readiness)
             card.addView(label(getString(R.string.return_from_car_settings_to_diplay_then_connect_accept_the), 16, MUTED).apply { setPadding(0, dp(8), 0, 0) })
-            card.addView(button(getString(R.string.connect_phone), true) { connect(true) }, matchButton(12, 60))
+            card.addView(
+                button(getString(R.string.connect_phone), true) { connect(true) }
+                    .apply { isEnabled = sessionIsIdle() },
+                matchButton(12, 60),
+            )
+            liveSessionNote(card)
         }
-    }
-
-    /**
-     * Wired CarPlay has nothing to configure: the cable is detected and the phone starts CarPlay on
-     * its own. What is left is the instruction, the button, and the permission the phone needs — the
-     * last of which lives on the system page rather than being said twice.
-     */
-    private fun wiredSetup(columns: CardColumns) {
-        columns.line(label(getString(R.string.wired_settings), 34, TEXT, true))
-        columns.line(label(getString(R.string.wired_settings_hint), 17, MUTED).apply { setPadding(0, dp(8), 0, dp(24)) })
-        columns.line(supportedConnectionLabel().apply { setPadding(0, 0, 0, dp(16)) })
-        wiredCards(columns)
     }
 
     private fun wiredCards(columns: CardColumns) {
@@ -889,13 +865,18 @@ class DiPlayActivity : ComponentActivity() {
             if (offered.size > 1) {
                 card.addView(label(getString(R.string.choose_bluetooth_before_phone), 16, MUTED).apply { setPadding(0, 0, 0, dp(12)) })
             }
-            legChoices(card, offered.map { WirelessLegOption(getString(bluetoothRadioName(it)), null, it == hop) }) { index ->
+            legChoices(
+                card,
+                offered.map { WirelessLegOption(getString(bluetoothRadioName(it)), null, it == hop) },
+                enabled = sessionIsIdle(),
+            ) { index ->
                 chooseBluetoothRadio(offered[index])
             }
         }
         blockerLines(card, bluetoothLeg = true)
         adapterStatusView()?.let { card.addView(it) }
         iphoneChoice(card)
+        liveSessionNote(card)
     }
 
     private fun bluetoothRadioName(hop: WirelessBluetoothHop): Int = when (hop) {
@@ -1441,7 +1422,12 @@ class DiPlayActivity : ComponentActivity() {
      * in use stays a button: a leg with nothing chosen and nothing to tap would be asking for a choice it
      * gives no way to make.
      */
-    private fun legChoices(parent: LinearLayout, options: List<WirelessLegOption>, onChoose: (Int) -> Unit) {
+    private fun legChoices(
+        parent: LinearLayout,
+        options: List<WirelessLegOption>,
+        enabled: Boolean = true,
+        onChoose: (Int) -> Unit,
+    ) {
         if (options.isEmpty()) return
         val lone = options.singleOrNull()
         if (lone != null && lone.chosen) {
@@ -1459,7 +1445,11 @@ class DiPlayActivity : ComponentActivity() {
                 if (wide) LinearLayout.LayoutParams(0, -2, 1f).apply { if (index > 0) marginStart = dp(16) }
                 else LinearLayout.LayoutParams(-1, -2),
             )
-            cell.addView(button("${if (option.chosen) "✓  " else ""}${option.title}", option.chosen) { onChoose(index) }, matchButton(12, 60))
+            cell.addView(
+                button("${if (option.chosen) "✓  " else ""}${option.title}", option.chosen) { onChoose(index) }
+                    .apply { isEnabled = enabled },
+                matchButton(12, 60),
+            )
             option.description?.let { cell.addView(label(it, 15, MUTED).apply { setPadding(0, dp(6), 0, dp(12)) }) }
         }
     }
@@ -1484,7 +1474,11 @@ class DiPlayActivity : ComponentActivity() {
         // that does not need those calls.
         val saved = AirPlayPersistence.loadWirelessHotspotMode(this)
         val mode = displayedHotspotMode(pendingCarHotspotSetup, saved, modes)
-        legChoices(card, modes.map { WirelessLegOption(wirelessModeTitle(it), wirelessModeDescription(it), it == mode) }) { index ->
+        legChoices(
+            card,
+            modes.map { WirelessLegOption(wirelessModeTitle(it), wirelessModeDescription(it), it == mode) },
+            enabled = sessionIsIdle(),
+        ) { index ->
             val candidate = modes[index]
             // The choice is written down here, at the moment it is made, for both modes. It used to be
             // written for every mode but the car hotspot, which left the page drawing one mode while
@@ -1794,34 +1788,28 @@ class DiPlayActivity : ComponentActivity() {
                 // The hop's own service is one of those gaps, and putting it in place runs off the main
                 // thread: ask for it now, and the page redraws when it is there.
                 startVendorHopInBackground()
-                wirelessBlocked = true
-                page = "wireless"
-                render()
+                refuseConnection(null)
                 return
             }
             wirelessBlocked = false
         }
         if (wireless && hotspotSetupBlocksConnect(AirPlayPersistence.loadWirelessHotspotMode(this), pendingCarHotspotSetup)) {
-            toast(getString(R.string.save_your_hotspot_details_in_connection_setup_first))
-            page = "wireless"
-            render()
+            refuseConnection(getString(R.string.save_your_hotspot_details_in_connection_setup_first))
             return
         }
         if (setupError != null) { toast(setupError!!); return }
         if (wireless && AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL &&
             hotspotError(hotspotSsid(), hotspotPassword()) != null) {
             pendingCarHotspotSetup = true
-            page = "wireless"
-            render()
-            toast(getString(R.string.save_the_name_and_password_from_the_car_s_hotspot_settings))
+            refuseConnection(getString(R.string.save_the_name_and_password_from_the_car_s_hotspot_settings))
             return
         }
         // The hotspot being off is one of the readiness gaps, so it is said on the page with the other
         // gaps rather than in a dialog of its own. That dialog could only ever have been reached with a
         // session already up, where the check above does not run — which is also why these two refusals
         // raise the card themselves rather than leaning on the check above to have raised it.
-        if (wireless && carHotspotOff()) { wirelessBlocked = true; page = "wireless"; render(); return }
-        if (wireless && DiPlayPreferences.phoneAddress(this) == null) { wirelessBlocked = true; page = "wireless"; render(); return }
+        if (wireless && carHotspotOff()) { refuseConnection(null); return }
+        if (wireless && DiPlayPreferences.phoneAddress(this) == null) { refuseConnection(null); return }
         val preferences = getSharedPreferences("diplay", MODE_PRIVATE)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !preferences.getBoolean("notification_asked", false)) {
             preferences.edit().putBoolean("notification_asked", true).apply()
@@ -1848,6 +1836,49 @@ class DiPlayActivity : ComponentActivity() {
         if (CarPlayBackgroundSession.hasSession()) CarPlayBackgroundSession.stop { runOnUiThread { open() } }
         else open()
     }
+    /**
+     * What is running and what a connection would still be missing, read once per redraw.
+     *
+     * Held for the length of one redraw, like [connectionReport] and for the same reason: laying the
+     * page out asks several times over, and a card that reads the session for itself is a card that
+     * can disagree with the step beside it about whether anything is running.
+     */
+    private fun pageState(): WirelessPageState = cachedPageState ?: WirelessPageState(
+        session = sessionPhase(CarPlayBackgroundSession.hasSession(), CarPlayBackgroundSession.active),
+        readiness = currentWirelessReadiness(),
+    ).also { cachedPageState = it }
+
+    /** Whether a new connection may be started. See [SessionPhase] for why this is not just "running". */
+    private fun sessionIsIdle(): Boolean = pageState().session == SessionPhase.Idle
+
+    /**
+     * Said under a control that is greyed out because a session is running, so the grey has a reason
+     * on the page rather than only in the code. Nothing on this page tears a running session down;
+     * the way to a different one is the Disconnect button on the home page.
+     */
+    private fun liveSessionNote(parent: LinearLayout) {
+        if (sessionIsIdle()) return
+        parent.addView(
+            label(getString(R.string.carplay_is_running_this_needs_it_closed), 15, MUTED)
+                .apply { setPadding(0, dp(10), 0, 0) },
+        )
+    }
+
+    /**
+     * A connection that cannot start: say why, and stay where the driver is.
+     *
+     * Every refusal here used to end in `page = "wireless"` — so pressing Connect, the one control
+     * whose whole job is to connect, moved the driver to a settings page and left them to work out
+     * why. The reason belongs under the button they pressed. The way to the controls that fix it is
+     * the "Open settings" button the raised card carries, which the driver presses knowing where it
+     * goes; that is a different thing from being sent there.
+     */
+    private fun refuseConnection(reason: String?) {
+        reason?.let { toast(it) }
+        wirelessBlocked = true
+        render()
+    }
+
     private fun connectionReport(): ConnectionSupportReport =
         cachedReport ?: DeviceConnectionSupport.inspect(this).also { cachedReport = it }
 
@@ -1938,6 +1969,7 @@ class DiPlayActivity : ComponentActivity() {
         hint: String,
         note: String?,
         action: String,
+        enabled: Boolean = true,
         onClick: () -> Unit,
     ): View = column().apply {
         background = rounded(SURFACE, if (note == null) BORDER else WARNING)
@@ -1946,7 +1978,10 @@ class DiPlayActivity : ComponentActivity() {
         addView(label(hint, 15, MUTED).apply { setPadding(0, dp(8), 0, 0) })
         if (note != null) addView(label(note, 15, WARNING).apply { setPadding(0, dp(8), 0, 0) })
         val buttons = row().apply { gravity = Gravity.CENTER_VERTICAL }
-        buttons.addView(button(action, true) { onClick() }, LinearLayout.LayoutParams(0, dp(64), 1f))
+        buttons.addView(
+            button(action, true) { onClick() }.apply { isEnabled = enabled },
+            LinearLayout.LayoutParams(0, dp(64), 1f),
+        )
         addView(buttons, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
     }
 

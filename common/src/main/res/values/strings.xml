@@ -359,6 +359,8 @@
     <string name="sends_precise_android_location_as_carplay_gps_data_when_th">Sends precise Android location as CarPlay GPS data when the iPhone requests it.</string>
     <string name="set">Set</string>
     <string name="set_up_once_your_details_stay_saved_for_the_next_drive_cha">Set up once. Your details stay saved for the next drive. Changes apply to your next connection.</string>
+    <string name="open_settings">Open settings</string>
+    <string name="carplay_is_running_this_needs_it_closed">CarPlay is running. Disconnect it on the home page before changing this.</string>
     <string name="settings">Settings</string>
     <string name="setup_needs_attention">Setup needs attention</string>
     <string name="share">Share</string>
