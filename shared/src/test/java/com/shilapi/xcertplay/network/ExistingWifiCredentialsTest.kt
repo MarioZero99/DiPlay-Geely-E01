@@ -104,6 +104,56 @@ class ExistingWifiCredentialsTest {
         assertEquals("pocket-password", credentials?.passphrase)
     }
 
+    /**
+     * The head unit that will not hand its copy over, which is the case the driver's copy exists for.
+     *
+     * Without the fallback the phone is told to join a secured network with no password, and the
+     * bring-up then waits for a phone that has nothing to join with — which is what the afternoon
+     * report shows: iAP2 authenticated, 0x5703 and 0x4301 sent, and no TCP connection ever arriving.
+     */
+    @Test
+    fun aHiddenPasswordIsReplacedByTheOneTheDriverTypedForThatNetwork() {
+        val password = existingWifiPassword(
+            fromCar = null,
+            driver = ExistingWifiDriverCredentials(ssid, "typed-by-driver"),
+            ssid = ssid,
+        )
+
+        assertEquals("typed-by-driver", password.value)
+        assertEquals("driver", password.source)
+    }
+
+    @Test
+    fun theCarsOwnCopyIsWhatIsUsedWhenItHasOne() {
+        val password = existingWifiPassword(
+            fromCar = "car-password",
+            driver = ExistingWifiDriverCredentials(ssid, "typed-by-driver"),
+            ssid = ssid,
+        )
+
+        assertEquals("car-password", password.value)
+        assertEquals("car", password.source)
+    }
+
+    @Test
+    fun aPasswordTypedForAnotherNetworkIsNeverSentAsThisOnes() {
+        val other = existingWifiPassword(
+            fromCar = null,
+            driver = ExistingWifiDriverCredentials("Someone else's Wi-Fi", "typed-by-driver"),
+            ssid = ssid,
+        )
+        val blank = existingWifiPassword(
+            fromCar = null,
+            driver = ExistingWifiDriverCredentials(ssid, ""),
+            ssid = ssid,
+        )
+
+        assertNull(other.value)
+        assertEquals("nowhere", other.source)
+        assertNull(blank.value)
+        assertEquals("nowhere", blank.source)
+    }
+
     private fun saved(
         ssid: String = this.ssid,
         passphrase: String?,

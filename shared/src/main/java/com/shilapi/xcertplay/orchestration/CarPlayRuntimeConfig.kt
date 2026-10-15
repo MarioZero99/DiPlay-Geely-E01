@@ -69,6 +69,15 @@ class CarPlayRuntimeConfig(
     val manualHotspotBand: ManualHotspotBand = ManualHotspotBand.AUTO,
     val manualHotspotChannel: Int = 0,
     val manualHotspotSecurity: ManualHotspotSecurity = ManualHotspotSecurity.WPA2,
+    /**
+     * The network the car is on and the password the driver typed for it, in existing-Wi-Fi mode.
+     *
+     * Read from storage at the moment a connection is attempted rather than held from the page, so a
+     * password typed while a session is retrying is used by the next attempt. Null when the driver has
+     * never typed one, which is the ordinary case: the car's own copy is tried first either way.
+     */
+    val existingWifiSsid: String? = null,
+    val existingWifiPassphrase: String? = null,
     val wirelessBluetoothDeviceAddress: String? = null,
     val locationReportingEnabled: Boolean = false,
     val wirelessBluetoothHop: WirelessBluetoothHop = WirelessBluetoothHop.CAR,
@@ -137,6 +146,20 @@ class CarPlayRuntimeConfig(
             ) {
                 "manualHotspotPassphrase is required for secured manual hotspots"
             }
+        }
+        // The driver's copy of an existing network's password goes into the same two iAP2 fields as a
+        // manual hotspot's, so it is held to the same rules. Both are optional together: no driver copy
+        // is the ordinary case, and the car's own is what is used then.
+        val existingSsid = existingWifiSsid.orEmpty()
+        val existingPassphrase = existingWifiPassphrase.orEmpty()
+        require('\u0000' !in existingSsid) {
+            "existingWifiSsid must not contain U+0000"
+        }
+        require('\u0000' !in existingPassphrase) {
+            "existingWifiPassphrase must not contain U+0000"
+        }
+        require(existingPassphrase.isEmpty() || existingPassphrase.length in 8..63) {
+            "existingWifiPassphrase must be empty or between 8 and 63 characters"
         }
     }
 

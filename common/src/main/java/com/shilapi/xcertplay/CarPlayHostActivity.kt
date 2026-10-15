@@ -208,6 +208,8 @@ class CarPlayHostActivity : ComponentActivity() {
         manualHotspotBand = manualHotspotBand,
         manualHotspotChannel = manualHotspotChannel,
         manualHotspotSecurity = manualHotspotSecurity,
+        existingWifiSsid = existingWifiSsid,
+        existingWifiPassphrase = existingWifiPassphrase,
         locationReportingEnabled = locationReportingEnabled,
     )
 
@@ -347,6 +349,8 @@ class CarPlayHostActivity : ComponentActivity() {
     private var manualHotspotBand = ManualHotspotBand.AUTO
     private var manualHotspotChannel = 0
     private var manualHotspotSecurity = ManualHotspotSecurity.OPEN
+    private var existingWifiSsid = ""
+    private var existingWifiPassphrase = ""
     private var awaitingVpnConsent = false
     private var awaitingWirelessPermissions = false
     private var awaitingLocationPermission = false
@@ -570,6 +574,35 @@ class CarPlayHostActivity : ComponentActivity() {
         mfiI2cPath = AirPlayPersistence.loadMfiI2cPath(this)
         remoteMfiServer = AirPlayPersistence.loadRemoteMfiServer(this)
         remoteMfiToken = AirPlayPersistence.loadRemoteMfiToken(this)
+        val storedHotspotSsid = loadWirelessSettings()
+        if (storedHotspotSsid.isBlank() && manualHotspotSsid.isNotBlank()) {
+            // Neither copy carries the key itself: one is rendered on the glass and the other goes
+            // into a report the driver may hand over, and the key is the one value that stays out.
+            // The mode is named because it is the one part of the pair the car does not supply, and
+            // the only part a failed handover can disagree with silently.
+            val taken = "STEP wifi/ap: manual hotspot credentials taken from the car's own hotspot" +
+                " (security=$manualHotspotSecurity)"
+            appendLog(taken)
+            showHandshakeLine(taken)
+        }
+        wirelessPermissionsReady = !wirelessEnabled || hasRequiredWirelessPermissions()
+    }
+
+    /**
+     * Everything the wireless leg is built from, as storage holds it right now.
+     *
+     * Read again at every attempt, not only when the page is built. A driver who changes the hotspot
+     * mode, or types the password for the network the car is on, is doing it *because* the attempt on
+     * screen is failing — and this page is not rebuilt when they come back from DiPlay settings, it is
+     * brought to the front. Held from `onCreate` alone, the retry ladder goes on using the settings the
+     * first attempt started with, which is a ladder they cannot influence: it kept running the same
+     * Wi-Fi mode after the driver had switched to the car's own hotspot, and would have gone on
+     * omitting a password they had just supplied.
+     *
+     * Returns the stored manual-hotspot name, which is not the one used when the car supplied it: the
+     * caller logs that difference, and logging it on every retry would be noise rather than news.
+     */
+    private fun loadWirelessSettings(): String {
         wirelessHotspotMode = AirPlayPersistence.loadWirelessHotspotMode(this)
         val storedHotspotSsid = AirPlayPersistence.loadManualHotspotSsid(this)
         val (hotspotSsid, hotspotPassphrase) = manualHotspotCredentials(
@@ -589,17 +622,12 @@ class CarPlayHostActivity : ComponentActivity() {
             storedSecurity = AirPlayPersistence.loadManualHotspotSecurity(this),
             usedPassphrase = hotspotPassphrase,
         )
-        if (storedHotspotSsid.isBlank() && hotspotSsid.isNotBlank()) {
-            // Neither copy carries the key itself: one is rendered on the glass and the other goes
-            // into a report the driver may hand over, and the key is the one value that stays out.
-            // The mode is named because it is the one part of the pair the car does not supply, and
-            // the only part a failed handover can disagree with silently.
-            val taken = "STEP wifi/ap: manual hotspot credentials taken from the car's own hotspot" +
-                " (security=$manualHotspotSecurity)"
-            appendLog(taken)
-            showHandshakeLine(taken)
-        }
-        wirelessPermissionsReady = !wirelessEnabled || hasRequiredWirelessPermissions()
+        // The driver's copy of the joined network's password, for the head unit that will not hand the
+        // car's own over. Carried on the runtime config, so the manager can fall back to it without
+        // reaching for storage itself.
+        existingWifiSsid = AirPlayPersistence.loadExistingWifiSsid(this)
+        existingWifiPassphrase = AirPlayPersistence.loadExistingWifiPassphrase(this)
+        return storedHotspotSsid
     }
 
     private fun requestStartupPrerequisites() {
@@ -2152,6 +2180,8 @@ class CarPlayHostActivity : ComponentActivity() {
         if (CarPlayBackgroundSession.hasSession() && !CarPlayBackgroundSession.isOwner(this)) return
         if (shuttingDown.get() || handshakeResetInProgress || controller != null) return
         val controllerGeneration = restartGeneration
+        // Every attempt, including the ones the retry ladder makes on its own: see [loadWirelessSettings].
+        loadWirelessSettings()
         val config = try {
             createRuntimeConfig()
         } catch (error: IllegalArgumentException) {

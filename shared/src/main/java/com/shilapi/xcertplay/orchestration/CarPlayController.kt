@@ -30,6 +30,7 @@ import com.shilapi.xcertplay.network.AirPlayPorts
 import com.shilapi.xcertplay.network.CarPlayBonjour
 import com.shilapi.xcertplay.network.CarHotspotController
 import com.shilapi.xcertplay.network.CarHotspotStatus
+import com.shilapi.xcertplay.network.ExistingWifiDriverCredentials
 import com.shilapi.xcertplay.network.ExistingWifiManager
 import com.shilapi.xcertplay.network.HotspotStartResult
 import com.shilapi.xcertplay.network.diagnosticSummary
@@ -1976,6 +1977,11 @@ class CarPlayController(
                     // the messages already sent are stale, so the bring-up starts over rather than
                     // sitting on a link the phone can no longer reach.
                     onNetworkChanged = { if (!closed && phase == Phase.WIRELESS) restartWireless() },
+                    // Where the car's own copy is not readable, this is the password the driver typed
+                    // for this network. Matched on the name inside the manager.
+                    driverCredentials = config.existingWifiSsid
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { ExistingWifiDriverCredentials(it, config.existingWifiPassphrase.orEmpty()) },
                 )
             }
         }

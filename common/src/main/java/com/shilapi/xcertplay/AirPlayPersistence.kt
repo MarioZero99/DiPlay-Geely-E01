@@ -49,6 +49,10 @@ object AirPlayPersistence {
     private const val KEY_MANUAL_HOTSPOT_BAND = "manual_hotspot_band"
     private const val KEY_MANUAL_HOTSPOT_CHANNEL = "manual_hotspot_channel"
     private const val KEY_MANUAL_HOTSPOT_SECURITY = "manual_hotspot_security"
+
+    /** The network the car joined and the password the driver typed for it, as a pair. */
+    private const val KEY_EXISTING_WIFI_SSID = "existing_wifi_ssid"
+    private const val KEY_EXISTING_WIFI_PASSPHRASE = "existing_wifi_passphrase"
     private const val KEY_DEBUG_LOGS_ENABLED = "debug_logs_enabled"
     private const val KEY_MANUFACTURER = "manufacturer"
     private const val KEY_MODEL = "model"
@@ -295,6 +299,42 @@ object AirPlayPersistence {
             .putString(KEY_MANUAL_HOTSPOT_SECURITY, security.name)
             .apply()
     }
+
+    /**
+     * The password of the network the car is on, when the driver has typed it in.
+     *
+     * Stored as a pair rather than on its own: a password belongs to one network, and the same
+     * password under a different name is a wrong password. [loadExistingWifiPassphrase] is only
+     * used where its own SSID matches the network the car actually joined, which is what keeps a
+     * password entered for yesterday's network from being sent as today's.
+     *
+     * This exists because the platform is allowed to refuse. `WifiManager.getConfiguredNetworks()`
+     * hands an app the network's details but not always its key, and on a head unit that refuses,
+     * the phone is told to join a secured network with no password to join it with. The car's own
+     * copy is tried first; this is what the driver can supply when the car will not.
+     */
+    fun loadExistingWifiSsid(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_EXISTING_WIFI_SSID, null)
+            .orEmpty()
+
+    fun loadExistingWifiPassphrase(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_EXISTING_WIFI_PASSPHRASE, null)
+            .orEmpty()
+
+    fun saveExistingWifiCredentials(context: Context, ssid: String, passphrase: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_EXISTING_WIFI_SSID, ssid)
+            .putString(KEY_EXISTING_WIFI_PASSPHRASE, passphrase)
+            .apply()
+    }
+
+    /** Whether a password is held for this network, so the page can say so instead of asking again. */
+    fun hasExistingWifiPassphrase(context: Context, ssid: String): Boolean =
+        ssid.isNotEmpty() &&
+            loadExistingWifiSsid(context) == ssid &&
+            loadExistingWifiPassphrase(context).isNotEmpty()
 
     fun loadDebugLogsEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

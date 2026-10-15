@@ -45,6 +45,13 @@ class ExistingWifiManager(
     context: Context,
     private val onDiagnostic: (String) -> Unit = {},
     private val onNetworkChanged: () -> Unit = {},
+    /**
+     * The password the driver typed for the network the car is on, when they had to.
+     *
+     * Used only where the platform would not hand the car's own copy over, and only where the name
+     * matches: see [ExistingWifiDriverCredentials].
+     */
+    private val driverCredentials: ExistingWifiDriverCredentials? = null,
 ) : WirelessHotspotManager {
     private val appContext = context.applicationContext ?: context
     private val connectivity =
@@ -146,22 +153,25 @@ class ExistingWifiManager(
         if (current == null || !sameLink(current) || invalidated.get()) {
             throw IOException("The Wi-Fi connection changed while DiPlay was reading it; connect again")
         }
+        val password = existingWifiPassword(credentials.passphrase, driverCredentials, attached.ssid)
         // Two lines, and the split is the whole point of them. The report's redactor drops a line that
         // carries a credential keyword — whole, not field by field — and both `ssid` and `pass…` are on
         // its list. One line carrying both the network's name and whether the platform handed the key
         // over arrives in the report as `[withheld: credential or device name]` and answers nothing.
         // The name goes on the line that gets dropped: it is a device name and the report is not where
         // it belongs, and `adb logcat` has it in full. What the driver has to read — whether this head
-        // unit gives up the key at all — goes on a line with no keyword on it, so it survives.
+        // unit gives up the key at all, and who supplied one when it did not — goes on a line with no
+        // keyword on it, so it survives.
         onDiagnostic("Existing Wi-Fi attached ssid=${attached.ssid}")
         onDiagnostic(
             "Existing Wi-Fi details iface=${attached.interfaceName} host=${attached.host.hostAddress} " +
-                "credentials=${if (credentials.passphrase == null) "absent" else "present"} " +
+                "credentials=${if (password.value == null) "absent" else "present"} " +
+                "from=${password.source} " +
                 "channel=$channel security=${credentials.security}",
         )
         return WirelessHotspotInfo(
             ssid = attached.ssid,
-            passphrase = credentials.passphrase,
+            passphrase = password.value,
             security = credentials.security,
             channel = channel,
             frequencyMHz = frequencyMHz,
@@ -311,6 +321,44 @@ internal data class ExistingWifiCredentials(
     val passphrase: String?,
     val security: Iap2WirelessSecurity,
 )
+
+/**
+ * The password the driver typed for the network the car is on.
+ *
+ * Carried as a pair because that is what it is. A platform that will not hand the car's key over is
+ * the reason this exists, and the phone cannot join a secured network without one — so the driver is
+ * given somewhere to type it. The name travels with it so that it is used for the network it was
+ * typed for and no other.
+ */
+data class ExistingWifiDriverCredentials(
+    val ssid: String,
+    val passphrase: String,
+)
+
+/** The password that goes into 0x5703 and 0x4301, and which of the two copies it came from. */
+internal data class ExistingWifiPassword(val value: String?, val source: String)
+
+/**
+ * Which copy of the password the phone is told to use.
+ *
+ * The car's own leads: it is the one the head unit joined the network with, so it is the one that is
+ * known to work. The driver's is what covers the head unit that will not hand its copy over — and it
+ * is used only when its network name matches, because a password belongs to one network and half of
+ * that pair is a wrong password rather than a missing one. An empty typed value counts as none: it is
+ * what a field left blank looks like, and it is not a password.
+ *
+ * [source] is carried out with the value because the page cannot see this decision and a report has
+ * to: "absent" on its own cannot tell a head unit that refuses apart from a driver who never typed one.
+ */
+internal fun existingWifiPassword(
+    fromCar: String?,
+    driver: ExistingWifiDriverCredentials?,
+    ssid: String,
+): ExistingWifiPassword {
+    if (fromCar != null) return ExistingWifiPassword(fromCar, "car")
+    val typed = driver?.takeIf { it.ssid == ssid }?.passphrase?.takeIf { it.isNotEmpty() }
+    return ExistingWifiPassword(typed, if (typed != null) "driver" else "nowhere")
+}
 
 /**
  * The security type and password of a network, from the configurations the head unit saved when the

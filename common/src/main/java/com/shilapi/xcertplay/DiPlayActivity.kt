@@ -1528,6 +1528,37 @@ class DiPlayActivity : ComponentActivity() {
                     if (joined == null) WARNING else MUTED,
                 ).apply { setPadding(0, dp(12), 0, 0) },
             )
+            // The one part of the network DiPlay may not be able to read for itself. A head unit that
+            // will not hand `getConfiguredNetworks()` the key leaves the phone being told to join a
+            // secured network with no password to join it with, and the bring-up then waits for a phone
+            // that has nothing to join with — which on this page looks like a connection that never
+            // finishes. So the field is offered, and the line says which of the two states it is in
+            // rather than promising that nothing else is needed.
+            val saved = joined != null && AirPlayPersistence.hasExistingWifiPassphrase(this, joined)
+            card.addView(
+                label(
+                    if (saved) getString(R.string.existing_wifi_password_saved)
+                    else getString(R.string.existing_wifi_password_may_be_needed),
+                    15,
+                    if (saved) MUTED else WARNING,
+                ).apply { setPadding(0, dp(12), 0, 0) },
+            )
+            card.addView(
+                button(
+                    getString(
+                        if (saved) R.string.existing_wifi_change_password
+                        else R.string.existing_wifi_enter_password,
+                    ),
+                    false,
+                ) {
+                    askExistingWifiCredentials { ssid, password ->
+                        AirPlayPersistence.saveExistingWifiCredentials(this, ssid, password)
+                        render()
+                        toast(getString(R.string.saved_for_your_next_connection))
+                    }
+                },
+                matchButton(10, 60),
+            )
         } else {
             card.addView(label(getString(R.string.turn_the_car_s_wi_fi_switch_on_allow_location_nearby_devic), 16, MUTED))
             card.addView(button(getString(R.string.open_car_wi_fi_settings), false) { openCarClientWifiSettings() }, matchButton(12, 60))
@@ -1554,6 +1585,29 @@ class DiPlayActivity : ComponentActivity() {
     private fun hotspotError(ssid: String, password: String) =
         com.shilapi.xcertplay.orchestration.ManualHotspotValidation.error(ssid, password)?.let { getString(it.messageResource()) }
 
+    /**
+     * The same rules under the words that fit a network the car joined.
+     *
+     * The rules really are the same — both pairs end up in the same two iAP2 fields — so only what the
+     * driver is told changes. "Enter the car hotspot name" asks for the wrong thing here: the name is
+     * the router's, or the other phone's, and it is not the driver's to choose.
+     */
+    private fun existingWifiError(ssid: String, password: String): String? =
+        com.shilapi.xcertplay.orchestration.ManualHotspotValidation.error(ssid, password)?.let { problem ->
+            getString(
+                when (problem) {
+                    com.shilapi.xcertplay.orchestration.ManualHotspotValidation.Error.EMPTY_NAME ->
+                        R.string.network_error_empty_name
+                    com.shilapi.xcertplay.orchestration.ManualHotspotValidation.Error.LONG_NAME ->
+                        R.string.network_error_long_name
+                    com.shilapi.xcertplay.orchestration.ManualHotspotValidation.Error.INVALID_CHARACTER ->
+                        R.string.hotspot_error_invalid_character
+                    com.shilapi.xcertplay.orchestration.ManualHotspotValidation.Error.PASSWORD_LENGTH ->
+                        R.string.network_error_password_length
+                },
+            )
+        }
+
     private fun saveHotspotCredentials(ssid: String, password: String) {
         AirPlayPersistence.saveManualHotspotSsid(this, ssid)
         AirPlayPersistence.saveManualHotspotPassphrase(this, password)
@@ -1563,12 +1617,52 @@ class DiPlayActivity : ComponentActivity() {
         AirPlayPersistence.saveManualHotspotChannel(this, 0)
     }
 
-    private fun askHotspotCredentials(done: (String, String) -> Unit) {
+    private fun askHotspotCredentials(done: (String, String) -> Unit) = askNetworkCredentials(
+        title = getString(R.string.car_hotspot_details),
+        hint = getString(R.string.copy_these_from_the_car_s_hotspot_settings_use_5_ghz_if_av),
+        nameHint = getString(R.string.hotspot_name),
+        passwordHint = getString(R.string.hotspot_password),
+        initialSsid = hotspotSsid(),
+        initialPassphrase = hotspotPassword(),
+        validate = ::hotspotError,
+        done = done,
+    )
+
+    /**
+     * The password of the network the car is on, which DiPlay may not have been able to read.
+     *
+     * The same two fields as the car hotspot's, for the same reason: both end up in the same two iAP2
+     * fields, so both are held to the same rules. What differs is who supplies them — there the driver
+     * copies them off the car's hotspot screen, here they type the network's own password because the
+     * platform would not hand DiPlay the copy the car saved.
+     */
+    private fun askExistingWifiCredentials(done: (String, String) -> Unit) = askNetworkCredentials(
+        title = getString(R.string.existing_wifi_password_title),
+        hint = getString(R.string.copy_these_from_the_wi_fi_the_car_is_on),
+        nameHint = getString(R.string.wifi_network_name),
+        passwordHint = getString(R.string.wifi_network_password),
+        initialSsid = joinedWifiName().orEmpty(),
+        initialPassphrase = AirPlayPersistence.loadExistingWifiPassphrase(this),
+        validate = ::existingWifiError,
+        done = done,
+    )
+
+    /** The two fields a network's name and password are typed into, wherever they come from. */
+    private fun askNetworkCredentials(
+        title: String,
+        hint: String,
+        nameHint: String,
+        passwordHint: String,
+        initialSsid: String,
+        initialPassphrase: String,
+        validate: (String, String) -> String?,
+        done: (String, String) -> Unit,
+    ) {
         val fields = column().apply { setPadding(dp(24), dp(12), dp(24), dp(12)) }
-        fields.addView(label(getString(R.string.copy_these_from_the_car_s_hotspot_settings_use_5_ghz_if_av), 16, MUTED))
-        val ssid = EditText(this).apply { hint = getString(R.string.hotspot_name); setText(hotspotSsid()); setSingleLine() }
+        fields.addView(label(hint, 16, MUTED))
+        val ssid = EditText(this).apply { this.hint = nameHint; setText(initialSsid); setSingleLine() }
         val password = EditText(this).apply {
-            hint = getString(R.string.hotspot_password); setText(hotspotPassword()); setSingleLine()
+            this.hint = passwordHint; setText(initialPassphrase); setSingleLine()
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         ssid.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_NEXT or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
@@ -1596,7 +1690,7 @@ class DiPlayActivity : ComponentActivity() {
         val error = label("", 14, WARNING)
         error.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         fields.addView(error)
-        val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.car_hotspot_details))
+        val dialog = AlertDialog.Builder(this).setTitle(title)
             .setView(ScrollView(this).apply { addView(fields) })
             .setPositiveButton(getString(R.string.save_details), null).setNegativeButton(getString(R.string.cancel)) { _, _ -> hideKeyboard() }
             .setNeutralButton(getString(R.string.hide_keyboard), null).create()
@@ -1606,7 +1700,7 @@ class DiPlayActivity : ComponentActivity() {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val name = ssid.text.toString().trim()
                 val secret = password.text.toString()
-                val problem = hotspotError(name, secret)
+                val problem = validate(name, secret)
                 if (problem != null) error.text = problem
                 else { hideKeyboard(); dialog.dismiss(); done(name, secret) }
             }
