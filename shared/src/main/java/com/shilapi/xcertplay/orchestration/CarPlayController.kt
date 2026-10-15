@@ -78,6 +78,7 @@ import com.shilapi.xcertplay.transport.WiredLinkAssessment
 import com.shilapi.xcertplay.transport.WiredLinkCycles
 import com.shilapi.xcertplay.transport.WiredLinkFinding
 import com.shilapi.xcertplay.transport.WiredLinkObservation
+import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.WiredLinkStep
 import com.shilapi.xcertplay.transport.describeAppleUsbDevice
 import com.shilapi.xcertplay.transport.AdapterBluetoothHost

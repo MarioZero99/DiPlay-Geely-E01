@@ -1,6 +1,6 @@
 package com.shilapi.xcertplay
 
-import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
+import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

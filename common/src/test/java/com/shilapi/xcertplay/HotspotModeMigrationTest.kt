@@ -1,7 +1,7 @@
 package com.shilapi.xcertplay
 
 import android.content.Context
-import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
+import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith

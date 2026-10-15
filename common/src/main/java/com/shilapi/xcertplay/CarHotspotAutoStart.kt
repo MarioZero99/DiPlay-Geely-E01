@@ -1,6 +1,6 @@
 package com.shilapi.xcertplay
 
-import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
+import com.shilapi.xcertplay.transport.WirelessHotspotMode
 
 /**
  * Whether opening the app should try to switch the car's own hotspot on.

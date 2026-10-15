@@ -54,7 +54,7 @@ import com.shilapi.xcertplay.host.BuildConfig
 import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.media.NavigationAudioStream
 import com.shilapi.xcertplay.network.CarHotspotController
-import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
+import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.WirelessGap
 import com.shilapi.xcertplay.transport.WirelessReadiness

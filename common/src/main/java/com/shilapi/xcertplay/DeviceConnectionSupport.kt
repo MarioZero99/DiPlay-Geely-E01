@@ -10,7 +10,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.SystemClock
 import com.shilapi.xcertplay.carhop.CarBluetoothHops
-import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
+import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import java.util.UUID

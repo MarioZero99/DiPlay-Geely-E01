@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay.orchestration
 
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
+import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.UsbDeviceId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows

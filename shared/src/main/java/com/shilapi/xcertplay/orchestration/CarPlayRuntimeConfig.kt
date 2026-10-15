@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.orchestration
 
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
 import com.shilapi.xcertplay.transport.UsbDeviceId
+import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import java.net.Inet6Address
 import java.net.InetAddress
@@ -16,19 +17,6 @@ enum class MfiTarget {
     USB_CH341,
     I2C,
     REMOTE,
-}
-
-enum class WirelessHotspotMode {
-    WIFI_P2P,
-    LOCAL_ONLY_HOTSPOT,
-    MANUAL,
-
-    /**
-     * Join a Wi-Fi network that already exists — the car is a station on it, and the iPhone joins the
-     * same one. Nothing is created here, so there is nothing to configure: see
-     * [com.shilapi.xcertplay.network.ExistingWifiManager].
-     */
-    EXISTING_WIFI,
 }
 
 enum class ManualHotspotBand {

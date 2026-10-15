@@ -13,6 +13,26 @@ enum class WirelessBluetoothHop(val key: String) {
 }
 
 /**
+ * How a wireless connection is meant to reach the iPhone. The user picks this.
+ *
+ * Lives here, beside [WirelessBluetoothHop], because it is the same kind of thing — a choice the
+ * driver makes — and because [WirelessReadinessCheck] has to read it to know which preconditions
+ * apply. The check is in this module and may not reach into `orchestration`.
+ */
+enum class WirelessHotspotMode {
+    WIFI_P2P,
+    LOCAL_ONLY_HOTSPOT,
+    MANUAL,
+
+    /**
+     * Join a Wi-Fi network that already exists — the car is a station on it, and the iPhone joins the
+     * same one. Nothing is created here, so there is nothing to configure: see
+     * [com.shilapi.xcertplay.network.ExistingWifiManager].
+     */
+    EXISTING_WIFI,
+}
+
+/**
  * Why a wireless connection cannot start yet, in the terms the page puts in front of the driver.
  *
  * The radio choice is here rather than with the adapter because it is the driver's, not the radio's: a build
