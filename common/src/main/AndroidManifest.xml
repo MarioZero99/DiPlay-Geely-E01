@@ -34,21 +34,7 @@
         <service android:name="com.shilapi.xcertplay.DiPlaySessionService"
             android:exported="false" android:foregroundServiceType="connectedDevice|microphone" />
 
-        <!-- Off until the driver switches it on in the accessibility settings. -->
-        <service
-            android:name="com.shilapi.xcertplay.WheelKeyService"
-            android:exported="true"
-            android:label="@string/wheel_key_service_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/wheel_key_service" />
-        </service>
-
-        <!-- Also off until the driver switches it on. -->
+        <!-- Off until the driver switches it on. -->
         <service
             android:name="com.shilapi.xcertplay.UsbAutoConfirmService"
             android:exported="true"

@@ -60,7 +60,7 @@ class UsbAutoConfirmServiceTest {
         Settings.Secure.putString(
             context.contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-            "${context.packageName}/${WheelKeyService::class.java.name}",
+            "${context.packageName}/.SomethingElse",
         )
         assertFalse(UsbAutoConfirmService.isEnabled(context))
     }

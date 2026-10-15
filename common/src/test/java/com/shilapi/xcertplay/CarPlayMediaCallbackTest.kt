@@ -4,6 +4,7 @@ import android.content.Intent
 import android.view.KeyEvent
 import com.shilapi.xcertplay.airplay.CarPlayMediaButton
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -28,13 +29,27 @@ class CarPlayMediaCallbackTest {
         )
     }
 
+    /**
+     * The media button path reads the driver's table too, and it starts out holding only the two
+     * track keys. A play/pause or a voice press is declined rather than eaten, so the head unit's own
+     * handling of it still happens.
+     */
     @Test
-    fun hardwarePlayAndPauseKeysToggle() {
-        press(KeyEvent.KEYCODE_MEDIA_PLAY)
-        press(KeyEvent.KEYCODE_MEDIA_PAUSE)
-        press(CarPlayMediaButton.KEYCODE_BYD_AUTO_MEDIA_PLAY_PAUSE)
+    fun aKeyTheDriverDidNotBindIsLeftToTheHeadUnit() {
+        listOf(
+            KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            CarPlayMediaButton.KEYCODE_BYD_AUTO_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_VOICE_ASSIST,
+        ).forEach { keyCode ->
+            assertFalse(
+                "key $keyCode must not be answered for",
+                callback.onMediaButtonEvent(button(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, keyCode, 0))),
+            )
+        }
 
-        assertEquals(List(3) { CarPlayMediaButton.PLAY_PAUSE }, sent)
+        assertEquals(emptyList<Int>(), sent)
     }
 
     @Test

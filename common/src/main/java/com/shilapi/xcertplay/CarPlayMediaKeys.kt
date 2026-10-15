@@ -13,36 +13,31 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import androidx.annotation.RequiresApi
 import com.shilapi.xcertplay.airplay.CarPlayMediaButton
 import com.shilapi.xcertplay.orchestration.CarPlayController
-import java.util.Collections
 
-/** Steering-wheel media keys with equivalent API 19 and API 21+ backends. */
+/**
+ * The wheel, with equivalent API 19 and API 21+ backends.
+ *
+ * What counts as a wheel key is the driver's table in [SteeringWheelKeyMappings] and nothing else --
+ * this head unit's wheel also carries the car's own keys, and a press DiPlay has no answer for has to
+ * reach the head unit.
+ */
 internal object CarPlayMediaKeys {
     private const val TAG = "DiPlay-MediaKeys"
-    private const val ECARX_MAX_ATTEMPTS = 6
-    private const val ECARX_RETRY_DELAY_MILLIS = 5_000L
-    private const val REPEAT_PRESS_MILLIS = 250L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val backend: Backend by lazy {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) Api21Backend() else LegacyBackend()
     }
 
-    fun attach(context: Context, controller: CarPlayController) {
-        backend.attach(context, controller)
-        if (wheelController !== controller) startInterception(context, controller)
-    }
+    fun attach(context: Context, controller: CarPlayController) = backend.attach(context, controller)
 
     fun detach(expected: CarPlayController?) {
         backend.detach(expected)
-        if (expected == null || wheelController === expected) {
-            stopInterception()
-            audioFocusTarget = null
-        }
+        audioFocusTarget = null
     }
 
     fun onMediaAudioChanged(active: Boolean) = mainHandler.post { backend.update(active) }
@@ -57,124 +52,7 @@ internal object CarPlayMediaKeys {
 
     internal fun dispatch(event: KeyEvent): Boolean = backend.dispatch(event)
 
-    /**
-     * A key that [WheelKeyService]'s filter saw before the head unit did. True means DiPlay took the
-     * press, so the filter drops it and the car does not act on it as well.
-     */
-    fun dispatchFromWheel(event: KeyEvent): Boolean {
-        if (wheelController == null) return false
-        return when (event.action) {
-            KeyEvent.ACTION_DOWN -> when {
-                event.repeatCount > 0 -> wheelPressed.contains(event.keyCode)
-                isWheelKey(event.keyCode) -> {
-                    wheelPressed.add(event.keyCode)
-                    sendWheelPress(event.keyCode)
-                    true
-                }
-                else -> false
-            }
-            KeyEvent.ACTION_UP -> wheelPressed.remove(event.keyCode)
-            else -> false
-        }
-    }
-
-    private fun isWheelKey(keyCode: Int): Boolean =
-        CarPlayMediaButton.opensSiri(keyCode) || CarPlayMediaButton.forKeyCode(keyCode) != null
-
-    // A Geely ECARX head unit hands the wheel over through its own input service rather than as a
-    // broadcast, and that service is not always up yet when CarPlay attaches. Hence the retries.
-    private fun startInterception(context: Context, controller: CarPlayController) {
-        releaseInterception()
-        wheelController = controller
-        if (!EcarxKeyInterceptor.isSupported()) return
-        interceptor = EcarxKeyInterceptor(context)
-        claimSteeringWheel()
-    }
-
-    private fun claimSteeringWheel() {
-        val interceptor = interceptor ?: return
-        for (keyCodes in ECARX_KEY_GROUPS) {
-            val granted = interceptor.start(keyCodes) { keyCode -> sendWheelPress(keyCode) }
-            if (granted != null && granted.isNotEmpty()) {
-                Log.i(TAG, "steering-wheel keys: ECARX granted ${granted.joinToString()}")
-                return
-            }
-        }
-        if (++interceptionAttempts >= ECARX_MAX_ATTEMPTS) {
-            Log.i(TAG, "steering-wheel keys: no ECARX grant after $interceptionAttempts attempts")
-            return
-        }
-        mainHandler.postDelayed(retryInterception, ECARX_RETRY_DELAY_MILLIS)
-    }
-
-    /**
-     * Resolves one wheel press and sends it to CarPlay. The ECARX callback and the accessibility
-     * filter both funnel through here, so a head unit that reports the same press on both paths
-     * still produces a single CarPlay press.
-     */
-    private fun sendWheelPress(keyCode: Int): Boolean {
-        val controller = wheelController ?: return false
-        if (isRepeatPress(keyCode)) return true
-        if (CarPlayMediaButton.opensSiri(keyCode)) return controller.requestSiri()
-        val index = CarPlayMediaButton.forKeyCode(keyCode) ?: return false
-        val sent = controller.sendMediaButton(index)
-        Log.i(TAG, "steering-wheel key $keyCode -> CarPlay $index sent=$sent")
-        return sent
-    }
-
-    /** Both paths can report one physical press; a second report this soon is the same press. */
-    private fun isRepeatPress(keyCode: Int): Boolean {
-        val now = SystemClock.elapsedRealtime()
-        val repeat = keyCode == lastPressKeyCode && now - lastPressAt < REPEAT_PRESS_MILLIS
-        lastPressKeyCode = keyCode
-        lastPressAt = now
-        return repeat
-    }
-
-    private fun stopInterception() {
-        releaseInterception()
-        wheelController = null
-    }
-
-    private fun releaseInterception() {
-        mainHandler.removeCallbacks(retryInterception)
-        interceptor?.stop()
-        interceptor = null
-        interceptionAttempts = 0
-    }
-
-    /**
-     * Worth offering the head unit, most specific first. It grants only the codes it knows, so the
-     * first group that comes back non-empty is the one this wheel actually sends.
-     */
-    private val ECARX_KEY_GROUPS = listOf(
-        intArrayOf(
-            CarPlayMediaButton.KEYCODE_ECARX_MEDIA_NEXT,
-            CarPlayMediaButton.KEYCODE_ECARX_MEDIA_PREVIOUS,
-            CarPlayMediaButton.KEYCODE_ECARX_MEDIA_PLAY_PAUSE,
-            CarPlayMediaButton.KEYCODE_ECARX_VOICE_ASSIST,
-        ),
-        intArrayOf(
-            CarPlayMediaButton.KEYCODE_ECARX_SEEK_NEXT,
-            CarPlayMediaButton.KEYCODE_ECARX_SEEK_PREVIOUS,
-            CarPlayMediaButton.KEYCODE_ECARX_R_SEEK_NEXT,
-            CarPlayMediaButton.KEYCODE_ECARX_R_SEEK_PREVIOUS,
-        ),
-        intArrayOf(
-            KeyEvent.KEYCODE_MEDIA_NEXT,
-            KeyEvent.KEYCODE_MEDIA_PREVIOUS,
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-        ),
-    )
-
-    private var interceptor: EcarxKeyInterceptor? = null
-    private var wheelController: CarPlayController? = null
-    private var interceptionAttempts = 0
-    private val wheelPressed = Collections.synchronizedSet(mutableSetOf<Int>())
-    private var lastPressKeyCode = Int.MIN_VALUE
-    private var lastPressAt = 0L
     @Volatile private var audioFocusTarget: ((Int) -> Unit)? = null
-    private val retryInterception = Runnable { claimSteeringWheel() }
 
     private interface Backend {
         fun attach(context: Context, controller: CarPlayController)
@@ -219,16 +97,41 @@ internal object CarPlayMediaKeys {
             focusHeld = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }
 
+        /**
+         * The wheel decision, in the order the reference makes it.
+         *
+         * A code the driver has not bound is not answered for -- the press goes on to the head unit,
+         * which is what keeps the car's own wheel keys working. Neither is a press on a head unit
+         * with no session up: DiPlay being installed must not cost the driver their wheel.
+         */
         override fun dispatch(event: KeyEvent): Boolean {
-            val index = CarPlayMediaButton.forKeyCode(event.keyCode) ?: return false
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) send(index)
+            val mappings = mappings()
+            if (!CarPlayMediaKeyMapper.handles(event.keyCode, mappings)) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    DiagLog.i(TAG, "steering key unmapped ${describe(event)} -- left to the head unit")
+                }
+                return false
+            }
+            if (controller == null) {
+                DiagLog.i(TAG, "steering key ${describe(event)} -- no session, left to the head unit")
+                return false
+            }
+            CarPlayMediaKeyMapper.mediaIndex(event.keyCode, event.action, event.repeatCount, mappings)?.let(::send)
             return true
         }
 
+        /** The driver's wheel table as stored. Read per press, as the reference does. */
+        private fun mappings(): SteeringWheelKeyMappings = context
+            ?.let { AirPlayPersistence.loadSteeringWheelKeyMappings(it) }
+            ?: SteeringWheelKeyMappings.DEFAULT
+
         protected fun send(index: Int) {
             val sent = controller?.sendMediaButton(index) ?: false
-            Log.i(TAG, "media key -> CarPlay $index sent=$sent")
+            DiagLog.i(TAG, "media key -> CarPlay $index sent=$sent")
         }
+
+        /** Enough to name the key in a report: the number alone says nothing about which one it was. */
+        protected fun describe(event: KeyEvent) = "keyCode=${event.keyCode} name=${KeyEvent.keyCodeToString(event.keyCode)}"
 
         protected open fun release() {
             val audio = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -347,13 +250,10 @@ internal class CarPlayMediaCallback(
     override fun onMediaButtonEvent(intent: Intent): Boolean {
         @Suppress("DEPRECATION")
         val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return false
-        val index = when (event.keyCode) {
-            KeyEvent.KEYCODE_MEDIA_PLAY,
-            KeyEvent.KEYCODE_MEDIA_PAUSE,
-            CarPlayMediaButton.KEYCODE_BYD_AUTO_MEDIA_PLAY_PAUSE -> CarPlayMediaButton.PLAY_PAUSE
-            else -> CarPlayMediaButton.forKeyCode(event.keyCode) ?: return false
-        }
-        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) send(index, null)
+        // The same table the broadcast path reads. A press the driver has not bound is declined here
+        // rather than eaten, so the head unit's own handling of that key still happens.
+        if (!CarPlayMediaKeyMapper.handles(event.keyCode)) return false
+        CarPlayMediaKeyMapper.mediaIndex(event.keyCode, event.action, event.repeatCount)?.let { send(it, null) }
         return true
     }
 }

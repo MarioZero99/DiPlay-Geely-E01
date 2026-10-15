@@ -30,7 +30,12 @@ object CarPlayMediaButton {
      * would never match it.
      *
      * ECARX spells the seek pair `KEYCODE_SEEK_REVIOUS` and `KEYCODE_R_SEEK_REVIOUS`; the names here
-     * use the correct spelling. See `EcarxKeyInterceptor` for how the wheel reaches DiPlay.
+     * use the correct spelling.
+     *
+     * Nothing asks the head unit for these any more. This head unit translates them into the standard
+     * codes before they reach an app (`200088` arrives as `KEYCODE_MEDIA_PREVIOUS`), so the wheel is
+     * read through `SteeringWheelKeyMappings` -- and that table holds Android's codes only, which is
+     * what keeps a vendor code like the car's own menu key out of DiPlay's hands.
      */
     const val KEYCODE_ECARX_MEDIA_PLAY_PAUSE = 200085
     const val KEYCODE_ECARX_MEDIA_NEXT = 200087

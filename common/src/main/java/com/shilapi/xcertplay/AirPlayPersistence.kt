@@ -70,6 +70,7 @@ object AirPlayPersistence {
     private const val KEY_SAFE_AREA_DRAW_OUTSIDE = "safe_area_draw_outside"
     private const val KEY_AUTO_START_ON_BOOT = "auto_start_on_boot"
     private const val KEY_AUTO_CAR_HOTSPOT = "auto_car_hotspot"
+    private const val KEY_STEERING_WHEEL_MAPPINGS = "steering_wheel_key_mappings"
     private const val KEY_LOCATION_REPORTING_ENABLED = "location_reporting_enabled"
     private const val KEY_MFI_TARGET = "mfi_target"
     private const val KEY_MFI_I2C_PATH = "mfi_i2c_path"
@@ -308,6 +309,31 @@ object AirPlayPersistence {
     fun loadAutoStartOnBoot(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_AUTO_START_ON_BOOT, false)
+
+    /**
+     * The driver's wheel table, or the default when nothing usable is stored.
+     *
+     * A blob this build cannot read is treated as absent rather than half-honoured: the default wheel
+     * works, where a partly-read one is a wheel whose keys quietly do nothing.
+     */
+    fun loadSteeringWheelKeyMappings(context: Context): SteeringWheelKeyMappings =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_STEERING_WHEEL_MAPPINGS, null)
+            ?.let { SteeringWheelKeyMappingsCodec.decode(it) }
+            ?: SteeringWheelKeyMappings.DEFAULT
+
+    fun saveSteeringWheelKeyMappings(context: Context, mappings: SteeringWheelKeyMappings) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_STEERING_WHEEL_MAPPINGS, SteeringWheelKeyMappingsCodec.encode(mappings))
+            .apply()
+    }
+
+    /** Back to the two track codes the wheel is known to send here. */
+    fun resetSteeringWheelKeyMappings(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .remove(KEY_STEERING_WHEEL_MAPPINGS)
+            .apply()
+    }
 
     fun saveAutoStartOnBoot(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()

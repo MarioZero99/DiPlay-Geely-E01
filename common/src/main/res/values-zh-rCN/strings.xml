@@ -421,8 +421,6 @@
     <string name="turn_card_horizontal">转向提示卡 · 水平位置</string>
     <string name="turn_card_vertical">转向提示卡 · 垂直位置</string>
     <string name="reset_turn_card_to_centre">将转向提示卡重置到中央</string>
-    <string name="wheel_key_service_label">DiPlay 方向盘按键</string>
-    <string name="wheel_key_service_description">让 DiPlay 为 CarPlay 接管方向盘的媒体按键。不开启时车机可能会把这些按键留给自己处理，导致 CarPlay 显示时方向盘无反应。音量键及其他按键不受影响。</string>
     <string name="usb_auto_confirm_desc">自动勾选「始终允许」并确认 Android 的 USB 配件授权弹窗，用于 CarPlay</string>
     <string name="diagnostic_report_saved_in_app">由于公共保存位置不可用，报告已私密保存到 DiPlay。您可以在此分享或查看报告。不会自动发送任何内容。</string>
     <string name="diagnostic_report_saved_to_path">报告已保存到：\n%1$s\n\n您也可以在此分享或查看报告。不会自动发送任何内容。</string>

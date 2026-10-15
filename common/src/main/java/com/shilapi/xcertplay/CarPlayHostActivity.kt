@@ -54,7 +54,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import com.shilapi.xcertplay.airplay.CarPlayMediaButton
 import com.shilapi.xcertplay.airplay.AirPlayConfig
 import com.shilapi.xcertplay.airplay.AirPlayDisplaySettings
 import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeBasis
@@ -838,16 +837,11 @@ class CarPlayHostActivity : ComponentActivity() {
         }
     }
 
-    // The steering-wheel voice key reaches the focused window; while CarPlay is on screen it opens Siri.
-    @Suppress("RestrictedApi")
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (!CarPlayMediaButton.opensSiri(event.keyCode)) return super.dispatchKeyEvent(event)
-        if (event.action == KeyEvent.ACTION_UP) {
-            val sent = controller?.requestSiri() == true
-            appendLog("Siri: voice key ${event.keyCode} sent=$sent")
-        }
-        return true
-    }
+    // The wheel's voice key is deliberately not answered here. It reaches the focused window, but on
+    // this car the press opens the head unit's own voice assistant whatever DiPlay answers -- the head
+    // unit does that in its own layer -- so consuming it only took a key away from the car. What
+    // DiPlay answers for is the driver's table in SteeringWheelKeyMappings, and the wheel's media keys
+    // come in on the media button paths, not here.
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)

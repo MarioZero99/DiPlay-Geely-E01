@@ -421,8 +421,6 @@
     <string name="turn_card_horizontal">Turn card · horizontal</string>
     <string name="turn_card_vertical">Turn card · vertical</string>
     <string name="reset_turn_card_to_centre">Reset turn card to centre</string>
-    <string name="wheel_key_service_label">DiPlay steering wheel keys</string>
-    <string name="wheel_key_service_description">Lets DiPlay take the steering wheel\'s media keys for CarPlay. Without it the car may keep those presses for itself, which is why the wheel does nothing while CarPlay is on screen. Volume and every other key are unaffected.</string>
     <string name="usb_auto_confirm_desc">Automatically ticks Always allow and confirms the Android USB accessory prompt for CarPlay</string>
     <string name="diagnostic_report_saved_in_app">Your report was saved privately in DiPlay because a public save location was unavailable. Share it or view it here. Nothing is sent automatically.</string>
     <string name="diagnostic_report_saved_to_path">Your report was saved to:\n%1$s\n\nYou can also share it or view it here. Nothing is sent automatically.</string>
