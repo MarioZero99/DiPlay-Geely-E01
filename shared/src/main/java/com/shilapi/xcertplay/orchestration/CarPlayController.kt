@@ -1923,7 +1923,7 @@ class CarPlayController(
             // One radio cannot be a station and an access point at once, so the car's own hotspot has
             // to go before the car can join the driver's network. This is the only place DiPlay
             // switches a hotspot off, and it never switches one on.
-            val wasOn = CarHotspotStatus.isEnabled(appContext) == true
+            val hotspotWas = CarHotspotStatus.isEnabled(appContext)
             val refused = CarHotspotController(appContext).releaseForStationMode()
             if (refused != null) {
                 throw IOException(
@@ -1932,8 +1932,15 @@ class CarPlayController(
                 )
             }
             debugLog(
-                "wireless car hotspot ${if (wasOn) "switched off" else "already off"}; " +
-                    "the car will join the driver's Wi-Fi network instead",
+                "wireless car hotspot " + when (hotspotWas) {
+                    true -> "switched off"
+                    false -> "already off"
+                    // The same unreadable answer that let releaseForStationMode() return without
+                    // trying. Calling it "already off" would be reporting a failed reflection as a
+                    // fact about the hotspot, and the next thing the driver sees is a Wi-Fi that will
+                    // not come up — looking for a network problem instead of a hotspot left on.
+                    null -> "state unreadable, asked to switch it off"
+                } + "; the car will join the driver's Wi-Fi network instead",
             )
         }
         val manager: WirelessHotspotManager = when (hotspotMode) {

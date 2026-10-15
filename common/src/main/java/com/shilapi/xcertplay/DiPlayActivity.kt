@@ -223,7 +223,14 @@ class DiPlayActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
-        page = intent.getStringExtra("page") ?: "home"; render()
+        // A second tap on the app icon arrives here carrying the launcher's intent, which names no
+        // page — so the default would take the driver off the firmware page while a script is writing
+        // to `/system`, and the back key would stop being swallowed with it. The watch would put them
+        // back within a beat, which is a page that flickers away and back under their hands; not
+        // moving is better, and it is what the page is for.
+        if (!firmwareRunning()) {
+            page = intent.getStringExtra("page") ?: "home"; render()
+        }
         handleWirelessRecovery()
     }
     override fun onSaveInstanceState(outState: Bundle) { outState.putString("page", page); outState.putBoolean("pending_car_hotspot", pendingCarHotspotSetup); super.onSaveInstanceState(outState) }
@@ -235,6 +242,10 @@ class DiPlayActivity : ComponentActivity() {
             return
         }
         handler.removeCallbacks(tick); handler.post(tick)
+        // Back from whatever took the screen away. Re-armed from what it was watching rather than
+        // from a fresh look: if the operation ended while the app was away, the first tick is what
+        // finds that out, and it stops itself there.
+        maintenanceWatched?.let { startWatchingMaintenance(it) }
         registerUsbTopology()
         // Back from the car settings: refresh the car hotspot reminder on the home page.
         // Opening the app never starts a connection. Wireless or USB is chosen on the connect button.
@@ -244,9 +255,16 @@ class DiPlayActivity : ComponentActivity() {
     override fun onPause() {
         unregisterUsbTopology()
         handler.removeCallbacks(tick)
+        // Taken off the queue as well, and put back in onResume. What it does is a root round trip on
+        // the same Binder the write is using, every 700 ms, and nothing on the screen is being drawn
+        // while this is paused — the head unit has between 26 and 33 MB free and the install is
+        // running in it. [maintenanceWatched] is deliberately left set: it is what onResume re-arms
+        // from, and what tells the next tick whether there is still anything to watch.
+        handler.removeCallbacks(maintenanceTick)
         super.onPause()
     }
     override fun onDestroy() {
+        handler.removeCallbacks(maintenanceTick)
         releaseAdapterPage()
         super.onDestroy()
     }
@@ -405,6 +423,12 @@ class DiPlayActivity : ComponentActivity() {
         right.addView(button(getString(R.string.settings), false) { page = "settings"; render() }, matchButton())
         right.addView(label(getString(R.string.make_diplay_feel_right_for_your_car), 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(0, dp(10), 0, dp(24)) })
         right.addView(label("${getString(R.string.home_public_preview)}${version()}", 12, MUTED).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) letterSpacing = .08f
+        })
+        // Who this port is by, on the line under the version it belongs to. A fork is read as the
+        // project it forked from unless it says otherwise, and this one is not the upstream author's.
+        right.addView(label(getString(R.string.home_author), 12, MUTED).apply {
+            setPadding(0, dp(6), 0, 0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) letterSpacing = .08f
         })
         if (wide) {
@@ -1126,7 +1150,9 @@ class DiPlayActivity : ComponentActivity() {
     private val maintenanceTick = object : Runnable {
         override fun run() {
             val hop = maintenanceWatched ?: return
-            if (isFinishing) return
+            // isDestroyed as well as isFinishing: recreate() destroys an instance that is not
+            // finishing, and a tick left over from one would go on drawing a page onto it.
+            if (isFinishing || isDestroyed) return
             hopMaintenanceAt = 0L
             refreshHopMaintenance(hop)
             if (firmwareRunning()) handler.postDelayed(this, HOP_MAINTENANCE_WATCH_MILLIS)

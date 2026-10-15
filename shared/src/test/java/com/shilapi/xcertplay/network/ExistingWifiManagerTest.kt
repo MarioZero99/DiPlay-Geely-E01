@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -91,7 +92,7 @@ class ExistingWifiManagerTest {
 
             assertNull(info.passphrase)
             assertEquals(Iap2WirelessSecurity.WPA_WPA2, info.security)
-            assertTrue(diagnostics.any { it.contains("savedPassword=absent") })
+            assertTrue(diagnostics.any { it.contains("credentials=absent") })
         }
     }
 
@@ -101,7 +102,29 @@ class ExistingWifiManagerTest {
 
         assertTrue(diagnostics.none { it.contains("pocket-password") })
         assertTrue(diagnostics.any { it.contains("Existing Wi-Fi attached") })
-        assertTrue(diagnostics.any { it.contains("savedPassword=present") })
+        assertTrue(diagnostics.any { it.contains("credentials=present") })
+    }
+
+    /**
+     * The network's name and the verdict on its key are on separate lines, and the verdict's line has
+     * neither `ssid=` nor the word the report redactor keys on.
+     *
+     * Not tidiness. The redactor drops a line carrying a credential keyword — the whole line, not the
+     * field — and `ssid` and `pass…` are both on its list. While the name and the verdict shared a
+     * line, the one thing this whole path is gambled on arrived in the report as `[withheld]`, and the
+     * driver had no way to learn whether this head unit hands over a saved key at all.
+     */
+    @Test
+    fun theNetworkNameIsKeptOffTheLineThatCarriesTheVerdict() {
+        manager().use { start(it) }
+
+        val verdict = diagnostics.first { it.contains("Existing Wi-Fi details") }
+        assertTrue("the verdict is on it", verdict.contains("credentials="))
+        assertFalse("the name is not", verdict.contains("ssid="))
+        assertFalse(
+            "and neither is the word the redactor drops lines for",
+            verdict.contains("assword", ignoreCase = true),
+        )
     }
 
     @Test

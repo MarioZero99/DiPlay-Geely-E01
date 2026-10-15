@@ -130,10 +130,17 @@ class ExistingWifiManager(
         if (current == null || !sameLink(current) || invalidated.get()) {
             throw IOException("The Wi-Fi connection changed while DiPlay was reading it; connect again")
         }
+        // Two lines, and the split is the whole point of them. The report's redactor drops a line that
+        // carries a credential keyword — whole, not field by field — and both `ssid` and `pass…` are on
+        // its list. One line carrying both the network's name and whether the platform handed the key
+        // over arrives in the report as `[withheld: credential or device name]` and answers nothing.
+        // The name goes on the line that gets dropped: it is a device name and the report is not where
+        // it belongs, and `adb logcat` has it in full. What the driver has to read — whether this head
+        // unit gives up the key at all — goes on a line with no keyword on it, so it survives.
+        onDiagnostic("Existing Wi-Fi attached ssid=${attached.ssid}")
         onDiagnostic(
-            "Existing Wi-Fi attached iface=${attached.interfaceName} host=${attached.host.hostAddress} " +
-                "ssid=${attached.ssid} " +
-                "savedPassword=${if (credentials.passphrase == null) "absent" else "present"} " +
+            "Existing Wi-Fi details iface=${attached.interfaceName} host=${attached.host.hostAddress} " +
+                "credentials=${if (credentials.passphrase == null) "absent" else "present"} " +
                 "channel=$channel security=${credentials.security}",
         )
         return WirelessHotspotInfo(

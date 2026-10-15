@@ -141,6 +141,34 @@ class FirmwarePageUiTest {
     }
 
     /**
+     * A second tap on the app icon does not take the driver off the page either.
+     *
+     * The activity is `singleTop` with a launcher filter, so that second tap arrives as an intent
+     * that names no page — and the default is the home page, with the back key unswallowed along with
+     * it. The watch would put them back within a beat, which is the page flickering away and back
+     * under their hands; refusing the intent is what the lock is for.
+     */
+    @Test fun aSecondTapOnTheIconDoesNotLeaveTheWaitingPage() {
+        hop.running = true
+        hop.status = CarBluetoothMaintenanceStatus.RUNNING
+        hop.currentStep = 5
+        val controller = Robolectric.buildActivity(
+            DiPlayActivity::class.java,
+            Intent(RuntimeEnvironment.getApplication(), DiPlayActivity::class.java)
+                .putExtra("page", "firmware"),
+        ).setup()
+        val activity = controller.get()
+        settled(activity)
+
+        // Read before the looper is idled, and that is the whole point of the test: the watch puts the
+        // page back within a beat either way, so an assertion made after it has run cannot tell the
+        // two apart. What is being pinned is that the driver never sees the other page at all.
+        controller.newIntent(Intent(RuntimeEnvironment.getApplication(), DiPlayActivity::class.java))
+
+        assertTrue("still on the waiting page", heading in texts(activity))
+    }
+
+    /**
      * Once it is over the page says so and lets the driver go.
      *
      * The operation ends on the head unit, not here, so this is the transition that matters: the page
