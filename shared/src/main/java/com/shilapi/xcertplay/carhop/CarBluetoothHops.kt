@@ -34,25 +34,50 @@ object CarBluetoothHops {
     @Volatile
     private var hop: CarBluetoothHop? = null
 
+    @Volatile
+    private var overridden = false
+
+    @Volatile
+    private var testHop: CarBluetoothHop? = null
+
     /** This build's hop, or null when it has none. */
     val active: CarBluetoothHop?
-        get() {
-            if (!resolved) load()
-            return hop
-        }
+        get() = if (overridden) testHop else load()
+
+    /**
+     * Puts a hop in place of whatever this build has, for the rest of the process. Passing null says
+     * this build has none.
+     *
+     * For tests, and needed rather than nice, for the reason
+     * [com.shilapi.xcertplay.transport.adapter.AdapterRoutes] gives for its own: a build that carries
+     * the hop has it on the test classpath, so without this every test that reaches the app's own
+     * start-up would pass or fail according to whether the machine that ran it was given
+     * `-PvendorHopDir`, and a suite that is green either way is evidence of nothing.
+     */
+    fun override(hop: CarBluetoothHop?) {
+        testHop = hop
+        overridden = true
+    }
+
+    /** Gives this build its own answer back, after [override]. */
+    fun resetOverride() {
+        overridden = false
+        testHop = null
+    }
 
     /** This build's hop, when it can open the session's Bluetooth leg as well. */
     internal val transport: CarBluetoothTransportHop?
         get() = active as? CarBluetoothTransportHop
 
     @Synchronized
-    private fun load() {
-        if (resolved) return
+    private fun load(): CarBluetoothHop? {
+        if (resolved) return hop
         hop = try {
             Class.forName(VENDOR_HOP_CLASS).getDeclaredConstructor().newInstance() as CarBluetoothHop
         } catch (_: ClassNotFoundException) {
             null
         }
         resolved = true
+        return hop
     }
 }

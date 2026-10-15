@@ -1,9 +1,33 @@
 package com.shilapi.xcertplay.network
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CarHotspotControllerTest {
+    @Test
+    fun aSwitchNobodyAskedForNeverSpendsTheDriversWifi() {
+        // Opening the app is not the driver asking for a session, so an attempt that cannot turn the
+        // hotspot on must leave their Wi-Fi -- and on this head unit their ADB over it -- where it was.
+        assertEquals(
+            listOf(false),
+            hotspotEnableAttempts(
+                mayReleaseStationMode(spendDriverWifi = false, stationEnabled = true),
+            ),
+        )
+    }
+
+    @Test
+    fun aSwitchTheDriverAskedForMaySpendIt() {
+        assertTrue(mayReleaseStationMode(spendDriverWifi = true, stationEnabled = true))
+    }
+
+    @Test
+    fun thereIsNothingToSpendWhenStationModeIsAlreadyOff() {
+        assertFalse(mayReleaseStationMode(spendDriverWifi = true, stationEnabled = false))
+    }
+
     @Test
     fun leavesStationModeAloneWhenItIsAlreadyOff() {
         assertEquals(listOf(false), hotspotEnableAttempts(stationEnabled = false))

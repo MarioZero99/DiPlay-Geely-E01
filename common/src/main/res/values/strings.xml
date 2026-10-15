@@ -106,6 +106,8 @@
     <string name="audio">Audio</string>
     <string name="audio_routing">Audio routing</string>
     <string name="auto">Auto</string>
+    <string name="auto_open_car_hotspot">Turn on the car hotspot at start</string>
+    <string name="auto_open_car_hotspot_help">DiPlay switches the car’s own hotspot on as it opens, so you do not have to. The car cannot stay on another Wi-Fi network while the hotspot is up.</string>
     <string name="auto_start_on_boot">Auto-start on boot</string>
     <string name="automatic_cluster_map_setup">Automatic cluster map setup</string>
     <string name="automatic_connection">Automatic connection</string>

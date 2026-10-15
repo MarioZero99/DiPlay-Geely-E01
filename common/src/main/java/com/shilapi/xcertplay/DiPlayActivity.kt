@@ -51,6 +51,7 @@ import com.shilapi.xcertplay.carhop.CarBluetoothPhone
 import com.shilapi.xcertplay.host.BuildConfig
 import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.media.NavigationAudioStream
+import com.shilapi.xcertplay.network.CarHotspotController
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.WirelessGap
@@ -204,6 +205,7 @@ class DiPlayActivity : ComponentActivity() {
         render()
         handleWirelessRecovery()
         startVendorHopInBackground()
+        wakeCarHotspotInBackground()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val parent = parentOf(page)
@@ -1143,11 +1145,41 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     /**
+     * Brings the car's own hotspot up as the app opens, when the driver has asked for that.
+     *
+     * Off the main thread: the firmware is polled until it reports the hotspot up, which is seconds on
+     * this head unit, and the page is redrawn once it is done rather than while it is happening.
+     *
+     * The driver's Wi-Fi is never spent on this — `spendDriverWifi = false` in
+     * [CarHotspotController.ensureEnabled] — because nobody asked for a session here, and on this head
+     * unit their ADB goes over that same Wi-Fi.
+     */
+    private fun wakeCarHotspotInBackground() {
+        val mode = AirPlayPersistence.loadWirelessHotspotMode(this)
+        if (!shouldWakeCarHotspotOnStartup(AirPlayPersistence.loadAutoCarHotspot(this), mode)) return
+        Thread({
+            DiagLog.i(TAG_CAR_HOTSPOT, "app-start hotspot begin mode=$mode")
+            val result = CarHotspotController(applicationContext)
+                .ensureEnabled(CAR_HOTSPOT_AUTO_ENABLE_TIMEOUT_MILLIS, spendDriverWifi = false)
+            DiagLog.i(TAG_CAR_HOTSPOT, "app-start hotspot ${result.name.lowercase()} detail=${result.reason}")
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                if (page == "home" || page == "wireless") render()
+            }
+        }, "car-hotspot-start").apply { isDaemon = true }.start()
+    }
+
+    /**
      * Asks the hop to put itself in place, off the main thread, and redraws when it is done.
      *
      * Cheap when there is nothing to do: the hop answers from the socket, without a round trip, when
      * its service is already up. Only one attempt runs at a time, so a page that redraws often cannot
      * turn this into a stream of root calls.
+     *
+     * The radio is put right after the hop is in place rather than before: on this head unit the switch
+     * goes through the vendor's own process, and the hijack is what decides which process that is.
+     * Nothing gates it — the car's Bluetooth is what the phone connects to, and a driver whose radio is
+     * off would otherwise find out by failing to connect.
      */
     private fun startVendorHopInBackground() {
         val hop = vendorHop(this) ?: return
@@ -1155,6 +1187,7 @@ class DiPlayActivity : ComponentActivity() {
         hopStartInFlight = true
         Thread({
             runCatching { hop.onAppStart(this) }
+            runCatching { hop.ensureRadioOn(this) }
             runOnUiThread {
                 hopStartInFlight = false
                 if (isFinishing) return@runOnUiThread
@@ -1260,6 +1293,9 @@ class DiPlayActivity : ComponentActivity() {
                 card.addView(button("${getString(R.string.edit_saved_hotspot_prefix)}${hotspotSsid()}", false) { editHotspotCredentials() }, matchButton(12, 60))
             }
             card.addView(label(if (pendingCarHotspotSetup) getString(R.string.finish_setup_save_your_hotspot_details_to_use_this_mode) else if (carHotspotOff()) getString(R.string.hotspot_details_off) else getString(R.string.hotspot_details_saved), 15, if (carHotspotOff()) WARNING else MUTED).apply { setPadding(0, dp(12), 0, 0) })
+            // Off by default, and offered only here: switching the car's hotspot on spends the car's
+            // Wi-Fi, so it is not something to start doing on a head unit whose driver never asked.
+            toggle(card, getString(R.string.auto_open_car_hotspot), getString(R.string.auto_open_car_hotspot_help), AirPlayPersistence.loadAutoCarHotspot(this)) { AirPlayPersistence.saveAutoCarHotspot(this, it) }
         } else {
             card.addView(label(getString(R.string.turn_the_car_s_wi_fi_switch_on_allow_location_nearby_devic), 16, MUTED))
             card.addView(button(getString(R.string.open_car_wi_fi_settings), false) { openCarClientWifiSettings() }, matchButton(12, 60))
@@ -2255,6 +2291,12 @@ class DiPlayActivity : ComponentActivity() {
 
         /** How often the page re-asks while an action runs, so the step being attempted moves. */
         private const val HOP_MAINTENANCE_WATCH_MILLIS = 700L
+
+        /** Where the app-start hotspot switch reports itself, beside the connect-time one. */
+        private const val TAG_CAR_HOTSPOT = "DiPlay-CarHotspot"
+
+        /** The same budget the connect-time switch gets: the firmware is polled until it reports. */
+        private const val CAR_HOTSPOT_AUTO_ENABLE_TIMEOUT_MILLIS = 15_000L
 
         private val BG = Color.rgb(12, 17, 27)
         private val SURFACE = Color.rgb(21, 30, 44)

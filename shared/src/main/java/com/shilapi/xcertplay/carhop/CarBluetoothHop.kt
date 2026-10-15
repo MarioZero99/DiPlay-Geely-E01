@@ -79,6 +79,21 @@ interface CarBluetoothHop {
         // Nothing by default.
     }
 
+    /**
+     * Switches the head unit's own Bluetooth on when it is off, as the app opens.
+     *
+     * Best-effort and off the main thread, like [onAppStart]. Worth separating from it: this is not
+     * about a session. The radio is what the driver's phone connects to at all, so it is put right
+     * whether or not the hop is [ready], and a head unit whose Bluetooth has been switched off is one
+     * where nothing else this app does would have worked.
+     *
+     * Where the radios belong to a vendor service, `BluetoothAdapter` does not reach them — only the
+     * hop can — so a build with no hop has no one to ask and is not worse off for it.
+     */
+    fun ensureRadioOn(context: Context) {
+        // Nothing by default.
+    }
+
     /** The phones the head unit reports. Blocking — callers stay off the main thread. */
     fun connectedPhones(context: Context): List<CarBluetoothPhone>
 

@@ -275,6 +275,20 @@ class SettingsPagesUiTest {
         assertTrue("the connect step is still there", "3 · Connect" in shown)
     }
 
+    /**
+     * The switch that lets the app bring the car's own hotspot up as it opens.
+     *
+     * It is drawn where the car hotspot is the mode, which is the only mode whose access point the app
+     * does not bring up itself at connect time. What the switch means for the other two modes is in
+     * [CarHotspotAutoStartTest]; what it costs the driver is in `CarHotspotController`.
+     */
+    @Test fun theCarHotspotIsOfferedASwitchToComeUpOnItsOwn() {
+        assertTrue(
+            "the switch is offered where the car hotspot is the mode",
+            "Turn on the car hotspot at start" in texts(open("wireless")),
+        )
+    }
+
     /** The step is named for the leg it is, not for the gesture the leg used to hide behind. */
     @Test fun theWirelessStepsAreNamedForTheirLegs() {
         val shown = texts(open("wireless"))

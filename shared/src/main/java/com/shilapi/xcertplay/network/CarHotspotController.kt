@@ -29,6 +29,17 @@ internal fun releasingStationModeCouldHelp(previous: HotspotStartResult): Boolea
 }
 
 /**
+ * Whether an attempt may release station mode for one more try.
+ *
+ * A switch the driver asked for may spend it: the session cannot start otherwise, and [enableHotspot]
+ * puts it back when the retry fails too. A switch nobody asked for — the app opening on its own — must
+ * not: the driver's Wi-Fi, and on this head unit their ADB over it, would go with it, and they never
+ * asked for a session that needed the radio.
+ */
+internal fun mayReleaseStationMode(spendDriverWifi: Boolean, stationEnabled: Boolean): Boolean =
+    spendDriverWifi && stationEnabled
+
+/**
  * Makes the attempts [hotspotEnableAttempts] asks for, and puts the driver's Wi-Fi back if the hotspot
  * still did not come on.
  *
@@ -61,7 +72,7 @@ internal fun enableHotspot(
  * Why the switch did not finish. The driver is shown [reason], so a firmware that gates the
  * permission is reported differently from a car that simply would not start its hotspot.
  */
-internal enum class HotspotStartResult(val reason: String) {
+enum class HotspotStartResult(val reason: String) {
     READY("the hotspot is on"),
     NO_WIFI_SERVICE("there is no Wi-Fi service"),
     UNSUPPORTED("this firmware does not expose the hotspot API"),
@@ -84,7 +95,7 @@ internal enum class HotspotStartResult(val reason: String) {
  * tethering route other builds take (`IConnectivityManager.startTethering` with a caller package)
  * does not exist before Android 11, so neither would ever run here.
  */
-internal class CarHotspotController(context: Context) {
+class CarHotspotController(context: Context) {
     private val appContext: Context = context.applicationContext ?: context
     private val wifi = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
 
@@ -98,15 +109,19 @@ internal class CarHotspotController(context: Context) {
         }.getOrNull()
     }
 
-    /** Turns the hotspot on when it is off and waits for the firmware to report it enabled. */
-    fun ensureEnabled(timeoutMillis: Long): HotspotStartResult {
+    /**
+     * Turns the hotspot on when it is off and waits for the firmware to report it enabled.
+     *
+     * [spendDriverWifi] is false for a switch the driver did not ask for — see [mayReleaseStationMode].
+     */
+    fun ensureEnabled(timeoutMillis: Long, spendDriverWifi: Boolean = true): HotspotStartResult {
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
         if (CarHotspotStatus.isEnabled(appContext) == true) return HotspotStartResult.READY
         val wifi = wifi ?: return HotspotStartResult.NO_WIFI_SERVICE
         val setAp = setApEnabled ?: return HotspotStartResult.UNSUPPORTED
 
         return enableHotspot(
-            stationEnabled = wifi.isWifiEnabled,
+            stationEnabled = mayReleaseStationMode(spendDriverWifi, wifi.isWifiEnabled),
             releaseStationMode = { wifi.isWifiEnabled = false },
             restoreStationMode = { wifi.isWifiEnabled = true },
         ) { attemptEnable(setAp, wifi, timeoutMillis) }
