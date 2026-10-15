@@ -2116,7 +2116,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun currentWirelessReadiness(): WirelessReadiness {
-        val manual = AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL
+        val mode = AirPlayPersistence.loadWirelessHotspotMode(this)
         val hop = DiPlayPreferences.bluetoothHop(this)
         val plugged = AdapterRoutes.active?.present(this) == true
         // The adapter radio is the only one whose gaps read the step line, and that line is the adapter's own
@@ -2131,13 +2131,14 @@ class DiPlayActivity : ComponentActivity() {
         }
         return WirelessReadinessCheck.assess(
             WirelessReadinessInput(
-                credentialsSaved = !manual || hotspotError(hotspotSsid(), hotspotPassword()) == null,
-                hotspotOn = !manual || !carHotspotOff(),
+                credentialsSaved = hotspotError(hotspotSsid(), hotspotPassword()) == null,
+                hotspotOn = !carHotspotOff(),
                 hop = hop,
                 phoneChosen = phoneChosen,
                 carBluetoothOn = carBluetoothOn(),
                 adapterPlugged = plugged,
                 adapter = if (plugged || hop == WirelessBluetoothHop.USB_ADAPTER) seen else null,
+                mode = mode,
             ),
         )
     }
@@ -2145,6 +2146,7 @@ class DiPlayActivity : ComponentActivity() {
     private fun gapText(gap: WirelessGap, adapter: WirelessAdapterStatus?): String = when (gap) {
         WirelessGap.HOTSPOT_CREDENTIALS -> getString(R.string.gap_hotspot_credentials)
         WirelessGap.HOTSPOT_OFF -> getString(R.string.gap_hotspot_off)
+        WirelessGap.HOTSPOT_ON -> getString(R.string.gap_car_hotspot_on)
         WirelessGap.RADIO_NOT_CHOSEN -> getString(R.string.gap_radio)
         WirelessGap.CAR_BLUETOOTH_OFF -> getString(carBluetoothOffText(AdapterRoutes.available))
         WirelessGap.PHONE_NOT_CHOSEN -> getString(R.string.gap_phone)

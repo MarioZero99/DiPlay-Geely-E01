@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.transport
 
 import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -68,6 +69,38 @@ class WirelessReadinessCheckTest {
         assertEquals(waiting, report.adapter)
     }
 
+    /**
+     * One radio cannot be a station and an access point at once, so the two wireless modes want opposite
+     * things of the car's own hotspot. Reading the hotspot the same way for both is what made the same
+     * network mode unreachable while the car's hotspot was on.
+     */
+    @Test fun theSameNetworkModeIsBlockedWhileTheCarsOwnHotspotIsStillOn() {
+        val on = WirelessReadinessCheck.assess(
+            input(mode = WirelessHotspotMode.EXISTING_WIFI, hotspotOn = true, hop = WirelessBluetoothHop.CAR, phoneChosen = true),
+        )
+        val off = WirelessReadinessCheck.assess(
+            input(mode = WirelessHotspotMode.EXISTING_WIFI, hotspotOn = false, hop = WirelessBluetoothHop.CAR, phoneChosen = true),
+        )
+
+        assertEquals(listOf(WirelessGap.HOTSPOT_ON), on.gaps)
+        assertTrue(off.ready)
+    }
+
+    /** The other direction: a mode that is happy with the hotspot on must not be told to turn it off. */
+    @Test fun onlyTheSameNetworkModeCaresAboutTheCarsOwnHotspot() {
+        for (mode in listOf(
+            WirelessHotspotMode.MANUAL,
+            WirelessHotspotMode.WIFI_P2P,
+            WirelessHotspotMode.LOCAL_ONLY_HOTSPOT,
+        )) {
+            val report = WirelessReadinessCheck.assess(
+                input(mode = mode, hotspotOn = true, hop = WirelessBluetoothHop.CAR, phoneChosen = true),
+            )
+
+            assertFalse(mode.name, report.gaps.contains(WirelessGap.HOTSPOT_ON))
+        }
+    }
+
     private fun input(
         credentialsSaved: Boolean = true,
         hotspotOn: Boolean = true,
@@ -76,5 +109,6 @@ class WirelessReadinessCheckTest {
         carBluetoothOn: Boolean = true,
         adapterPlugged: Boolean = false,
         adapter: WirelessAdapterStatus? = null,
-    ) = WirelessReadinessInput(credentialsSaved, hotspotOn, hop, phoneChosen, carBluetoothOn, adapterPlugged, adapter)
+        mode: WirelessHotspotMode = WirelessHotspotMode.MANUAL,
+    ) = WirelessReadinessInput(credentialsSaved, hotspotOn, hop, phoneChosen, carBluetoothOn, adapterPlugged, adapter, mode)
 }

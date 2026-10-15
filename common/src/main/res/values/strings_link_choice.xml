@@ -13,6 +13,7 @@
     <string name="wireless_not_ready">Wireless is not ready</string>
     <string name="gap_hotspot_credentials">The hotspot name and password are not saved. Open connection setup, enter the car hotspot name and password, and save.</string>
     <string name="gap_hotspot_off">The car hotspot is off. Open the car hotspot settings and turn the hotspot on. Use 5 GHz when it is offered. The name and password must match what DiPlay saved.</string>
+    <string name="gap_car_hotspot_on">The car’s own hotspot is still on. Turn it off in the car hotspot settings — the car cannot be on your Wi-Fi and run its own hotspot at the same time.</string>
     <string name="gap_radio">Bluetooth is not chosen yet. In step 2 pick external Bluetooth or the car Bluetooth, then pick the phone. External Bluetooth pairs to the adapter’s name; car Bluetooth pairs to the car.</string>
     <string name="gap_phone">Bluetooth is chosen, but the iPhone is not. Pick your phone from the list in step 2.</string>
     <string name="gap_car_bluetooth">Car Bluetooth is selected, but it is off or this app cannot read it. Open the car Bluetooth settings, turn Bluetooth on, and pair this iPhone. If this car has no Bluetooth data socket, choose external Bluetooth for wireless.</string>

@@ -41,6 +41,12 @@ enum class WirelessHotspotMode {
 enum class WirelessGap {
     HOTSPOT_CREDENTIALS,
     HOTSPOT_OFF,
+
+    /**
+     * The car is running its own hotspot, and this mode needs it off: one radio cannot be an access
+     * point and a station at once.
+     */
+    HOTSPOT_ON,
     RADIO_NOT_CHOSEN,
     CAR_BLUETOOTH_OFF,
     PHONE_NOT_CHOSEN,
@@ -60,6 +66,12 @@ data class WirelessReadinessInput(
      * on one fact about the radio — whether its flow is up — not on which step of its bring-up it is on.
      */
     val adapter: WirelessAdapterStatus?,
+    /**
+     * Which wireless route is being checked. The two hotspot gaps and [WirelessGap.HOTSPOT_ON] are
+     * opposite requirements of the same radio, so which of them apply is decided here rather than by
+     * whoever builds this value: a caller that forgot the mode used to disable both.
+     */
+    val mode: WirelessHotspotMode,
 )
 
 data class WirelessReadiness(
@@ -72,8 +84,19 @@ data class WirelessReadiness(
 object WirelessReadinessCheck {
     fun assess(input: WirelessReadinessInput): WirelessReadiness {
         val gaps = mutableListOf<WirelessGap>()
-        if (!input.credentialsSaved) gaps += WirelessGap.HOTSPOT_CREDENTIALS
-        if (!input.hotspotOn) gaps += WirelessGap.HOTSPOT_OFF
+        // The car's own hotspot, read one way per route: the hotspot modes need it up and configured,
+        // the same-network mode needs it down. Wi-Fi Direct and the local-only hotspot build an access
+        // point of their own and ask nothing of the car's — deliberately left alone here.
+        when (input.mode) {
+            WirelessHotspotMode.MANUAL -> {
+                if (!input.credentialsSaved) gaps += WirelessGap.HOTSPOT_CREDENTIALS
+                if (!input.hotspotOn) gaps += WirelessGap.HOTSPOT_OFF
+            }
+            WirelessHotspotMode.EXISTING_WIFI -> {
+                if (input.hotspotOn) gaps += WirelessGap.HOTSPOT_ON
+            }
+            WirelessHotspotMode.WIFI_P2P, WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> Unit
+        }
         when (input.hop) {
             null -> gaps += WirelessGap.RADIO_NOT_CHOSEN
             WirelessBluetoothHop.CAR -> {
