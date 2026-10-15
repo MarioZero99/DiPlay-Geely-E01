@@ -515,8 +515,9 @@ class DiPlayActivity : ComponentActivity() {
      * two connection methods ask different things of the driver and the rest of the settings have
      * nothing to do with either. What that cost is the reason it is one page again: a setting the driver
      * came here for is now behind a guess about which bucket it was put in, and the head unit is wide
-     * enough to show the cards together -- see [CardColumns]. The pages the hub used to open are still
-     * routes, because the connect flow lands on the wireless one when something is missing.
+     * enough to show the cards together -- see [CardColumns]. The wireless and wired buckets are only
+     * buckets: they were pages of their own as well, which is what a connect that found something
+     * missing used to move the driver onto, and what made "which settings page am I on" a question.
      *
      * The four buckets keep their own headings, so the order below is the order the pages had: the two
      * connection steps first, then everything else.
@@ -1017,7 +1018,7 @@ class DiPlayActivity : ComponentActivity() {
                 if (isFinishing) return@runOnUiThread
                 hopPhones = devices
                 hopPhonesAt = SystemClock.elapsedRealtime()
-                if (page == "wireless") render()
+                if (page == "home") render()
             }
         }, "car-hop-phones").apply { isDaemon = true }.start()
     }
@@ -1359,7 +1360,7 @@ class DiPlayActivity : ComponentActivity() {
             DiagLog.i(TAG_CAR_HOTSPOT, "app-start hotspot ${result.name.lowercase()} detail=${result.reason}")
             runOnUiThread {
                 if (isFinishing) return@runOnUiThread
-                if (page == "home" || page == "wireless") render()
+                if (page == "home") render()
             }
         }, "car-hotspot-start").apply { isDaemon = true }.start()
     }
@@ -1386,7 +1387,7 @@ class DiPlayActivity : ComponentActivity() {
             runOnUiThread {
                 hopStartInFlight = false
                 if (isFinishing) return@runOnUiThread
-                if (page == "home" || page == "wireless") render()
+                if (page == "home") render()
             }
         }, "car-hop-start").apply { isDaemon = true }.start()
     }
@@ -1419,12 +1420,7 @@ class DiPlayActivity : ComponentActivity() {
      * in use stays a button: a leg with nothing chosen and nothing to tap would be asking for a choice it
      * gives no way to make.
      */
-    private fun legChoices(
-        parent: LinearLayout,
-        options: List<WirelessLegOption>,
-        enabled: Boolean = true,
-        onChoose: (Int) -> Unit,
-    ) {
+    private fun legChoices(parent: LinearLayout, options: List<WirelessLegOption>, onChoose: (Int) -> Unit) {
         if (options.isEmpty()) return
         val lone = options.singleOrNull()
         if (lone != null && lone.chosen) {
@@ -1442,11 +1438,7 @@ class DiPlayActivity : ComponentActivity() {
                 if (wide) LinearLayout.LayoutParams(0, -2, 1f).apply { if (index > 0) marginStart = dp(16) }
                 else LinearLayout.LayoutParams(-1, -2),
             )
-            cell.addView(
-                button("${if (option.chosen) "✓  " else ""}${option.title}", option.chosen) { onChoose(index) }
-                    .apply { isEnabled = enabled },
-                matchButton(12, 60),
-            )
+            cell.addView(button("${if (option.chosen) "✓  " else ""}${option.title}", option.chosen) { onChoose(index) }, matchButton(12, 60))
             option.description?.let { cell.addView(label(it, 15, MUTED).apply { setPadding(0, dp(6), 0, dp(12)) }) }
         }
     }
@@ -1474,12 +1466,10 @@ class DiPlayActivity : ComponentActivity() {
         // Left tappable while a session runs: choosing a mode is one of the settings
         // [applyConnectionSetting] can apply, and it asks before it does.
         legChoices(card, modes.map { WirelessLegOption(wirelessModeTitle(it), wirelessModeDescription(it), it == mode) }) { index ->
-            val candidate = modes[index]
             // The choice is written down here, at the moment it is made, for both modes. It used to be
             // written for every mode but the car hotspot, which left the page drawing one mode while
             // storage — and so the connection, and the readiness lines — still held another.
-            pendingCarHotspotSetup = candidate == WirelessHotspotMode.MANUAL
-            applyWirelessLink(candidate)
+            applyWirelessLink(modes[index])
         }
         blockerLines(card, bluetoothLeg = false)
         if (mode == WirelessHotspotMode.MANUAL) {
@@ -1623,16 +1613,24 @@ class DiPlayActivity : ComponentActivity() {
      * copies them off the car's hotspot screen, here they type the network's own password because the
      * platform would not hand DiPlay the copy the car saved.
      */
-    private fun askExistingWifiCredentials(done: (String, String) -> Unit) = askNetworkCredentials(
-        title = getString(R.string.existing_wifi_password_title),
-        hint = getString(R.string.copy_these_from_the_wi_fi_the_car_is_on),
-        nameHint = getString(R.string.wifi_network_name),
-        passwordHint = getString(R.string.wifi_network_password),
-        initialSsid = joinedWifiName().orEmpty(),
-        initialPassphrase = AirPlayPersistence.loadExistingWifiPassphrase(this),
-        validate = ::existingWifiError,
-        done = done,
-    )
+    private fun askExistingWifiCredentials(done: (String, String) -> Unit): Unit {
+        val joined = joinedWifiName()
+        // Only the password saved for *this* network. The stored pair belongs to one network, and
+        // prefilling it under another one's name invites a driver to press Save without retyping —
+        // which writes the wrong password against the right name, and that is a pair the phone will
+        // be handed as though it were correct. A password from the wrong network is worse than none.
+        val saved = joined?.takeIf { AirPlayPersistence.hasExistingWifiPassphrase(this, it) }
+        askNetworkCredentials(
+            title = getString(R.string.existing_wifi_password_title),
+            hint = getString(R.string.copy_these_from_the_wi_fi_the_car_is_on),
+            nameHint = getString(R.string.wifi_network_name),
+            passwordHint = getString(R.string.wifi_network_password),
+            initialSsid = joined.orEmpty(),
+            initialPassphrase = if (saved == null) "" else AirPlayPersistence.loadExistingWifiPassphrase(this),
+            validate = ::existingWifiError,
+            done = done,
+        )
+    }
 
     /** The two fields a network's name and password are typed into, wherever they come from. */
     private fun askNetworkCredentials(
@@ -1749,9 +1747,19 @@ class DiPlayActivity : ComponentActivity() {
         if (CarPlayBackgroundSession.hasSession()) connect(AirPlayPersistence.loadWirelessEnabled(this))
     }
 
-    private fun applyWirelessLink(mode: WirelessHotspotMode) {
+    private fun applyWirelessLink(
+        mode: WirelessHotspotMode,
+        setupPending: Boolean = mode == WirelessHotspotMode.MANUAL,
+        andThen: () -> Unit = {},
+    ) {
         applyConnectionSetting {
+            // Written with the mode, inside the store block, so a driver who is asked to confirm and
+            // then declines is left with both as they were. Setting the flag before the dialog left the
+            // page drawing the car hotspot while storage — and the connection — still held the other
+            // mode, which is the disagreement this change exists to remove.
+            pendingCarHotspotSetup = setupPending
             AirPlayPersistence.saveWirelessHotspotMode(this, mode)
+            andThen()
             toast(getString(R.string.saved_for_your_next_connection))
         }
     }
@@ -1875,9 +1883,20 @@ class DiPlayActivity : ComponentActivity() {
      * sent home for that is a punishment rather than a safeguard.
      */
     private fun applyConnectionSetting(store: () -> Unit) {
-        if (!connectionSettingNeedsConfirm(pageState().session)) {
+        // Read from the session rather than from [pageState]: this runs from a click, which can be long
+        // after the last redraw, and the one-redraw cache would offer to disconnect a session that has
+        // since ended.
+        val session = sessionPhase(CarPlayBackgroundSession.hasSession(), CarPlayBackgroundSession.active)
+        if (session == SessionPhase.Idle) {
             store()
             render()
+            return
+        }
+        if (session == SessionPhase.Connecting) {
+            // No picture to lose, so no question — but the attempt in flight was built from the value
+            // being replaced, and letting it run on would put a picture up on the old one. See 49 §一:
+            // the middle row is "cancel the attempt, then store".
+            CarPlayBackgroundSession.stop { runOnUiThread { store(); render() } }
             return
         }
         AlertDialog.Builder(this)
@@ -2018,11 +2037,8 @@ class DiPlayActivity : ComponentActivity() {
         askHotspotCredentials { ssid, password ->
             // Inside the store block, so a driver who is asked to confirm and then declines has not
             // had the details written down behind the dialog.
-            applyConnectionSetting {
+            applyWirelessLink(WirelessHotspotMode.MANUAL, setupPending = false) {
                 saveHotspotCredentials(ssid, password)
-                pendingCarHotspotSetup = false
-                AirPlayPersistence.saveWirelessHotspotMode(this, WirelessHotspotMode.MANUAL)
-                toast(getString(R.string.saved_for_your_next_connection))
             }
         }
     }
@@ -2158,7 +2174,7 @@ class DiPlayActivity : ComponentActivity() {
         val plugged = AdapterRoutes.active?.present(this) == true
         if (plugged == adapterPluggedSeen) return
         adapterPluggedSeen = plugged
-        if (page == "home" || page == "wireless") render()
+        if (page == "home") render()
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -2189,7 +2205,11 @@ class DiPlayActivity : ComponentActivity() {
         return WirelessReadinessCheck.assess(
             WirelessReadinessInput(
                 credentialsSaved = hotspotError(hotspotSsid(), hotspotPassword()) == null,
-                hotspotOn = !carHotspotOff(),
+                // The car's own access point, straight from the head unit, and null where it will not
+                // say. Not `!carHotspotOff()`: that is a car-hotspot-mode notion, false for every other
+                // mode whatever the hotspot is doing, so reading it here said the hotspot was running
+                // on a head unit that had never been asked — and refused the same-network route over it.
+                hotspotOn = com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this),
                 hop = hop,
                 phoneChosen = phoneChosen,
                 carBluetoothOn = carBluetoothOn(),
@@ -2221,7 +2241,9 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun handleWirelessRecovery() {
         if (page != "wireless-recovery") return
-        page = "wireless"; render()
+        // Home, because "wireless" is not a page any more: setting it left the header saying "Back" on
+        // a screen that was already the home page, and the back key redrew the same thing.
+        page = "home"; render()
         confirmWirelessReset()
     }
 

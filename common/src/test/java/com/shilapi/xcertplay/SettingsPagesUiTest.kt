@@ -344,6 +344,33 @@ class SettingsPagesUiTest {
     }
 
     /**
+     * The same-network route is not refused over a hotspot state the head unit never reported.
+     *
+     * `carHotspotOff()` is a car-hotspot-mode notion: it is true only where the mode is MANUAL *and* the
+     * hotspot is known to be off. Read as its negation for every other mode it says "the car's hotspot
+     * is on" on a head unit that was never asked — and since one radio cannot be an access point and a
+     * station at once, the same-network route was then refused before it started, every time, with the
+     * page telling the driver to turn off a hotspot that was already off.
+     *
+     * The head unit here answers nothing about its access point, which is the case that must not be
+     * read as "on". The other direction — a hotspot the head unit *does* report as running — is pinned
+     * on the rule itself, in `WirelessReadinessCheckTest`.
+     */
+    @Test fun theSameNetworkRouteIsNotRefusedOverAHotspotTheHeadUnitWillNotReport() {
+        AirPlayPersistence.saveWirelessHotspotMode(
+            RuntimeEnvironment.getApplication(),
+            WirelessHotspotMode.EXISTING_WIFI,
+        )
+
+        val shown = texts(open("settings"))
+
+        assertFalse(
+            "the car's own hotspot is not claimed to be running",
+            shown.any { it.startsWith("The car’s own hotspot is still on") },
+        )
+    }
+
+    /**
      * A refused connect leads the page with what it was refused for, and that card has to be recomputed rather
      * than remembered. The driver saves the hotspot details, or turns the hotspot on in the car settings, and
      * comes back — a card holding the readiness captured at the refusal went on saying it was unsaved while

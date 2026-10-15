@@ -103,7 +103,7 @@ class WirelessReadinessCheckTest {
 
     private fun input(
         credentialsSaved: Boolean = true,
-        hotspotOn: Boolean = true,
+        hotspotOn: Boolean? = true,
         hop: WirelessBluetoothHop?,
         phoneChosen: Boolean = false,
         carBluetoothOn: Boolean = true,

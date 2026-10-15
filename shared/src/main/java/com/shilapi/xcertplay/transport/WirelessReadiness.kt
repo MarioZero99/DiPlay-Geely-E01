@@ -55,7 +55,16 @@ enum class WirelessGap {
 
 data class WirelessReadinessInput(
     val credentialsSaved: Boolean,
-    val hotspotOn: Boolean,
+    /**
+     * Whether the car's own hotspot is running, or null where the head unit will not say.
+     *
+     * Nullable because the two routes want opposite things of this one fact and neither may be told
+     * something the head unit never reported. A hotspot mode is missing its access point only when it
+     * is *known* to be off; the same-network mode is blocked only when it is *known* to be on. One
+     * boolean cannot say both, and collapsing the unknown case into either direction is a route that
+     * can never connect on a head unit that keeps its access point to itself.
+     */
+    val hotspotOn: Boolean?,
     val hop: WirelessBluetoothHop?,
     val phoneChosen: Boolean,
     val carBluetoothOn: Boolean,
@@ -90,10 +99,12 @@ object WirelessReadinessCheck {
         when (input.mode) {
             WirelessHotspotMode.MANUAL -> {
                 if (!input.credentialsSaved) gaps += WirelessGap.HOTSPOT_CREDENTIALS
-                if (!input.hotspotOn) gaps += WirelessGap.HOTSPOT_OFF
+                // Only when it is known to be off: a head unit that will not report its access point
+                // must not be told to turn on a hotspot that may well already be running.
+                if (input.hotspotOn == false) gaps += WirelessGap.HOTSPOT_OFF
             }
             WirelessHotspotMode.EXISTING_WIFI -> {
-                if (input.hotspotOn) gaps += WirelessGap.HOTSPOT_ON
+                if (input.hotspotOn == true) gaps += WirelessGap.HOTSPOT_ON
             }
             WirelessHotspotMode.WIFI_P2P, WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> Unit
         }
