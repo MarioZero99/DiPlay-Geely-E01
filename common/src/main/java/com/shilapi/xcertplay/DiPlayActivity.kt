@@ -865,11 +865,7 @@ class DiPlayActivity : ComponentActivity() {
             if (offered.size > 1) {
                 card.addView(label(getString(R.string.choose_bluetooth_before_phone), 16, MUTED).apply { setPadding(0, 0, 0, dp(12)) })
             }
-            legChoices(
-                card,
-                offered.map { WirelessLegOption(getString(bluetoothRadioName(it)), null, it == hop) },
-                enabled = sessionIsIdle(),
-            ) { index ->
+            legChoices(card, offered.map { WirelessLegOption(getString(bluetoothRadioName(it)), null, it == hop) }) { index ->
                 chooseBluetoothRadio(offered[index])
             }
         }
@@ -886,10 +882,11 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun chooseBluetoothRadio(hop: WirelessBluetoothHop) {
         if (hop == DiPlayPreferences.bluetoothHop(this)) return
-        DiPlayPreferences.saveBluetoothHop(this, hop)
-        // The adapter stack may not keep running once the car's own radio is the choice.
-        if (hop == WirelessBluetoothHop.CAR) releaseAdapterPage()
-        render()
+        applyConnectionSetting {
+            DiPlayPreferences.saveBluetoothHop(this, hop)
+            // The adapter stack may not keep running once the car's own radio is the choice.
+            if (hop == WirelessBluetoothHop.CAR) releaseAdapterPage()
+        }
     }
 
     private fun iphoneChoice(card: LinearLayout) {
@@ -1474,11 +1471,9 @@ class DiPlayActivity : ComponentActivity() {
         // that does not need those calls.
         val saved = AirPlayPersistence.loadWirelessHotspotMode(this)
         val mode = displayedHotspotMode(pendingCarHotspotSetup, saved, modes)
-        legChoices(
-            card,
-            modes.map { WirelessLegOption(wirelessModeTitle(it), wirelessModeDescription(it), it == mode) },
-            enabled = sessionIsIdle(),
-        ) { index ->
+        // Left tappable while a session runs: choosing a mode is one of the settings
+        // [applyConnectionSetting] can apply, and it asks before it does.
+        legChoices(card, modes.map { WirelessLegOption(wirelessModeTitle(it), wirelessModeDescription(it), it == mode) }) { index ->
             val candidate = modes[index]
             // The choice is written down here, at the moment it is made, for both modes. It used to be
             // written for every mode but the car hotspot, which left the page drawing one mode while
@@ -1755,9 +1750,10 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun applyWirelessLink(mode: WirelessHotspotMode) {
-        AirPlayPersistence.saveWirelessHotspotMode(this, mode)
-        render()
-        toast(getString(R.string.saved_for_your_next_connection))
+        applyConnectionSetting {
+            AirPlayPersistence.saveWirelessHotspotMode(this, mode)
+            toast(getString(R.string.saved_for_your_next_connection))
+        }
     }
 
     private fun carPlaySizeControl(parent: LinearLayout) {
@@ -1862,6 +1858,38 @@ class DiPlayActivity : ComponentActivity() {
             label(getString(R.string.carplay_is_running_this_needs_it_closed), 15, MUTED)
                 .apply { setPadding(0, dp(10), 0, 0) },
         )
+    }
+
+    /**
+     * Save a setting the next connection is built from.
+     *
+     * Nothing here reconnects on the driver's behalf. Reconnecting would take a value that was just
+     * changed — and may be wrong — and start a whole new attempt with it, which is the shape of the
+     * afternoon this came from: the mode changed, the retry loop kept running on the old one, and
+     * every thirty seconds the screen said the same thing. The session is closed instead, the page
+     * goes home, and the driver chooses wireless or USB when they are ready. One more step, and every
+     * part of it is theirs. See 49 §一 and §D.
+     *
+     * The display settings do not come through here: they go back to `choice(reconnects = true)`,
+     * because a wrong one of those comes back as a picture that is merely the wrong shape, and being
+     * sent home for that is a punishment rather than a safeguard.
+     */
+    private fun applyConnectionSetting(store: () -> Unit) {
+        if (!connectionSettingNeedsConfirm(pageState().session)) {
+            store()
+            render()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.apply_and_disconnect_title))
+            .setMessage(getString(R.string.apply_and_disconnect_body))
+            .setPositiveButton(getString(R.string.apply_and_disconnect)) { _, _ ->
+                CarPlayBackgroundSession.stop {
+                    runOnUiThread { store(); page = "home"; render() }
+                }
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
     }
 
     /**
@@ -1988,9 +2016,14 @@ class DiPlayActivity : ComponentActivity() {
     /** The manual fallback for the hotspot pair, for when auto-fill is not what the driver wants. */
     private fun editHotspotCredentials() {
         askHotspotCredentials { ssid, password ->
-            saveHotspotCredentials(ssid, password)
-            pendingCarHotspotSetup = false
-            applyWirelessLink(WirelessHotspotMode.MANUAL)
+            // Inside the store block, so a driver who is asked to confirm and then declines has not
+            // had the details written down behind the dialog.
+            applyConnectionSetting {
+                saveHotspotCredentials(ssid, password)
+                pendingCarHotspotSetup = false
+                AirPlayPersistence.saveWirelessHotspotMode(this, WirelessHotspotMode.MANUAL)
+                toast(getString(R.string.saved_for_your_next_connection))
+            }
         }
     }
 
@@ -2026,8 +2059,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun saveChosenPhone(address: String, name: String) {
-        DiPlayPreferences.savePhone(this, address, name)
-        render()
+        applyConnectionSetting { DiPlayPreferences.savePhone(this, address, name) }
     }
 
     private fun externalBluetoothSelected() =

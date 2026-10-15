@@ -360,6 +360,9 @@
     <string name="set">设置</string>
     <string name="set_up_once_your_details_stay_saved_for_the_next_drive_cha">只需设置一次，信息会保存供下次驾驶使用。更改将在下次连接时生效。</string>
     <string name="open_settings">去设置</string>
+    <string name="apply_and_disconnect_title">应用并断开 CarPlay</string>
+    <string name="apply_and_disconnect_body">这项设置在连接开始那一刻就被使用，所以正在跑的会话必须先结束。之后会回到首页，由你自己重新选择无线还是有线。</string>
+    <string name="apply_and_disconnect">应用并断开</string>
     <string name="carplay_is_running_this_needs_it_closed">CarPlay 正在运行。要改这一项，请先在首页断开连接。</string>
     <string name="settings">设置</string>
     <string name="setup_needs_attention">设置需要处理</string>

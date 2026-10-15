@@ -360,6 +360,9 @@
     <string name="set">Set</string>
     <string name="set_up_once_your_details_stay_saved_for_the_next_drive_cha">Set up once. Your details stay saved for the next drive. Changes apply to your next connection.</string>
     <string name="open_settings">Open settings</string>
+    <string name="apply_and_disconnect_title">Apply and disconnect CarPlay</string>
+    <string name="apply_and_disconnect_body">This setting is used the moment a connection starts, so the running session has to end. You will be taken back to the home page to choose wireless or USB yourself.</string>
+    <string name="apply_and_disconnect">Apply and disconnect</string>
     <string name="carplay_is_running_this_needs_it_closed">CarPlay is running. Disconnect it on the home page before changing this.</string>
     <string name="settings">Settings</string>
     <string name="setup_needs_attention">Setup needs attention</string>
