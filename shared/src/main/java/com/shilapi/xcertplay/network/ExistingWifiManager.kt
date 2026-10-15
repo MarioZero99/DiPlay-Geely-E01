@@ -62,8 +62,24 @@ class ExistingWifiManager(
     private var interfaceIndex = 0
     private var callbackRegistered = false
 
-    /** What the last look at the platform was still missing, for the message a timeout ends with. */
-    @Volatile private var waitingFor = "a Wi-Fi connection"
+    /**
+     * What the last look at the platform was still missing.
+     *
+     * Set as the wait goes along rather than only at the end: the timeout message names it, and each
+     * change is also logged, so a run that never gets there still says how far it got. Empty until the
+     * first look, which is what makes that first look log.
+     */
+    @Volatile private var waitingFor = ""
+
+    /**
+     * Why the last look for the saved configuration came up empty, for the message that ends the run.
+     *
+     * The three ways it comes up empty — this app not being allowed to read the list, the list not
+     * holding the network the car is on, and the list being empty — all end the same way, and telling
+     * them apart is the whole difference between "grant the permission" and "join the network in the
+     * car's own settings".
+     */
+    @Volatile private var savedDetailsMissing = "the head unit would not say what they are"
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onLost(network: Network) {
@@ -104,8 +120,8 @@ class ExistingWifiManager(
     private fun attach(attached: Attachment): WirelessHotspotInfo {
         val credentials = savedCredentials(attached.ssid, attached.info)
             ?: throw IOException(
-                "The head unit will not show DiPlay the saved details of Wi-Fi network " +
-                    "'${attached.ssid}', and without its security type the phone cannot be told " +
+                "DiPlay cannot read the saved details of Wi-Fi network '${attached.ssid}': " +
+                    "$savedDetailsMissing. Without its security type the phone cannot be told " +
                     "which network to join.",
             )
         val frequencyMHz = attached.info?.frequency?.takeIf { it > 0 }
@@ -193,7 +209,13 @@ class ExistingWifiManager(
     }
 
     private fun waitFor(what: String): Attachment? {
-        waitingFor = what
+        // Said when it changes, not on every turn: the wait runs for up to a minute at five turns a
+        // second, and what a report needs is the order it went through — a connection, then an
+        // interface, then an address, then a name — not five hundred copies of the last one.
+        if (waitingFor != what) {
+            waitingFor = what
+            onDiagnostic("Existing Wi-Fi waiting for $what")
+        }
         return null
     }
 
@@ -213,12 +235,22 @@ class ExistingWifiManager(
 
     @Suppress("DEPRECATION")
     private fun savedCredentials(ssid: String, info: WifiInfo?): ExistingWifiCredentials? {
+        val networkId = info?.networkId ?: -1
         val configurations = try {
             wifi.configuredNetworks
         } catch (_: SecurityException) {
+            savedDetailsMissing = "this app is not allowed to read the head unit's saved networks"
             return null
         }
-        return existingWifiCredentials(configurations, ssid, info?.networkId ?: -1)
+        val credentials = existingWifiCredentials(configurations, ssid, networkId)
+        if (credentials == null) {
+            // Counted, not named: the name is on the screen and in the message around this, and what
+            // the reader has to tell apart here is a list that is empty from a list that is not.
+            savedDetailsMissing =
+                "none of the ${configurations?.size ?: 0} saved networks is the one the car is on " +
+                    "(its id is $networkId)"
+        }
+        return credentials
     }
 
     private fun bandLabel(frequencyMHz: Int?): String = when {
