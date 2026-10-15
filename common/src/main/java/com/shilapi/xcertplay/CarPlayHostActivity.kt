@@ -2118,6 +2118,14 @@ class CarPlayHostActivity : ComponentActivity() {
                             appendLog("Not retrying: the iPhone refused this accessory's host identity")
                         }
 
+                        // Same shape: the hotspot belongs to the car and DiPlay has no permission to switch
+                        // it off, so a retry cannot come out differently. The line on the page already says
+                        // what to do about it, and the retry button is left there for afterwards.
+                        status.reason == CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON -> {
+                            wifiRecoveryButton?.visibility = View.GONE
+                            appendLog("Not retrying: the car's own hotspot is on and DiPlay cannot switch it off")
+                        }
+
                         else -> {
                             wifiRecoveryButton?.visibility = View.GONE
                             reconnectAfterLoss(description)
@@ -2796,6 +2804,7 @@ class CarPlayHostActivity : ComponentActivity() {
                     R.string.failure_wireless_control_channel_closed
                 CarPlayFailureReason.TRANSPORT_ATTACH_FAILED -> R.string.failure_transport_attach_failed
                 CarPlayFailureReason.HOST_ID_REJECTED -> R.string.failure_host_id_rejected
+                CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON -> R.string.failure_car_hotspot_stays_on
                 CarPlayFailureReason.BRING_UP_FAILED -> R.string.failure_bring_up_failed
             },
         )

@@ -165,7 +165,26 @@ enum class CarPlayFailureReason {
      * answers it with an instruction instead of another attempt.
      */
     HOST_ID_REJECTED,
+
+    /**
+     * The car is running its own hotspot and DiPlay cannot switch it off, which the same-network route
+     * needs it to do — one radio cannot be an access point and a station at once.
+     *
+     * Filed with [HOST_ID_REJECTED] rather than as a fault on the wire: retrying changes nothing about
+     * the head unit's state, it only writes the same sentence into the log every thirty seconds. What
+     * differs is that this one needs a person: the screen stops and says to turn the hotspot off in the
+     * car's own settings, with the retry button left for afterwards.
+     */
+    CAR_HOTSPOT_STAYS_ON,
 }
+
+/**
+ * The one thing the same-network route asks of the car, and the car will not do it.
+ *
+ * Carried as its own type rather than as a message because the screen has to tell it apart from every
+ * other bring-up failure: see [CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON].
+ */
+internal class CarHotspotStaysOnException(message: String) : IOException(message)
 
 internal fun isWirelessHandoffInProgress(
     handoffRequested: Boolean,
@@ -188,6 +207,19 @@ internal fun reportsLockdownError(error: Throwable, code: String): Boolean {
         cause = cause.cause
     }
     return false
+}
+
+/**
+ * Which reason a bring-up failure is reported under.
+ *
+ * Two of them have to arrive as themselves because the screen answers them by not retrying: a host
+ * identity the phone refused, and a hotspot the car will not give up. Everything else is a fault on
+ * the wire, and the retry ladder is what that is for.
+ */
+internal fun failureReasonFor(error: Throwable): CarPlayFailureReason = when {
+    error is CarHotspotStaysOnException -> CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON
+    reportsLockdownError(error, "InvalidHostID") -> CarPlayFailureReason.HOST_ID_REJECTED
+    else -> CarPlayFailureReason.BRING_UP_FAILED
 }
 
 /**
@@ -1928,7 +1960,7 @@ class CarPlayController(
             val hotspotWas = CarHotspotStatus.isEnabled(appContext)
             val refused = CarHotspotController(appContext).releaseForStationMode()
             if (refused != null) {
-                throw IOException(
+                throw CarHotspotStaysOnException(
                     "The car hotspot is on and DiPlay could not switch it off: $refused. " +
                         "Turn it off in the car settings and connect again.",
                 )
@@ -2208,13 +2240,7 @@ class CarPlayController(
     private fun fail(error: Throwable) {
         if (closed) return
         onStatus(CarPlayStatus.Failed(
-            // A refused host identity has to arrive as itself: the screen stops retrying for it, and the
-            // general bring-up failure it would otherwise be filed under is retried like any other fault.
-            if (isInvalidHostId(error)) {
-                CarPlayFailureReason.HOST_ID_REJECTED
-            } else {
-                CarPlayFailureReason.BRING_UP_FAILED
-            },
+            failureReasonFor(error),
             error.message ?: error.javaClass.simpleName,
             generateSequence(error) { it.cause }.any { it is com.shilapi.xcertplay.network.P2pResetRequiredException },
         ))
