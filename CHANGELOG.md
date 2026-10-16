@@ -11,6 +11,37 @@ alignment line, not the base line, is what says how current a release is.
 
 ---
 
+## 0.4.2-geely — 2026-10-15
+
+**Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
+
+**Wireless can join the driver's own network instead of making one.** A third mode beside the car's
+hotspot and Wi-Fi Direct: the head unit joins a network that already exists — an Android phone's
+hotspot, a router, or an iPhone's Personal Hotspot — with the iPhone on the same one. Nothing is
+typed in: the network's name comes from the connection the head unit is on, and its security type
+and key from the configuration the head unit saved when the driver joined it. One radio cannot be a
+station and an access point at once, so the car's own hotspot is switched off for this mode — only
+off, never on — and an attempt that fails leaves it off until the driver turns it back on or
+connects another way.
+
+**Wireless.** The car's hotspot can be switched on when DiPlay starts, behind a setting that is off
+by default. A failure to read the head unit's saved networks no longer reads the same whether the
+app was refused permission or the network was never saved there — the two want opposite things done
+about them. The wait for a usable network now reports what it is still missing as it goes, so a
+report says where it stopped instead of only that it ran out of time. Failure reasons on this route
+reach the diagnostic report again.
+
+**Wheel keys.** Previous/next no longer take the head unit's own keys with them. DiPlay was asking
+for a wider set than it handled, so play/pause stopped working in the car, and the voice key was
+consumed at the window layer for nothing. Only the keys the driver actually reports are taken now.
+
+**⚠️ Wireless changes the head unit's own Bluetooth.** Unchanged from 0.4.1, and still true: to
+carry CarPlay's data path, DiPlay takes over the Bluetooth process the head unit is running, **at
+every app start**, not only when wireless is used. `/system` is not written, a head unit restart
+puts the original back, and there is no undo in the app. Whether the head unit's own calling and
+Bluetooth audio still behave against it **has not been checked on the car**. The firmware version
+this was built against and the disclaimer are in `docs/release-notes/v0.4.2-geely.md`.
+
 ## 0.4.1-geely — 2026-10-14
 
 **Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
