@@ -4,26 +4,33 @@ plugins {
     id("com.android.library")
 }
 
-// Local test upload only. Absent on CI and on any machine that did not opt in, so a published build
-// keeps the on-device report and never contacts Supabase.
+// One switch says which of the two packages this is. `-Pexperimental=on` is the local one: the
+// features that are not ready to be handed to a driver, and with them the log-upload key. Absent or
+// `off` is the official one, which carries none of it. Nothing else in this build reads the switch's
+// value; it is published as BuildConfig.EXPERIMENTAL and the settings page draws its bucket or not.
 //
-// An absent local.properties is not on its own a guarantee about the released APK: a workspace can
-// hold one for reasons that have nothing to do with the build being made in it, and a build off a git
-// checkout would carry the key out with it. scripts/package-geely.sh therefore passes
-// -PcloudLogs=off for the builds it makes from git and leaves local compiles alone.
+// The key used to have a switch of its own, `-PcloudLogs`, and the two could be asked for separately
+// — which is how a package meant to be local came out official, and the other way round. What the key
+// turns on is the on-device "generate and upload report" button, and that button is one of the
+// experimental features now, so one switch decides both. The retired name is refused outright in the
+// root build file rather than ignored here.
 //
-// An unrecognised value is refused rather than treated as "on". The failure that matters here is a
-// published package that still carries the key, and a typo silently reading as "keep it" would be
-// exactly that — with the release workflow's own check as the only thing standing behind it.
-val cloudLogs = when (val requested = gradle.startParameter.projectProperties["cloudLogs"]) {
-    null, "on" -> true
-    "off" -> false
-    else -> throw GradleException("-PcloudLogs=$requested is not on or off")
+// An absent local.properties is not on its own a guarantee about the official package: a workspace can
+// hold one for reasons that have nothing to do with the build being made in it. Only the switch puts
+// the key in, so the file decides the key's value and never whether there is one.
+//
+// An unrecognised value is refused rather than treated as "off". A typo silently reading as "off"
+// would make an official package out of a run that asked for a local one, and the run would look like
+// it worked — the same shape as the typo this replaced, pointing the other way.
+val experimental = when (val requested = gradle.startParameter.projectProperties["experimental"]) {
+    null, "off" -> false
+    "on" -> true
+    else -> throw GradleException("-Pexperimental=$requested is not on or off")
 }
 
 val supabaseLocal = Properties().apply {
     val file = rootProject.file("local.properties")
-    if (cloudLogs && file.isFile) file.inputStream().use { load(it) }
+    if (experimental && file.isFile) file.inputStream().use { load(it) }
 }
 
 fun supabaseField(name: String): String {
@@ -50,6 +57,7 @@ android {
         multiDexEnabled = true
         buildConfigField("String", "SUPABASE_URL", supabaseField("diplay.supabase.url"))
         buildConfigField("String", "SUPABASE_KEY", supabaseField("diplay.supabase.key"))
+        buildConfigField("boolean", "EXPERIMENTAL", experimental.toString())
     }
 
     compileOptions {

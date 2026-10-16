@@ -5,6 +5,10 @@
     <string name="settings_hint">所有设置都在这一页。</string>
     <string name="system_settings">系统设置</string>
     <string name="system_settings_hint">开机自启、位置上报、调试日志、语言，以及诊断报告。</string>
+    <string name="experimental_features">实验性功能</string>
+    <string name="experimental_features_hint">只在本地版里有。这些功能还在车上试。</string>
+    <string name="experimental_report_upload">报告上传</string>
+    <string name="experimental_report_upload_hint">把诊断报告传到项目自己的日志仓，方便事后看车上那一次跑出了什么。不按按钮就不会发送。</string>
     <string name="wifi_direct">Wi-Fi Direct</string>
     <string name="hotspot_hint_manual">车载热点 · 保持车载热点、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
     <string name="hotspot_hint_local">打开“连接设置”以保存车载热点信息。</string>

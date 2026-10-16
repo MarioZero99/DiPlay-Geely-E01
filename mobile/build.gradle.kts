@@ -40,10 +40,12 @@ android {
     }
 
     buildTypes {
-        debug {
-            applicationIdSuffix = ".hudtest"
-            versionNameSuffix = "-hud-test"
-        }
+        // No debug block, so the debug type is AGP's own: that is the source-only build CI makes. It
+        // used to add ".hudtest" to the application id and "-hud-test" to the version name so a test
+        // build could sit beside a released one — and that is what made the package that actually
+        // connects the one with the odd name, in a second app with its own settings. Both packages
+        // this project hands out are release builds: one application id, one key, and each installs
+        // over the other with its settings kept.
         release {
             optimization {
                 enable = false
@@ -90,10 +92,10 @@ val rejectBundledCredentials by tasks.registering {
 }
 tasks.named("preBuild") { dependsOn(rejectBundledCredentials) }
 
-// Car-test packages must be standalone. Keep ordinary source/CI builds identity-free.
+// The packages that are handed out must be standalone. Keep ordinary source/CI builds identity-free.
 val verifyStandaloneAuthentication by tasks.registering {
     group = "verification"
-    description = "Require the explicit runtime authentication input for a standalone car-test APK."
+    description = "Require the explicit runtime authentication input for a standalone car APK."
     val directory = localAuthenticationAssets
     doLast {
         check(directory != null) {
@@ -105,17 +107,18 @@ val verifyStandaloneAuthentication by tasks.registering {
     }
 }
 tasks.named("preBuild") { mustRunAfter(verifyStandaloneAuthentication) }
-tasks.register("assembleStandaloneDebug") {
+tasks.register("assembleStandaloneRelease") {
     group = "build"
-    description = "Build a standalone car-test APK with explicitly provisioned authentication."
-    dependsOn(verifyStandaloneAuthentication, "assembleDebug")
+    description = "Build a package to hand out: the car hop and an explicitly provisioned identity."
+    dependsOn(verifyStandaloneAuthentication, "assembleRelease")
 }
 
-// The car hop is compiled in only when -PvendorHopDir names it. A car-test APK without one runs the
-// AOSP stack and would waste the trip, so the standalone build asks for it as well.
+// The car hop is compiled in only when -PvendorHopDir names it. Both packages this project hands out
+// carry it — the difference between them is -Pexperimental and nothing else — so the standalone build
+// asks for it, and a hop-less package is not one of the two.
 val verifyVendorHop by tasks.registering {
     group = "verification"
-    description = "Require the car hop for a standalone car-test APK."
+    description = "Require the car hop for a standalone car APK."
     val directory = gradle.startParameter.projectProperties["vendorHopDir"]?.let { file(it) }
     doLast {
         check(directory != null) {
@@ -127,28 +130,9 @@ val verifyVendorHop by tasks.registering {
     }
 }
 tasks.named("preBuild") { mustRunAfter(verifyVendorHop) }
-tasks.named("assembleStandaloneDebug") { dependsOn(verifyVendorHop) }
+tasks.named("assembleStandaloneRelease") { dependsOn(verifyVendorHop) }
 
-// The adapter stack is compiled in only when -PadapterDir names it, and nothing in the build asks for it:
-// without one the build is the published build, and a car-test APK still goes out carrying the car hop's
-// Bluetooth. So this is asked for by hand, and asking for it is a claim that this run means to have the
-// adapter — no directory named is then a failure rather than a build that quietly has no adapter in it.
-val verifyAdapter by tasks.registering {
-    group = "verification"
-    description = "Require the adapter stack, for a run that means to carry it."
-    val directory = gradle.startParameter.projectProperties["adapterDir"]?.let { file(it) }
-    doLast {
-        check(directory != null) {
-            "Standalone car builds require -PadapterDir=<path>; without it the APK carries no adapter stack."
-        }
-        check(directory.resolve("src/com/shilapi/xcertplay/adapter/UsbAdapterRoute.kt").isFile) {
-            "-PadapterDir=${directory} does not hold the adapter route."
-        }
-        check(directory.resolve("jni/Android.mk").isFile) {
-            "-PadapterDir=${directory} does not hold the adapter's native stack."
-        }
-    }
-}
-// Both sides of this file already registered this and neither hooked it up, so it never ran: a car-test
-// APK could be built with no adapter in it and nothing said so. The hop's check has always been wired.
-tasks.named("assembleStandaloneDebug") { dependsOn(verifyAdapter) }
+// There is no adapter check here any more. The adapter stack was compiled in by -PadapterDir and this
+// file used to require it for the standalone build; neither package carries one now, so a check that
+// demanded it would fail the only two builds there are. -PadapterDir still mounts the sources in
+// shared/build.gradle, for a hand-run build that means to have it, and nothing here asks for it.

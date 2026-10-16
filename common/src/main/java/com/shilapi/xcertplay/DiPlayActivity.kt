@@ -550,6 +550,14 @@ class DiPlayActivity : ComponentActivity() {
 
         bucket(columns, R.string.system_settings, R.string.system_settings_hint)
         systemCards(columns)
+
+        // Last, and only in a package built with them. An official package has no bucket here rather
+        // than an empty one: whether the features are in the package is a fact about the package, and
+        // a heading over nothing would read as a fault.
+        if (ExperimentalFeatures.enabled) {
+            bucket(columns, R.string.experimental_features, R.string.experimental_features_hint)
+            experimentalCards(columns)
+        }
     }
 
     /** A bucket's heading and hints, one size below the page's own title, since the page holds four. */
@@ -576,13 +584,6 @@ class DiPlayActivity : ComponentActivity() {
             }.apply { isEnabled = !exportInProgress }
             card.addView(exportButton, matchButton(10, 60))
             card.addView(button(getString(R.string.choose_save_location), false) { chooseReportDestination() }, matchButton(10, 60))
-            if (SupabaseLogUpload.enabled(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_KEY)) {
-                uploadButton = button(
-                    if (uploadInProgress) getString(R.string.uploading_report) else getString(R.string.generate_and_upload_report),
-                    false,
-                ) { uploadGeneratedReport() }.apply { isEnabled = !uploadInProgress }
-                card.addView(uploadButton, matchButton(10, 60))
-            }
             val destination = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) getString(R.string.reports_save_to_downloads_diplay) else getString(R.string.choose_where_to_save_your_report)
             card.addView(label(destination + getString(R.string.nothing_is_sent_automatically_protocol_payloads_and_creden), 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
         }
@@ -603,6 +604,31 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(button(getString(R.string.about_diplay), false) { page = "about"; render() }, matchButton(0, 60))
         }
         languageCards(columns)
+    }
+
+    /**
+     * The bucket only a local package has, drawn by [settings] when [ExperimentalFeatures.enabled].
+     *
+     * Its first tenant is the report upload. That button used to sit in the diagnostics card and appear
+     * whenever the package happened to carry an upload key, which made "is this an official package?" a
+     * question about a build input rather than about what the page shows. It is here now, under the same
+     * switch that puts the key in the package, so what the page shows and what the package carries are
+     * one answer.
+     *
+     * The key is still checked as well: `-Pexperimental=on` with no local.properties is a local package
+     * with nothing to upload to, and a button that could only fail is worse than no button.
+     */
+    private fun experimentalCards(columns: CardColumns) {
+        columns.card(R.string.experimental_report_upload, R.drawable.ic_dp_diagnostics) { card ->
+            card.addView(label(getString(R.string.experimental_report_upload_hint), 16, MUTED))
+            if (SupabaseLogUpload.enabled(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_KEY)) {
+                uploadButton = button(
+                    if (uploadInProgress) getString(R.string.uploading_report) else getString(R.string.generate_and_upload_report),
+                    false,
+                ) { uploadGeneratedReport() }.apply { isEnabled = !uploadInProgress }
+                card.addView(uploadButton, matchButton(16, 60))
+            }
+        }
     }
 
     /**

@@ -13,11 +13,20 @@ plugins {
 val retiredEnvironmentVariables = mapOf(
     "DIPLAY_VENDOR_HOP_DIR" to "vendorHopDir",
     "DIPLAY_AUTH_ASSETS_DIR" to "authAssetsDir",
-    "DIPLAY_CLOUD_LOGS" to "cloudLogs",
+    "DIPLAY_CLOUD_LOGS" to "experimental",
     "DIPLAY_ADAPTER_DIR" to "adapterDir",
 )
 retiredEnvironmentVariables.forEach { (variable, property) ->
     check(!providers.environmentVariable(variable).isPresent) {
         "$variable is no longer read. Pass -P$property=... on the command line instead."
     }
+}
+
+// -PcloudLogs is retired the same way and for the same reason, one step further in: the log-upload
+// key is an experimental feature now, and -Pexperimental is what decides whether a package carries
+// any of them. A caller still passing the old name would get an official package while believing it
+// asked for a local one, and the build would look like it worked — exactly the surprise the
+// environment-variable check above is here to stop.
+check(!gradle.startParameter.projectProperties.containsKey("cloudLogs")) {
+    "-PcloudLogs is no longer read. Pass -Pexperimental=on|off instead."
 }

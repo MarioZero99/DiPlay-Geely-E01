@@ -1,29 +1,32 @@
 #!/bin/sh
-# Build the Geely E01 APK and name it DiPlay-Legacy-Geely-V<version>.apk
+# Build the Geely E01 packages and name them DiPlay-Legacy-Geely-V<version>[-local].apk
+#
+#   official  the package that is handed out: the car hop, and none of the features that are still
+#             being tried on the car
+#   local     the same package plus -Pexperimental=on: the experimental features, and with them the
+#             log-upload key
+#
+# The two are one version and one application id signed with one key, so either installs over the
+# other and its settings are kept. What separates them is the one build switch and nothing else; this
+# script has no other way to make them differ, which is the point of it.
 #
 # The inputs below are this script's, not the build's: each is translated into a command-line property
 # and taken back out of the environment before Gradle runs. The build reads -P only, on purpose — an
 # environment variable is inherited, so a shell that happened to have one exported used to decide what
 # a package contained.
 #
-#   DIPLAY_AUTH_ASSETS_DIR   default ~/.diplay-auth-assets    (offline-mfi identity)
-#   DIPLAY_VENDOR_HOP_DIR    no default; the car-test build requires it, a release ignores it
-#   DIPLAY_ADAPTER_DIR       no default; the car-test build requires it, a release ignores it
-#   DIPLAY_CLOUD_LOGS        0 drops the Supabase log-upload key from the APK
+#   DIPLAY_AUTH_ASSETS_DIR   default ~/.diplay-auth-assets    (offline-mfi identity). Required.
+#   DIPLAY_VENDOR_HOP_DIR    no default                       (the car hop). Required.
 #
 # The signing key stays a variable: a password on a command line is readable by anything that can list
 # processes, and Gradle records -P values in its own caches.
 #   ~/.diplay-signing/        keystore.properties + the release keystore
 #
-# A run in CI always gets the log-upload key dropped; a run here keeps it unless the caller says 0.
-#
-# Usage: scripts/package-geely.sh [release|debug|both]   (default: release)
-#   release — the published package: no car hop, and no way to ask for one from here
-#   debug   — the car-test package: requires the car hop, and refuses to build without it
+# Usage: scripts/package-geely.sh [official|local|both]   (default: official)
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-kind=${1:-release}
+kind=${1:-official}
 out=${DIPLAY_DIST_DIR:-$root/dist}
 
 # Filename tag keeps only the numeric version: "0.2.7-geely" -> V027
@@ -34,28 +37,26 @@ tag="V$(printf '%s' "$version" | tr -d '.')"
 : "${ANDROID_HOME:=/opt/homebrew/share/android-commandlinetools}"
 auth_dir=${DIPLAY_AUTH_ASSETS_DIR:-$HOME/.diplay-auth-assets}
 hop_dir=${DIPLAY_VENDOR_HOP_DIR:-}
-adapter_dir=${DIPLAY_ADAPTER_DIR:-}
-
-# A build made from git is the one that gets published, and it must not carry the log-upload key: a CI
-# workspace is a checkout, so whatever a local.properties lying in it says is not what is being
-# released. GitHub sets CI for every step; a local compile sets neither, keeps the key, and keeps the
-# on-device "generate and upload report" button working for the runs that need it.
-cloud_logs=on
-if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ] || [ "${DIPLAY_CLOUD_LOGS:-1}" = 0 ]; then
-    cloud_logs=off
-fi
 
 [ -f "$auth_dir/offline-mfi/identity.pk8" ] || {
     echo "package-geely: $auth_dir/offline-mfi/identity.pk8 is missing" >&2; exit 1; }
+# Neither package is built without the hop: one without it runs the AOSP stack and connects to nothing,
+# and handing that out is the failure this script exists to make impossible.
+[ -n "$hop_dir" ] || {
+    echo "package-geely: set DIPLAY_VENDOR_HOP_DIR; both packages carry the car hop" >&2; exit 1; }
 
 # Gradle refuses a stale one of these outright, and that refusal is what makes translating here the
-# only way in. This script's own copies are taken above and are not passed on.
-unset DIPLAY_AUTH_ASSETS_DIR DIPLAY_VENDOR_HOP_DIR DIPLAY_ADAPTER_DIR DIPLAY_CLOUD_LOGS
+# only way in. This script's own copies are taken above and are not passed on. DIPLAY_CLOUD_LOGS and
+# DIPLAY_ADAPTER_DIR are in the list because a shell that still exports one would otherwise be refused
+# by the root build file; the log-upload key is -Pexperimental's now, and no package carries an adapter.
+unset DIPLAY_AUTH_ASSETS_DIR DIPLAY_VENDOR_HOP_DIR DIPLAY_CLOUD_LOGS DIPLAY_ADAPTER_DIR
 export ANDROID_HOME
 
 mkdir -p "$out"
 
-build_release() {
+build() {
+    experimental=$1
+    suffix=$2
     sign=${DIPLAY_SIGNING_DIR:-$HOME/.diplay-signing}
     # Local runs read $sign/keystore.properties; CI exports ANDROID_* directly, so the
     # password never has to pass through a sourced file.
@@ -71,35 +72,15 @@ build_release() {
     [ -n "${ANDROID_KEY_PASSWORD:-}" ] || {
         echo "package-geely: no release key password" >&2; exit 1; }
     export ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_PASSWORD ANDROID_KEYSTORE_PATH ANDROID_KEY_ALIAS
-    # This is the published package, so the car hop is not passed and cannot be asked for from here.
-    # Saying so beats a silent ignore, which is how a release came to be built with one in the first place.
-    if [ -n "$hop_dir" ]; then
-        echo "package-geely: a release carries no car hop; DIPLAY_VENDOR_HOP_DIR is ignored for it" >&2
-    fi
-    if [ -n "$adapter_dir" ]; then
-        echo "package-geely: a release carries no adapter stack; DIPLAY_ADAPTER_DIR is ignored for it" >&2
-    fi
-    (cd "$root" && sh gradlew -PauthAssetsDir="$auth_dir" -PcloudLogs="$cloud_logs" :mobile:assembleRelease)
-    cp "$root/mobile/build/outputs/apk/release/mobile-release.apk" "$out/DiPlay-Legacy-Geely-$tag.apk"
-    echo "→ $out/DiPlay-Legacy-Geely-$tag.apk"
-}
-
-build_debug() {
-    if [ -z "$hop_dir" ]; then
-        echo "package-geely: the car-test package needs DIPLAY_VENDOR_HOP_DIR" >&2; exit 1
-    fi
-    if [ -z "$adapter_dir" ]; then
-        echo "package-geely: the car-test package needs DIPLAY_ADAPTER_DIR" >&2; exit 1
-    fi
-    (cd "$root" && sh gradlew -PauthAssetsDir="$auth_dir" -PcloudLogs="$cloud_logs" \
-        -PvendorHopDir="$hop_dir" -PadapterDir="$adapter_dir" :mobile:assembleStandaloneDebug)
-    cp "$root/mobile/build/outputs/apk/debug/mobile-debug.apk" "$out/DiPlay-Legacy-Geely-$tag-hudtest.apk"
-    echo "→ $out/DiPlay-Legacy-Geely-$tag-hudtest.apk"
+    (cd "$root" && sh gradlew -PauthAssetsDir="$auth_dir" -PvendorHopDir="$hop_dir" \
+        -Pexperimental="$experimental" :mobile:assembleStandaloneRelease)
+    cp "$root/mobile/build/outputs/apk/release/mobile-release.apk" "$out/DiPlay-Legacy-Geely-$tag$suffix.apk"
+    echo "→ $out/DiPlay-Legacy-Geely-$tag$suffix.apk"
 }
 
 case "$kind" in
-    release) build_release ;;
-    debug)   build_debug ;;
-    both)    build_release; build_debug ;;
-    *) echo "package-geely: expected release|debug|both, got '$kind'" >&2; exit 1 ;;
+    official) build off "" ;;
+    local)    build on "-local" ;;
+    both)     build off ""; build on "-local" ;;
+    *) echo "package-geely: expected official|local|both, got '$kind'" >&2; exit 1 ;;
 esac
