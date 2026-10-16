@@ -100,7 +100,6 @@ import com.shilapi.xcertplay.transport.Iap2LocationProvider
 import com.shilapi.xcertplay.transport.UsbDeviceId
 import com.shilapi.xcertplay.transport.WiredLinkFinding
 import com.shilapi.xcertplay.transport.WiredLinkReport
-import com.shilapi.xcertplay.transport.WirelessBluetoothName
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.adapter.AdapterPage
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
@@ -120,6 +119,17 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * What the external adapter advertises itself as — a name this app may give, because this app drives
+ * that radio.
+ *
+ * There is deliberately no matching constant for the head unit's own radio. Apple's §18.4 requires the
+ * iAP2 identification name to be the name that radio broadcasts, so that an iPhone keeps one entry for
+ * one accessory; a name chosen here would be one the phone never heard in an inquiry, and it would file
+ * the exchange under an accessory it has not paired with. That name is read off the radio at bring-up.
+ */
+private const val ADAPTER_BLUETOOTH_NAME = "DiPlay"
 
 /**
  * Full-screen CarPlay host. It renders decoded video through a TextureView or, when direct
@@ -184,11 +194,13 @@ class CarPlayHostActivity : ComponentActivity() {
         remoteMfiServer = remoteMfiServer.trim().takeIf { it.isNotEmpty() },
         remoteMfiToken = remoteMfiToken.takeIf { it.isNotEmpty() },
         identification = Iap2IdentificationConfig(
-            // Apple's §18.4 requires the name given in the identification exchange to be the name the
-            // accessory advertises, and over Bluetooth that is the one in the EIR and the local name
-            // (`WirelessBluetoothName.ADVERTISED`). A wired exchange has no EIR to agree with, and its name
-            // is what the phone already shows for this accessory, so that side is left as it is.
-            name = if (wirelessEnabled) WirelessBluetoothName.ADVERTISED else "DiPlay",
+            // A wired exchange has no Extended Inquiry Response to agree with: the name here is this
+            // accessory's own, over a cable this app drives, and it is what the phone already shows for
+            // it. The wireless exchange is the one Apple's §18.4 binds to the radio's own broadcast
+            // name, and that name cannot be chosen here — it is read off the head unit's radio at
+            // bring-up and put in place of this one before anything is sent
+            // (`CarPlayController.startWirelessBringUp`). Nothing in this app names the car's radio.
+            name = "DiPlay",
             modelIdentifier = normalizedModel(),
             manufacturer = normalizedManufacturer(),
             serialNumber = "DIPLAY-" + DiPlayBootstrap.deviceId(airPlayIdentity).replace(":", ""),
@@ -1132,7 +1144,10 @@ class CarPlayHostActivity : ComponentActivity() {
     private fun buildDiagnosticColumn(): View {
         val column = card()
         val adapterName = TextView(this).apply {
-            text = WirelessBluetoothName.ADVERTISED
+            // The name of the external adapter, which is ours: this app drives that radio, so the name
+            // is one this app may give it. The head unit's own radio is the other case and is never
+            // named here — §18.4 makes its name the one it broadcasts, and it is read from the radio.
+            text = ADAPTER_BLUETOOTH_NAME
             textSize = 26f
             gravity = Gravity.CENTER
             setTextColor(CONNECTION_PRIMARY)

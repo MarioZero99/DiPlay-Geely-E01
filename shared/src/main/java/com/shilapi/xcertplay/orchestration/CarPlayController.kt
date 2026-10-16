@@ -1270,7 +1270,22 @@ class CarPlayController(
                 closeWirelessStack()
                 return
             }
+            // §18.4 ties this name to the one in the radio's Extended Inquiry Response. The radio here
+            // is the head unit's own and belongs to a vendor service, so the name is read off it, at
+            // this moment rather than at build time — the driver can rename the car's Bluetooth.
+            //
+            // Nothing is substituted when the read comes up empty. A name the phone has not heard in an
+            // inquiry makes it file this exchange under an accessory it has never paired with, which is
+            // the exact condition the requirement exists to prevent; a session that cannot name itself
+            // honestly is worth less than a session that says why it did not start.
+            val radioName = CarBluetoothHops.active?.localName(appContext)
+                ?: throw IOException(
+                    "The head unit would not say what its Bluetooth is called, and the name the phone " +
+                        "is given has to be that one (§18.4). Wireless CarPlay cannot start.",
+                )
+            debugLog("wireless radio name=$radioName")
             val identification = config.identification.copy(
+                name = radioName,
                 wireless = Iap2WirelessIdentification(hostBluetoothMac, hotspotInfo.ssid),
             )
             val endpoint = Iap2WirelessCarPlayEndpoint(

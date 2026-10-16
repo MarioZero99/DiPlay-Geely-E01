@@ -128,6 +128,21 @@ interface CarBluetoothHop {
         // Nothing by default.
     }
 
+    /**
+     * The name the head unit's own radio broadcasts, or null when this hop cannot read it.
+     *
+     * Apple's §18.4 requires the name in the iAP2 identification exchange to be the name in the
+     * accessory's Extended Inquiry Response, so that an iPhone files the Bluetooth device it paired
+     * with and the CarPlay accessory it is talking to under one entry rather than two. Where the radio
+     * belongs to a vendor service, that name is the vendor's and can only be asked for — which is why
+     * nothing on this side has one to offer: a name the phone has not heard in an inquiry is a second
+     * accessory, and no name at all is not one of the answers.
+     *
+     * Blocking — callers stay off the main thread, and the answer is asked for at the moment the
+     * exchange is about to happen rather than kept, because the driver can rename the radio.
+     */
+    fun localName(context: Context): String? = null
+
     /** The phones the head unit reports. Blocking — callers stay off the main thread. */
     fun connectedPhones(context: Context): List<CarBluetoothPhone>
 
