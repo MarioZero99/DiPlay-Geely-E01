@@ -76,7 +76,6 @@ import com.shilapi.xcertplay.media.AndroidMediaSink
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.network.CarHotspotStatus
 import com.shilapi.xcertplay.network.CarPlayVpnService
-import com.shilapi.xcertplay.network.WirelessDiscovery
 import com.shilapi.xcertplay.orchestration.CarPlayController
 import com.shilapi.xcertplay.orchestration.CarPlayRuntimeConfig
 import com.shilapi.xcertplay.orchestration.CarPlayFailureReason
@@ -210,6 +209,7 @@ class CarPlayHostActivity : ComponentActivity() {
         manualHotspotSecurity = manualHotspotSecurity,
         existingWifiSsid = existingWifiSsid,
         existingWifiPassphrase = existingWifiPassphrase,
+        wirelessAddressFamily = wirelessAddressFamily.takeIf { it.isNotEmpty() },
         locationReportingEnabled = locationReportingEnabled,
     )
 
@@ -351,6 +351,7 @@ class CarPlayHostActivity : ComponentActivity() {
     private var manualHotspotSecurity = ManualHotspotSecurity.OPEN
     private var existingWifiSsid = ""
     private var existingWifiPassphrase = ""
+    private var wirelessAddressFamily = ""
     private var awaitingVpnConsent = false
     private var awaitingWirelessPermissions = false
     private var awaitingLocationPermission = false
@@ -627,6 +628,9 @@ class CarPlayHostActivity : ComponentActivity() {
         // reaching for storage itself.
         existingWifiSsid = AirPlayPersistence.loadExistingWifiSsid(this)
         existingWifiPassphrase = AirPlayPersistence.loadExistingWifiPassphrase(this)
+        // Re-read here rather than kept from construction: the retry ladder makes attempts on its own,
+        // and the attempt that wrote a preference must not be the only one that can see it.
+        wirelessAddressFamily = AirPlayPersistence.loadWirelessAddressFamily(this)
         return storedHotspotSsid
     }
 
@@ -2256,6 +2260,13 @@ class CarPlayHostActivity : ComponentActivity() {
             clearPairRecord = { AirPlayPersistence.clearLockdownRecord(this) },
             locationProvider = locationProvider,
             adapterBluetooth = adapterPage?.host,
+            // A wireless attempt whose address the phone never answered on leaves the other family
+            // behind for the next one. Storage is written here, not in the controller: the preference
+            // belongs to the driver's head unit, and the retry ladder that reads it is here too.
+            onWirelessAddressFamilyUnusable = { family ->
+                AirPlayPersistence.saveWirelessAddressFamily(this, family)
+                wirelessAddressFamily = family
+            },
         )
         controller = next
         CarPlayMediaKeys.attach(this, next)
@@ -2805,6 +2816,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 CarPlayFailureReason.TRANSPORT_ATTACH_FAILED -> R.string.failure_transport_attach_failed
                 CarPlayFailureReason.HOST_ID_REJECTED -> R.string.failure_host_id_rejected
                 CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON -> R.string.failure_car_hotspot_stays_on
+                CarPlayFailureReason.FIRST_TCP_TIMEOUT -> R.string.failure_first_tcp_timeout
                 CarPlayFailureReason.BRING_UP_FAILED -> R.string.failure_bring_up_failed
             },
         )
@@ -2883,15 +2895,14 @@ class CarPlayHostActivity : ComponentActivity() {
 
 /** Process-local hand-off for keeping the CarPlay session alive while no Activity is visible. */
 /**
- * Gives the head unit back the two things that outlive a session.
+ * Gives the head unit back what outlives a session.
  *
  * The car's own Bluetooth carries the hop's patched process for the whole life of the app rather than
- * for one session, and the mDNS socket is held the same way, which is what stops an attempt from losing
- * 5353 for the process. Closing the app is the one moment both go back — a session's teardown owns
- * neither.
+ * for one session. Closing the app is the one moment it goes back — a session's teardown does not own
+ * it. The mDNS socket used to be held the same way and released here too; it is not any more, because
+ * each run's responders belong to that run and its teardown closes them.
  */
 internal fun releaseProcessWirelessResources(context: Context) {
-    runCatching { WirelessDiscovery.releaseResponder() }
     runCatching { CarBluetoothHops.active?.idleAfterSession(context.applicationContext) }
 }
 

@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.orchestration
 
+import com.shilapi.xcertplay.network.HotspotAddressPolicy
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
 import com.shilapi.xcertplay.transport.UsbDeviceId
 import com.shilapi.xcertplay.transport.WirelessHotspotMode
@@ -66,6 +67,14 @@ class CarPlayRuntimeConfig(
      */
     val existingWifiSsid: String? = null,
     val existingWifiPassphrase: String? = null,
+    /**
+     * Which address family to publish this attempt, as the last run left it: `"IPv4"`, `"IPv6"`, or null
+     * for the default order.
+     *
+     * A run whose address the phone never answered on leaves the other family here, so a wireless
+     * connection that fails on one family is retried on the other rather than on the same one again.
+     */
+    val wirelessAddressFamily: String? = null,
     val wirelessBluetoothDeviceAddress: String? = null,
     val locationReportingEnabled: Boolean = false,
     val wirelessBluetoothHop: WirelessBluetoothHop = WirelessBluetoothHop.CAR,
@@ -148,6 +157,9 @@ class CarPlayRuntimeConfig(
         }
         require(existingPassphrase.isEmpty() || existingPassphrase.length in 8..63) {
             "existingWifiPassphrase must be empty or between 8 and 63 characters"
+        }
+        require(wirelessAddressFamily == null || HotspotAddressPolicy.parseFamily(wirelessAddressFamily) != null) {
+            "wirelessAddressFamily must be one of the two published families"
         }
     }
 

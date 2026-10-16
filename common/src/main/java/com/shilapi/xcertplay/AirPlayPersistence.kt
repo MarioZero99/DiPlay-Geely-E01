@@ -52,6 +52,7 @@ object AirPlayPersistence {
 
     /** The network the car joined and the password the driver typed for it, as a pair. */
     private const val KEY_EXISTING_WIFI_SSID = "existing_wifi_ssid"
+    private const val KEY_WIRELESS_ADDRESS_FAMILY = "hotspot_address_family"
     private const val KEY_EXISTING_WIFI_PASSPHRASE = "existing_wifi_passphrase"
     private const val KEY_DEBUG_LOGS_ENABLED = "debug_logs_enabled"
     private const val KEY_MANUFACTURER = "manufacturer"
@@ -313,6 +314,24 @@ object AirPlayPersistence {
      * the phone is told to join a secured network with no password to join it with. The car's own
      * copy is tried first; this is what the driver can supply when the car will not.
      */
+    /**
+     * The address family a wireless attempt should publish, as the last failed one left it.
+     *
+     * Empty means "no preference": the backends' own order decides, which is IPv4 first for an access
+     * point. A value is only ever written after a run whose address the phone never answered on, so it
+     * names the family that run was *not* using.
+     */
+    fun loadWirelessAddressFamily(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_WIRELESS_ADDRESS_FAMILY, null)
+            .orEmpty()
+
+    fun saveWirelessAddressFamily(context: Context, family: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_WIRELESS_ADDRESS_FAMILY, family)
+            .apply()
+    }
+
     fun loadExistingWifiSsid(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_EXISTING_WIFI_SSID, null)

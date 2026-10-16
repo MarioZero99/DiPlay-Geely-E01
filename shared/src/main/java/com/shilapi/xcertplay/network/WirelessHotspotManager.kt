@@ -31,6 +31,23 @@ class WirelessHotspotInfo(
     val hostAddress: InetAddress?,
     val bandLabel: String,
     val backend: WirelessHotspotBackend,
+    /**
+     * Every address on the selected interface that discovery and TCP must both serve.
+     *
+     * [hostAddress] is the one this attempt prefers; the rest are the same interface's other addresses,
+     * published and listened on together so the phone can use whichever it can actually reach. Defaults
+     * to the single preferred address, which is what a backend that only ever sees one reports.
+     */
+    val hostAddresses: List<InetAddress> = listOfNotNull(hostAddress),
+    /**
+     * The access point's own address, as a hint for 0x5703, or null when there is none to give.
+     *
+     * Separate from [bssid], which is this receiver's AirPlay device identity. The two are the same
+     * machine when DiPlay made the access point itself; they are different machines when the driver
+     * joined a network somebody else owns — the only case this is filled in, and the only case where
+     * the phone has no way of knowing which access point to expect.
+     */
+    val accessPointBssid: ByteArray? = null,
 ) {
     override fun toString(): String =
         "WirelessHotspotInfo(backend=${backend.label}, ssid='$ssid', " +

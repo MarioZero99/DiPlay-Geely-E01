@@ -27,6 +27,14 @@ class Iap2WirelessControlClient(
         locationProvider: Iap2LocationProvider? = null,
         vehicleStatusProvider: VehicleStatusProvider? = null,
         onReady: () -> Unit = {},
+        /**
+         * Called once per 0x4301 sent: the phone has now been told the address and the port to use.
+         *
+         * Its own parameter rather than something read back out of [onProgress]. The progress line
+         * exists to be read by a person, and anything that fires on it is wired to the wording of a
+         * sentence — a reworded log would silently disarm whatever was listening.
+         */
+        onCarPlayStartSessionSent: () -> Unit = {},
         onIncoming: (Iap2Frame) -> Unit = {},
         onProgress: (String) -> Unit = {},
         /**
@@ -189,6 +197,7 @@ class Iap2WirelessControlClient(
                         send(carPlayStartSession(endpoint), deadlineNanos)
                         stage = later(stage, Iap2WirelessControlStage.CARPLAY_START_SENT)
                         carPlayStartSessionsSent++
+                        onCarPlayStartSessionSent()
                         onProgress("iap2 tx=0x4301 carplay-start-session")
                     }
 
@@ -336,6 +345,7 @@ class Iap2WirelessControlClient(
                 passphrase = endpoint.passphrase,
                 channel = endpoint.channel,
                 securityType = endpoint.security.wireValue,
+                bssid = endpoint.accessPointBssid,
             )
 
         /** Wireless 0x4301 reply carrying the receiver address, port and pairing identity. */
@@ -407,11 +417,22 @@ class Iap2WirelessCarPlayEndpoint(
     val deviceIdentifier: String,
     val publicKey: String,
     val sourceVersion: String,
+    /**
+     * The access point's own address, as a 0x5703 hint, or null when there is none to send.
+     *
+     * Not this receiver's AirPlay identity: see [Iap2WirelessCarPlayEndpoint] callers, which fill it
+     * only where the network belongs to somebody else.
+     */
+    accessPointBssid: ByteArray? = null,
 ) {
     val ipAddresses: List<String> = ipAddresses.toList()
+    val accessPointBssid: ByteArray? = accessPointBssid?.copyOf()
 
     init {
         require(ssid.isNotBlank()) { "ssid is required and must not be blank" }
+        require(this.accessPointBssid == null || this.accessPointBssid.size == 6) {
+            "AP address must contain six bytes"
+        }
         require('\u0000' !in ssid) { "ssid must not contain U+0000" }
         require(passphrase == null || '\u0000' !in passphrase) {
             "passphrase must not contain U+0000"

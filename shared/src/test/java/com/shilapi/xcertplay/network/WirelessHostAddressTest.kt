@@ -6,8 +6,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WirelessHostAddressTest {
-    @Test fun manualApPrefersScopedLinkLocalEvenWhenIpv4ComesFirst() {
-        val result = wirelessHostAddress(listOf(ip("192.168.43.1"), ip("fe80::1234")), 7) as Inet6Address
+    /**
+     * The address we hand the iPhone has to be one it can answer on, and a link-local one is not.
+     *
+     * An access point's link-local route lives in a per-network policy table with no matching `ip rule`,
+     * so a socket without a network mark cannot reply to a link-local peer: the framework drops the
+     * SYN-ACK and the phone gives up. The IPv4 subnet route lives in the shared `local_network` table, so
+     * replies work with no network selection. Upstream measured exactly this (b4db0ad7): the link-local
+     * endpoint timed out after 30 s, the IPv4 one completed TCP on the first attempt.
+     */
+    @Test fun manualApPublishesTheIpv4AddressAndKeepsLinkLocalAsTheFallback() {
+        assertEquals(ip("192.168.43.1"), wirelessHostAddress(listOf(ip("fe80::1234"), ip("192.168.43.1")), 7))
+    }
+
+    @Test fun linkLocalIsStillUsedWhenTheAccessPointHasNoIpv4() {
+        val result = wirelessHostAddress(listOf(ip("fe80::1234")), 7) as Inet6Address
         assertTrue(result.isLinkLocalAddress)
         assertEquals(7, result.scopeId)
     }

@@ -82,6 +82,34 @@ class ExistingWifiManagerTest {
         }
     }
 
+    /**
+     * The access point's own address goes to the phone as a 0x5703 hint, and only when it is one.
+     *
+     * The phone acts on whatever it is given, so the addresses that name no access point — an all-zero
+     * one, the `02:00:00:00:00:00` placeholder, a group address, a truncated one — have to be dropped
+     * here rather than sent as a hint pointing at hardware that is not there.
+     */
+    @Test
+    fun theAccessPointAddressIsAHintAndAnUnusableOneIsNotSent() {
+        shadowOf(wifi).setConnectionInfo(withBssid("a4:2b:8c:11:22:33"))
+        manager().use { manager ->
+            assertEquals("a42b8c112233", start(manager).accessPointBssid?.joinToString("") { "%02x".format(it) })
+        }
+
+        for (unusable in listOf(
+            "00:00:00:00:00:00",
+            "02:00:00:00:00:00",
+            "01:00:5e:00:00:fb",
+            "a4:2b:8c:11:22",
+            "not-an-address",
+        )) {
+            shadowOf(wifi).setConnectionInfo(withBssid(unusable))
+            manager().use { manager ->
+                assertNull("$unusable names no access point", start(manager).accessPointBssid)
+            }
+        }
+    }
+
     @Test
     fun aPasswordThePlatformHidesIsPublishedAsNoPasswordRatherThanAnEmptyOne() {
         val hidden = addSavedNetwork(passphrase = null)
@@ -265,6 +293,9 @@ class ExistingWifiManagerTest {
             shadowOf(it).setNetworkId(networkId)
             shadowOf(it).setFrequency(5180)
         }
+
+    private fun withBssid(bssid: String): WifiInfo =
+        stationInfo("Pocket Wi-Fi", savedNetworkId).also { shadowOf(it).setBSSID(bssid) }
 
     private fun wifiCapabilities(): NetworkCapabilities =
         ShadowNetworkCapabilities.newInstance().also {

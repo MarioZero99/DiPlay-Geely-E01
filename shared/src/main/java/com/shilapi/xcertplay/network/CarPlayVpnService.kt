@@ -19,7 +19,6 @@ import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.io.IOException
 import java.net.Inet6Address
 import java.net.InetAddress
-import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
@@ -49,6 +48,7 @@ class CarPlayVpnService : VpnService() {
         val mfi: MfiAuthenticator?,
         val listener: AirPlaySessionListener,
         val media: AirPlayMediaHandler,
+        val additionalAddresses: List<InetAddress> = emptyList(),
     )
 
     private val binder = LocalBinder()
@@ -57,6 +57,7 @@ class CarPlayVpnService : VpnService() {
     private val sessions = mutableSetOf<AirPlaySession>()
     @Volatile private var attachment: AirPlayAttachment? = null
     private var serverSocket: ServerSocket? = null
+    private var additionalServers: List<ServerSocket> = emptyList()
     private var bridge: Ipv6NcmBridge? = null
     private var tun: ParcelFileDescriptor? = null
     private var attachGeneration = 0
@@ -136,6 +137,13 @@ class CarPlayVpnService : VpnService() {
         mfi: MfiAuthenticator?,
         listener: AirPlaySessionListener,
         media: AirPlayMediaHandler,
+        /**
+         * The rest of the selected interface's addresses, listened on alongside [bindAddress].
+         *
+         * Bonjour advertises every one of them, and an address the phone can find but not reach is
+         * worse than one it never heard of. Empty where the interface has only one.
+         */
+        additionalBindAddresses: List<InetAddress> = emptyList(),
     ): AttachResult {
         if (active.get()) {
             DiagLog.i(TAG, "replacing stale local-only Wi-Fi attachment")
@@ -146,7 +154,10 @@ class CarPlayVpnService : VpnService() {
         return try {
             startAirPlayServer(
                 generation,
-                AirPlayAttachment(bindAddress, config, identity, pairings, mfi, listener, media),
+                AirPlayAttachment(
+                    bindAddress, config, identity, pairings, mfi, listener, media,
+                    additionalBindAddresses,
+                ),
             )
             AttachResult.Started
         } catch (error: Exception) {
@@ -163,6 +174,15 @@ class CarPlayVpnService : VpnService() {
 
     fun isAttached(): Boolean = active.get() && attachment != null
 
+    /**
+     * The port the listener actually bound, which may differ from the configured one.
+     *
+     * The port is chosen by binding rather than in advance, because every address the attachment
+     * serves has to share one — the phone learns a single port for the whole device. What was bound is
+     * then what gets advertised, so a fallback port reaches the phone rather than only the log.
+     */
+    fun boundPort(): Int? = attachment?.config?.port
+
     override fun onDestroy() {
         detach()
         super.onDestroy()
@@ -172,16 +192,32 @@ class CarPlayVpnService : VpnService() {
         generation: Int,
         replacement: AirPlayAttachment,
     ) {
-        val server = ServerSocket()
-        server.bind(InetSocketAddress(replacement.address, replacement.config.port))
-        attachment = replacement
+        val addresses = listOf(replacement.address) + replacement.additionalAddresses
+        val servers = if (replacement.additionalAddresses.isEmpty()) {
+            listOf(
+                AirPlayPortSelector.bind(replacement.address, replacement.config.port) { busy, bound ->
+                    DiagLog.w(TAG, "AirPlay port $busy is in use; listening on $bound instead")
+                },
+            )
+        } else {
+            AirPlayPortSelector.bindAll(addresses, replacement.config.port) { busy, bound ->
+                DiagLog.w(TAG, "AirPlay port $busy is in use; listening on $bound instead")
+            }
+        }
+        val server = servers.first()
+        // The bound port, not the requested one: every address shares it, and it is what Bonjour and
+        // the iAP2 configuration go on to advertise.
+        attachment = replacement.copy(config = replacement.config.copy(port = server.localPort))
         serverSocket = server
-        Thread(
-            { acceptLoop(generation, server) },
-            "airplay-accept",
-        ).apply {
-            isDaemon = true
-            start()
+        additionalServers = servers.drop(1)
+        servers.forEach { bound ->
+            Thread(
+                { acceptLoop(generation, bound) },
+                "airplay-accept",
+            ).apply {
+                isDaemon = true
+                start()
+            }
         }
     }
 
@@ -286,6 +322,8 @@ class CarPlayVpnService : VpnService() {
         attachment = null
         serverSocket?.close()
         serverSocket = null
+        additionalServers.forEach { it.close() }
+        additionalServers = emptyList()
         closeSessionsLocked()
         bridge?.close()
         bridge = null

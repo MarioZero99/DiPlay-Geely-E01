@@ -482,6 +482,7 @@
     <string name="failure_transport_attach_failed">网络链路接入失败。</string>
     <string name="failure_car_hotspot_stays_on">车机自带热点开着，DiPlay 关不掉它。请到车机热点设置里关掉，然后按「重试」。</string>
     <string name="failure_host_id_rejected">iPhone 拒绝了这个配件的身份。请在 iPhone 的「设置 → 通用 → CarPlay」里移除本车，或在蓝牙设置里忽略这个配件，然后重新插线。</string>
+    <string name="failure_first_tcp_timeout">iPhone 没能通过 Wi-Fi 连上。正在改用另一个网络地址重试。</string>
     <string name="failure_bring_up_failed">CarPlay 启动失败。</string>
     <string name="switch_on">开</string>
     <string name="switch_off">关</string>

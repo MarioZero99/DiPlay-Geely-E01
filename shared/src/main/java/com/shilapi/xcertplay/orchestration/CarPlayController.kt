@@ -26,12 +26,13 @@ import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationException
 import com.shilapi.xcertplay.mfi.MfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.RemoteMfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
-import com.shilapi.xcertplay.network.AirPlayPorts
 import com.shilapi.xcertplay.network.CarPlayBonjour
 import com.shilapi.xcertplay.network.CarHotspotController
 import com.shilapi.xcertplay.network.CarHotspotStatus
 import com.shilapi.xcertplay.network.ExistingWifiDriverCredentials
 import com.shilapi.xcertplay.network.ExistingWifiManager
+import com.shilapi.xcertplay.network.HotspotAddressPolicy
+import com.shilapi.xcertplay.network.HotspotAddressRecovery
 import com.shilapi.xcertplay.network.HotspotStartResult
 import com.shilapi.xcertplay.network.diagnosticSummary
 import com.shilapi.xcertplay.network.CarPlayVpnService
@@ -47,6 +48,7 @@ import com.shilapi.xcertplay.network.WirelessHotspotManager
 import com.shilapi.xcertplay.network.WirelessInterfaceDiagnostics
 import com.shilapi.xcertplay.network.WirelessReceiveDiagnostics
 import com.shilapi.xcertplay.network.WirelessStartupDiagnostics
+import com.shilapi.xcertplay.network.WirelessStartupPolicy
 import com.shilapi.xcertplay.transport.AndroidIap2BluetoothLink
 import com.shilapi.xcertplay.transport.Iap2BluetoothLink
 import com.shilapi.xcertplay.transport.Iap2BluetoothLinks
@@ -91,6 +93,7 @@ import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.io.Closeable
 import java.io.IOException
 import java.net.InetAddress
+import java.net.NetworkInterface
 import java.net.Inet6Address
 import java.util.Locale
 import java.util.UUID
@@ -176,6 +179,14 @@ enum class CarPlayFailureReason {
      * car's own settings, with the retry button left for afterwards.
      */
     CAR_HOTSPOT_STAYS_ON,
+
+    /**
+     * The phone was given an address and a port and never opened the AirPlay port.
+     *
+     * Retryable, unlike the two above: the next attempt is told to publish the other address family,
+     * so this is the one failure here whose retry is not the same attempt again.
+     */
+    FIRST_TCP_TIMEOUT,
 }
 
 /**
@@ -185,6 +196,15 @@ enum class CarPlayFailureReason {
  * other bring-up failure: see [CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON].
  */
 internal class CarHotspotStaysOnException(message: String) : IOException(message)
+
+/**
+ * No AirPlay TCP inside the window the phone was given.
+ *
+ * Its own type for the same reason as the exception above, and for one more: this is the failure that
+ * says which address family to publish next time, so the screen's sentence and the flip are two
+ * readings of one event rather than two guesses at it.
+ */
+internal class FirstTcpTimeoutException(message: String) : IOException(message)
 
 internal fun isWirelessHandoffInProgress(
     handoffRequested: Boolean,
@@ -214,10 +234,13 @@ internal fun reportsLockdownError(error: Throwable, code: String): Boolean {
  *
  * Two of them have to arrive as themselves because the screen answers them by not retrying: a host
  * identity the phone refused, and a hotspot the car will not give up. Everything else is a fault on
- * the wire, and the retry ladder is what that is for.
+ * the wire, and the retry ladder is what that is for. The first-TCP timeout is also named here even
+ * though it *is* retried, because it is the one retry that comes out different: the attempt after it
+ * publishes the other address family.
  */
 internal fun failureReasonFor(error: Throwable): CarPlayFailureReason = when {
     error is CarHotspotStaysOnException -> CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON
+    error is FirstTcpTimeoutException -> CarPlayFailureReason.FIRST_TCP_TIMEOUT
     reportsLockdownError(error, "InvalidHostID") -> CarPlayFailureReason.HOST_ID_REJECTED
     else -> CarPlayFailureReason.BRING_UP_FAILED
 }
@@ -245,6 +268,14 @@ class CarPlayController(
     private val locationProvider: Iap2LocationProvider? = null,
     private val vehicleStatusProvider: com.shilapi.xcertplay.transport.VehicleStatusProvider? = null,
     private val adapterBluetooth: AdapterBluetoothHost? = null,
+    /**
+     * The address family to prefer on the next attempt, once this one is known not to have worked.
+     *
+     * Called only where the phone never reached us at all — never for a run that connected and later
+     * dropped. Where the preference is kept is the caller's business: this class reads
+     * [CarPlayRuntimeConfig.wirelessAddressFamily] and never writes a setting itself.
+     */
+    private val onWirelessAddressFamilyUnusable: (String) -> Unit = {},
 ) : Closeable {
     init {
         require(!config.locationReportingEnabled || locationProvider != null) {
@@ -311,6 +342,10 @@ class CarPlayController(
     @Volatile private var wirelessTunnelChannel: Iap2Session? = null
     @Volatile private var wirelessIdentification: Iap2IdentificationConfig? = null
     @Volatile private var wirelessAirPlayEndpoint: Iap2WirelessCarPlayEndpoint? = null
+    /** The address this run handed the phone, and the one the other family could offer instead. */
+    @Volatile private var wirelessPublishedAddress: InetAddress? = null
+    @Volatile private var wirelessAlternateAddress: InetAddress? = null
+    @Volatile private var wirelessAddressRecovery: HotspotAddressRecovery? = null
     @Volatile private var vpnService: CarPlayVpnService? = null
     @Volatile private var vpnBound = false
     private val wirelessHandoffRequested = AtomicBoolean(false)
@@ -960,7 +995,6 @@ class CarPlayController(
         var ownStream: BlockingDuplexByteStream? = null
         try {
             debugLog("wireless bring-up generation=$generation starting")
-            debugLog("wireless 5353 sample at=run-start ${PortHolders.udp(CarPlayBonjour.MDNS_PORT, portPackageNames)}")
             closeWirelessStack()
             if (
                 closed ||
@@ -981,10 +1015,32 @@ class CarPlayController(
             wirelessConnectionProof.begin(generation) {
                 if (!isStaleWirelessRun(generation)) startedHotspot?.onCarPlayConfirmed()
             }
-            val hostAddress = hotspotInfo.hostAddress
+            // Which family to publish is what the last run learned, not a fresh guess each time. A run
+            // that published an address the phone never answered on leaves the other family behind for
+            // the next attempt, so the two get tried in turn instead of the same one failing forever.
+            val preferredFamily = config.wirelessAddressFamily
+            val addressRecovery = HotspotAddressRecovery(
+                sample = { hotspotCandidates(hotspotInfo, fallbackToSnapshot = false) },
+                cancelled = { isStaleWirelessRun(generation) },
+                pause = Thread::sleep,
+                log = { if (!isStaleWirelessRun(generation)) debugLog(it) },
+            )
+            val candidates = addressRecovery.awaitCandidates(hotspotCandidates(hotspotInfo), preferredFamily)
+            val hostAddress = HotspotAddressPolicy.select(candidates, preferredFamily)
+                ?: hotspotInfo.hostAddress
                 ?: throw IOException(
                     "Wireless hotspot did not provide a usable host address",
                 )
+            wirelessPublishedAddress = hostAddress
+            wirelessAlternateAddress = HotspotAddressPolicy.alternateFamilyCandidate(candidates, hostAddress)
+            wirelessAddressRecovery = addressRecovery
+            // Built here rather than at the 0x4301, because the port it watches is bound before then and
+            // a phone that finds us through Bonjour may open it first. See [FirstTcpWatchdog].
+            val firstTcpWatchdog = FirstTcpWatchdog(
+                schedule = { delay, body -> mainHandler.postDelayed(body, delay) },
+                onTimeout = { onFirstTcpTimedOut(generation) },
+                log = { message -> if (!isStaleWirelessRun(generation)) debugLog(message) },
+            )
             if (
                 hostAddress is Inet6Address &&
                 (!hostAddress.isLinkLocalAddress || hostAddress.scopeId == 0)
@@ -1001,6 +1057,11 @@ class CarPlayController(
                 "wireless hotspot backend=${hotspotInfo.backend.label} " +
                     "iface=${hotspotInfo.interfaceName ?: "unknown"} " +
                     "family=${if (hostAddress is Inet6Address) "IPv6" else "IPv4"} " +
+                    "preference=${preferredFamily ?: "default"} " +
+                    // Whether the flip has anywhere to go. Recorded on every run because it is the one
+                    // thing that decides whether the next attempt can differ: with no address on the
+                    // other family, a first-TCP timeout can only be retried on the same one again.
+                    "alternate=${wirelessAlternateAddress != null} " +
                     "identitySource=${if (deviceIdentifier == hotspotInfo.bssid) "interface" else "saved"} " +
                     "host=$hostAddressText " +
                     "band=${hotspotInfo.bandLabel} channel=${hotspotInfo.channel} " +
@@ -1070,19 +1131,18 @@ class CarPlayController(
                 "wireless selected Bluetooth target name=${target.name ?: "unknown"} " +
                     "address=${target.address} localBt=$hostBluetoothMac",
             )
-            // 7000 is the conventional AirPlay port and on a head unit it is also a port something else can be
-            // holding. The iPhone learns the port from the Bonjour record and from the iAP2 Wi-Fi configuration,
-            // so a free one keeps the attempt alive instead of losing the trip to a bind error.
-            val listenPort = AirPlayPorts.choose(airPlayConfig.port)
-            if (listenPort != airPlayConfig.port) {
-                debugLog("wireless AirPlay port ${airPlayConfig.port} is taken; using $listenPort instead")
-                debugLog("wireless AirPlay port ${airPlayConfig.port} holders ${PortHolders.tcp(airPlayConfig.port, portPackageNames)}")
-            }
+            // The port is not chosen here. Every address this attachment serves has to share one — the
+            // phone learns a single port for the whole device — so it is settled by binding all of them
+            // together, inside the service, and read back below. 7000 is conventional and on a head unit
+            // it is also a port something else can be holding; the iPhone learns whichever one was bound
+            // from the Bonjour record and from the iAP2 Wi-Fi configuration, so a fallback reaches it.
             val wirelessAirPlayConfig = airPlayConfig.copy(
                 deviceId = deviceIdentifier,
                 btMac = hostBluetoothMac,
-                port = listenPort,
             )
+            // The addresses the phone is told about, and the ones it can actually reach, are the same
+            // list: everything on the selected interface except the one the endpoint prefers.
+            val additionalAddresses = hotspotInfo.hostAddresses.filter { it != hostAddress }
 
             onStatus(CarPlayStatus.AttachingNetwork)
             val service = awaitVpnService()
@@ -1094,18 +1154,33 @@ class CarPlayController(
                     identity = identity,
                     pairings = pairings,
                     mfi = mfi,
-                    listener = wirelessSessionListener(generation),
+                    listener = wirelessSessionListener(generation, firstTcpWatchdog),
                     media = media,
+                    additionalBindAddresses = additionalAddresses,
                 )
             ) {
                 CarPlayVpnService.AttachResult.Started -> Unit
                 CarPlayVpnService.AttachResult.AlreadyStarted ->
                     throw IOException("Wireless AirPlay transport is already attached")
-                is CarPlayVpnService.AttachResult.Failed ->
+                is CarPlayVpnService.AttachResult.Failed -> {
+                    // Every address is tried on one shared port, so a refusal covers both the port being
+                    // taken on all of them and one address having gone away under us. Naming the set is
+                    // what tells the two apart afterwards.
+                    debugLog(
+                        "wireless AirPlay listener attach failed addresses=" +
+                            (listOf(hostAddress) + additionalAddresses).joinToString(",") { it.hostAddress ?: "?" },
+                    )
                     throw IOException(result.message)
+                }
             }
+            // What was actually bound, which is what gets advertised. A fallback the phone is never
+            // told about is the same as no listener at all.
+            val listenPort = service.boundPort() ?: wirelessAirPlayConfig.port
+            val advertisedAirPlayConfig = wirelessAirPlayConfig.copy(port = listenPort)
             debugLog(
-                "wireless AirPlay listener attached bind=$hostAddressText port=$listenPort",
+                "wireless AirPlay listener attached bind=$hostAddressText port=$listenPort" +
+                    (if (listenPort != airPlayConfig.port) " (preferred ${airPlayConfig.port} in use)" else "") +
+                    " addresses=${(listOf(hostAddress) + additionalAddresses).joinToString(",") { it.hostAddress ?: "?" }}",
             )
             if (isStaleWirelessRun(generation)) {
                 closeWirelessStack()
@@ -1119,11 +1194,9 @@ class CarPlayController(
                 "wireless RFCOMM connecting address=${target.address} " +
                     "uuid=$IAP2_IPHONE_UUID",
             )
-            debugLog("wireless 5353 sample at=before-bluetooth ${PortHolders.udp(CarPlayBonjour.MDNS_PORT, portPackageNames)}")
             val stream = link.open().also { bluetoothStream = it }
             ownStream = stream
             debugLog("wireless RFCOMM connected address=${target.address}")
-            debugLog("wireless 5353 sample at=after-bluetooth ${PortHolders.udp(CarPlayBonjour.MDNS_PORT, portPackageNames)}")
             if (isStaleWirelessRun(generation)) {
                 releaseOwnWirelessResources(ownBonjour, ownStream)
                 closeWirelessStack()
@@ -1145,16 +1218,20 @@ class CarPlayController(
             val bonjourClient = try {
                 CarPlayBonjour(
                     context = appContext,
-                    config = wirelessAirPlayConfig,
+                    config = advertisedAirPlayConfig,
                     identity = identity,
-                    // The scope suffix a link-local IPv6 host carries names an interface, not an address,
-                    // and this is the same value stripped for the display path above.
-                    advertisedHost = hostAddressText,
+                    // The scoped form, not the display text above: a JmDNS instance for a link-local
+                    // IPv6 needs the scope to know which interface's group to join. [hostAddressText]
+                    // strips it because iAP2 wants a bare literal, and that is a different requirement.
+                    advertisedHost = hostAddress.hostAddress,
                     // Bind discovery and its connect probe to the same AP/address family as AirPlay.
                     // The car hotspot previously used system NSD, which could resolve another interface
                     // or IPv6 while the listener/probe was bound to the AP's IPv4 address.
                     useInterfaceMdns = true,
                     onEvent = { event -> debugLog("wireless bonjour: ${event.diagnosticSummary()}") },
+                    // Published as well as listened on: an address the phone can reach but cannot find
+                    // is one it will not use, and discovery is where it decides that.
+                    additionalAddresses = additionalAddresses,
                 )
             } catch (error: Exception) {
                 debugLog("wireless Bonjour unavailable, carrying on without an advertisement: ${error.message}")
@@ -1164,6 +1241,10 @@ class CarPlayController(
             bonjour = bonjourClient
             ownBonjour = bonjourClient
             if (bonjourClient != null) {
+                // Sampled where it matters: this is the step that binds 5353, once per advertised
+                // address. Whoever holds the port is the whole explanation for an advertisement that
+                // never appears, and the kernel table is the only place that says who.
+                debugLog("wireless 5353 before-bonjour ${PortHolders.udp(CarPlayBonjour.MDNS_PORT, portPackageNames)}")
                 try {
                     bonjourClient.start()
                     startedBonjour = bonjourClient
@@ -1203,6 +1284,7 @@ class CarPlayController(
                 deviceIdentifier = deviceIdentifier,
                 publicKey = identity.publicKeyHex,
                 sourceVersion = airPlayConfig.sourceVersion,
+                accessPointBssid = hotspotInfo.accessPointBssid,
             )
             wirelessIdentification = identification
             wirelessAirPlayEndpoint = endpoint
@@ -1219,6 +1301,7 @@ class CarPlayController(
                 timeoutMillis = controlLoopTimeoutMillis(),
                 locationProvider = locationProvider,
                 vehicleStatusProvider = vehicleStatusProvider,
+                onCarPlayStartSessionSent = { firstTcpWatchdog.startSessionSent() },
                 onIncoming = ::onRouteFrame,
                 onProgress = { message ->
                     diagnostics.controlProgress(message)
@@ -1258,6 +1341,9 @@ class CarPlayController(
                         )
                     }
                 }
+                // The control conversation's own deadline, which says nothing about the address: a phone
+                // that opened the AirPlay port and then went quiet reaches this too. The family flip is
+                // [FirstTcpWatchdog]'s question, and it has already been answered or already fired by now.
                 Iap2WirelessControlTerminal.TIMED_OUT ->
                     if (!wirelessActiveReported.get()) {
                         onStatus(CarPlayStatus.ControlEnded)
@@ -1354,10 +1440,14 @@ class CarPlayController(
         }
     }
 
-    private fun wirelessSessionListener(generation: Int): AirPlaySessionListener =
+    private fun wirelessSessionListener(
+        generation: Int,
+        firstTcpWatchdog: FirstTcpWatchdog,
+    ): AirPlaySessionListener =
         object : AirPlaySessionListener by sessionListener {
             override fun onConnectionAccepted() {
                 if (isStaleWirelessRun(generation)) return
+                firstTcpWatchdog.accepted()
                 wirelessDiagnostics?.connectionAccepted()
             }
 
@@ -1877,9 +1967,17 @@ class CarPlayController(
 
             val mfi = mfiSession?.client
                 ?: throw IphoneUsbException.DeviceUnavailable("MFi coprocessor client is unavailable")
+            // The port the listener actually bound, not the one that was asked for. The iPhone dials
+            // whatever this message names, so a fallback the phone is not told about would leave the
+            // listener up on a port nothing connects to — which reads as a hang rather than as the
+            // bind error it is. Read back for the same reason the wireless path does.
+            val wiredAirPlayPort = vpnService?.boundPort() ?: airPlayConfig.port
+            if (wiredAirPlayPort != airPlayConfig.port) {
+                debugLog("wired AirPlay port ${airPlayConfig.port} is in use; advertising $wiredAirPlayPort")
+            }
             val endpoint = Iap2WiredCarPlayEndpoint(
                 ipv6Addresses = listOf(config.linkLocal),
-                airPlayPort = airPlayConfig.port,
+                airPlayPort = wiredAirPlayPort,
                 publicKey = identity.publicKeyHex,
                 sourceVersion = airPlayConfig.sourceVersion,
                 deviceIdentifier = ncmHostMac.macString(),
@@ -2074,6 +2172,9 @@ class CarPlayController(
         wirelessDiagnostics = null
         diagnostics?.close()
         wirelessConnectionProof.clear()
+        wirelessPublishedAddress = null
+        wirelessAlternateAddress = null
+        wirelessAddressRecovery = null
         media.setIapTunnelHandler(null)
         val activeTunnel = wirelessTunnelChannel
         wirelessTunnelChannel = null
@@ -2109,6 +2210,84 @@ class CarPlayController(
             throw IOException("LocalOnlyHotspot host address is unavailable")
         }
         return text
+    }
+
+    /**
+     * The addresses the published interface has right now.
+     *
+     * Re-read rather than remembered, because a group is reported ready before all of its addresses are
+     * configured: the one that is missing at creation is often the one worth trying next. Only when the
+     * interface answers with nothing at all does the snapshot stand in for it.
+     */
+    private fun hotspotCandidates(
+        info: WirelessHotspotInfo,
+        fallbackToSnapshot: Boolean = true,
+    ): List<InetAddress> {
+        val name = info.interfaceName ?: return listOfNotNull(info.hostAddress)
+        val scanned = try {
+            NetworkInterface.getByName(name)?.inetAddresses?.toList().orEmpty()
+        } catch (error: Exception) {
+            debugLog("wireless interface scan failed iface=$name error=${error.javaClass.simpleName}")
+            emptyList()
+        }
+        return if (scanned.isEmpty() && fallbackToSnapshot) listOfNotNull(info.hostAddress) else scanned
+    }
+
+    /**
+     * Records that this run's address family is not the one to use next time.
+     *
+     * Only called where the phone never reached us: a run that connected and then dropped says nothing
+     * about whether the address was reachable, and flipping on that would send the next attempt down a
+     * road the last one had already disproved. The other family has to actually exist on the interface
+     * for the flip to be worth anything, which is what [HotspotAddressRecovery.nextFamily] checks.
+     */
+    private fun flipWirelessAddressFamily() {
+        val published = wirelessPublishedAddress
+        val next = published?.let { wirelessAddressRecovery?.nextFamily(it) }
+        val from = published?.let {
+            if (it is Inet6Address) HotspotAddressPolicy.FAMILY_IPV6 else HotspotAddressPolicy.FAMILY_IPV4
+        }
+        if (next == null || from == null) {
+            debugLog(
+                "wireless address family flip skipped published=${from ?: "none"} " +
+                    "alternate=${next != null}",
+            )
+            return
+        }
+        debugLog("wireless address family flip published=$from next=$next")
+        onWirelessAddressFamilyUnusable(next)
+    }
+
+    /**
+     * The phone never opened the AirPlay port inside the window it was given.
+     *
+     * The timeout arrives on the main looper (it is a `postDelayed`), and none of what follows is
+     * main-thread work: the flip re-reads the interface, and the teardown closes sockets out from under a
+     * blocking iAP2 control loop. Both go to their own thread, the same way
+     * [armWirelessHandoffWatchdog] does it.
+     *
+     * The flip has to come before [closeWirelessStack] in that order — the teardown clears the published
+     * address and the recovery that reads it, so a flip that ran after it would have nothing to flip and
+     * would silently record nothing.
+     */
+    private fun onFirstTcpTimedOut(generation: Int) {
+        if (closed || isStaleWirelessRun(generation) || wirelessActiveReported.get()) return
+        Thread(
+            {
+                if (closed || isStaleWirelessRun(generation) || wirelessActiveReported.get()) return@Thread
+                flipWirelessAddressFamily()
+                closeWirelessStack()
+                fail(
+                    FirstTcpTimeoutException(
+                        "no AirPlay TCP within ${WirelessStartupPolicy.FIRST_TCP_MILLIS} ms of CarPlay StartSession",
+                    ),
+                )
+            },
+            "xcertplay-wireless-first-tcp-timeout",
+        ).apply {
+            isDaemon = true
+            start()
+        }
     }
 
     private fun closeBestEffort(name: String, close: () -> Unit) {

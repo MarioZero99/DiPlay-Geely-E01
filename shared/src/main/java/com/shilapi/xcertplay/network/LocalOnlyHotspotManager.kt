@@ -16,7 +16,6 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.SocketException
-import java.net.UnknownHostException
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.Executor
@@ -629,21 +628,10 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
                 .firstNotNullOfOrNull { it.toEui64MacAddress() }
 
     private fun NetworkInterface.hotspotAddress(): InetAddress? {
-        var ipv4: InetAddress? = null
-        for (address in Collections.list(inetAddresses)) {
-            if (address is Inet6Address && address.isLinkLocalAddress) {
-                if (address.scopeId == index) return address
-                try {
-                    return Inet6Address.getByAddress(null, address.address, this)
-                } catch (_: UnknownHostException) {
-                    continue
-                }
-            }
-            if (address is Inet4Address && !address.isLoopbackAddress && ipv4 == null) {
-                ipv4 = address
-            }
-        }
-        return ipv4
+        val address = HotspotAddressPolicy.select(Collections.list(inetAddresses)) ?: return null
+        if (address !is Inet6Address || address.scopeId == index) return address
+        return runCatching { Inet6Address.getByAddress(null, address.address, this) }
+            .getOrDefault(address)
     }
 
     private fun ensureStartActive(attempt: StartAttempt) {

@@ -130,6 +130,7 @@ class ManualHotspotManager(
                     bssid = localInterface.hardwareAddress,
                     interfaceName = localInterface.name,
                     hostAddress = localInterface.hostAddress,
+                    hostAddresses = localInterface.addresses,
                     bandLabel = when (expectedBand) {
                         ManualHotspotBand.GHZ_2_4 -> "2.4 GHz"
                         ManualHotspotBand.GHZ_5 -> "5 GHz"
@@ -211,16 +212,22 @@ class ManualHotspotManager(
             .asSequence()
             .filter { isUsableInterface(it, primaryInterface) }
             .mapNotNull { networkInterface ->
-                networkInterface.hotspotAddress()?.let { address ->
-                    LocalHotspotInterface(
-                        name = networkInterface.name,
-                        hostAddress = address,
-                        hardwareAddress = runCatching { networkInterface.hardwareAddress?.toMacAddressString() }
-                            .getOrNull()?.takeUnless { it == "02:00:00:00:00:00" || it == "00:00:00:00:00:00" }
-                            ?: HotspotInterfaceBssid.read(networkInterface.name),
-                        score = interfaceScore(networkInterface.name, address),
-                    )
-                }
+                val addresses = Collections.list(networkInterface.inetAddresses)
+                val address = wirelessHostAddress(addresses, networkInterface.index)
+                    ?: return@mapNotNull null
+                LocalHotspotInterface(
+                    name = networkInterface.name,
+                    hostAddress = address,
+                    // Both families this access point hands out, IPv4 first: the iAP2 endpoint prefers
+                    // one of them, but discovery and TCP serve all of them. The AP's own address is the
+                    // fallback for the case where the policy found nothing else on the interface.
+                    addresses = existingWifiHostAddresses(addresses, networkInterface.index)
+                        .ifEmpty { listOf(address) },
+                    hardwareAddress = runCatching { networkInterface.hardwareAddress?.toMacAddressString() }
+                        .getOrNull()?.takeUnless { it == "02:00:00:00:00:00" || it == "00:00:00:00:00:00" }
+                        ?: HotspotInterfaceBssid.read(networkInterface.name),
+                    score = interfaceScore(networkInterface.name, address),
+                )
             }
             .maxByOrNull(LocalHotspotInterface::score)
     }
@@ -254,9 +261,6 @@ class ManualHotspotManager(
         if (address is Inet6Address && address.isLinkLocalAddress) score += 15
         return score
     }
-
-    private fun NetworkInterface.hotspotAddress(): InetAddress? =
-        wirelessHostAddress(Collections.list(inetAddresses), index)
 
     private fun frequencyFromConnectionInfo(): Int? {
         val connectionInfo = try {
@@ -427,6 +431,8 @@ class ManualHotspotManager(
     private class LocalHotspotInterface(
         val name: String,
         val hostAddress: InetAddress,
+        /** Every address on this interface that discovery and TCP must serve; [hostAddress] is first. */
+        val addresses: List<InetAddress>,
         val hardwareAddress: String?,
         val score: Int,
     )

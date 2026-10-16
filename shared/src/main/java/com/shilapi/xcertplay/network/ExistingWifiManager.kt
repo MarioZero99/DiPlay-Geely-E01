@@ -181,6 +181,12 @@ class ExistingWifiManager(
             hostAddress = attached.host,
             bandLabel = bandLabel(frequencyMHz),
             backend = WirelessHotspotBackend.EXISTING_WIFI,
+            // Both families the router handed out, so the phone is told about each of them rather than
+            // only about the one this side happened to prefer.
+            hostAddresses = attached.addresses,
+            // Read from the live connection, never typed by the driver: this is the access point the
+            // car is actually on, and it is a hint about somebody else's hardware.
+            accessPointBssid = accessPointAddress(attached.info?.bssid),
         )
     }
 
@@ -215,7 +221,7 @@ class ExistingWifiManager(
         val host = addresses.firstOrNull() ?: return waitFor("an address on the Wi-Fi network")
         val info = stationInfo()
         val ssid = readableSsid(info) ?: return waitFor("the network's name")
-        return Attachment(network, properties, name, iface.index, host, ssid, info)
+        return Attachment(network, properties, name, iface.index, host, addresses, ssid, info)
     }
 
     private fun waitFor(what: String): Attachment? {
@@ -270,6 +276,25 @@ class ExistingWifiManager(
         else -> "6 GHz"
     }
 
+    /**
+     * The access point's address, or null when there is nothing worth telling the phone.
+     *
+     * The phone acts on whatever it is given here, so the value is only passed on when it looks like a
+     * real access point: a malformed or unknown address, an all-zero one, the `02:00:00:00:00:00`
+     * placeholder some frameworks answer with, and a group/multicast address are all dropped rather
+     * than sent as a hint that would send the phone looking for hardware that is not there.
+     */
+    private fun accessPointAddress(text: String?): ByteArray? {
+        if (text == null || !text.matches(Regex("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}"))) return null
+        val bytes = text.split(':').map { it.toInt(16).toByte() }.toByteArray()
+        if (bytes.all { it == 0.toByte() } || bytes[0].toInt() and 1 != 0 ||
+            text.equals("02:00:00:00:00:00", ignoreCase = true)
+        ) {
+            return null
+        }
+        return bytes
+    }
+
     private fun invalidate(reason: String) {
         if (!closed && invalidated.compareAndSet(false, true)) {
             onDiagnostic("Existing Wi-Fi $reason; restarting wireless session")
@@ -307,6 +332,13 @@ class ExistingWifiManager(
         val interfaceName: String,
         val interfaceIndex: Int,
         val host: InetAddress,
+        /**
+         * Every usable address on the interface, [host] first.
+         *
+         * The network is somebody else's and may hand out both families; the phone is told about all of
+         * them because which one it can reach is not something this side gets to decide.
+         */
+        val addresses: List<InetAddress>,
         val ssid: String,
         val info: WifiInfo?,
     )
