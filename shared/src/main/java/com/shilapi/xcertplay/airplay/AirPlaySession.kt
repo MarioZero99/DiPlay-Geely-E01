@@ -668,6 +668,10 @@ class AirPlaySession(
             // this channel. Under Nagle's algorithm each touch waited for the delayed ACK of the previous
             // one, so moves reached it in bunches instead of as they were made.
             socket.tcpNoDelay = true
+            // Touches and night mode are written to this connection, and a write to a phone that left
+            // the network blocks until the platform gives up on it — hours by default. Same tuning as
+            // the control connection, for the same reason.
+            com.shilapi.xcertplay.network.TcpLiveness.configure(socket) { debugLog(it) }
             debugLog("airplay event connection accepted from ${socket.remoteSocketAddress} noDelay=${socket.tcpNoDelay}")
             eventSocket = socket
             val shared = pairVerify.shared
