@@ -6,8 +6,17 @@ package com.shilapi.xcertplay.media
  * outlasts them. Calls, Siri and navigation prompts keep the small low-latency buffer.
  */
 object MediaAudioBuffer {
-    const val DEFAULT_MILLIS = 300
-    val presets = listOf(DEFAULT_MILLIS, 500, 1000)
+    /**
+     * What music buffers where the driver has not chosen.
+     *
+     * 500 ms rather than the 300 ms this started at: a link that needs a buffer at all drops out for
+     * longer than 300 ms often enough to be heard, and 200 ms more is not a delay anyone notices at
+     * the start of a track. Calls, Siri and prompts are unaffected — they never use this buffer.
+     */
+    const val DEFAULT_MILLIS = 500
+
+    /** The choices the settings page offers. 300 stays for a driver who prefers the shorter buffer. */
+    val presets = listOf(300, DEFAULT_MILLIS, 1000)
 
     private const val HEADROOM_MILLIS = 200 // room above the start level so bursts after a gap fit
     private const val MIN_TRACK_BUFFER_BYTES = 16 * 1024

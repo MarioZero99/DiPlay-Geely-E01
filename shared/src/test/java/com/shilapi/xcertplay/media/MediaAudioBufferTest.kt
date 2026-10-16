@@ -23,7 +23,7 @@ class MediaAudioBufferTest {
     @Test
     fun `unknown delay falls back to the default`() {
         assertEquals(MediaAudioBuffer.DEFAULT_MILLIS, MediaAudioBuffer.sanitize(250))
-        assertEquals(57_600, MediaAudioBuffer.plan("media", 48_000, 2, 7_680, mediaMillis = 42).startBytes)
+        assertEquals(96_000, MediaAudioBuffer.plan("media", 48_000, 2, 7_680, mediaMillis = 42).startBytes)
     }
 
     @Test

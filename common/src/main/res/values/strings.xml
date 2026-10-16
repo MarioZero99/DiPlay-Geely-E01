@@ -330,11 +330,11 @@
     <string name="s_1_open_car_hotspot_settings_turn_the_hotspot_on_and_sele">1. Open car hotspot settings, turn the hotspot on and select 5 GHz if available.\n2. Copy its name and password below exactly.\n3. Leave the car hotspot on when connecting. DiPlay sends the details over Bluetooth; your iPhone joins automatically.</string>
     <string name="s_2_4_ghz" tools:ignore="MissingTranslation">2.4 GHz</string>
     <string name="s_2_bluetooth_and_phone">2 · Bluetooth and phone</string>
-    <string name="s_300_ms_default">300 ms · default</string>
+    <string name="s_300_ms">300 ms</string>
     <string name="s_30_fps_lighter_load">30 fps · lighter load</string>
     <string name="s_3_connect">3 · Connect</string>
     <string name="s_3_tap_check_and_enable_below_this_enables_the_cluster_ma">3. Tap Check and enable below. This enables the cluster map and automatic theme following. An active CarPlay session reconnects once. You can then disconnect the computer.</string>
-    <string name="s_500_ms">500 ms</string>
+    <string name="s_500_ms_default">500 ms · default</string>
     <string name="s_5_ghz" tools:ignore="MissingTranslation">5 GHz</string>
     <string name="s_60_fps_smoother_motion">60 fps · smoother motion</string>
     <string name="s_60_lightest_load" formatted="false">60% · lightest load</string>

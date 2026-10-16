@@ -228,7 +228,18 @@ class CarPlayVpnService : VpnService() {
         try {
             while (active.get()) {
                 val socket: Socket = server.accept()
-                DiagLog.i(TAG, "airplay connection accepted from ${socket.remoteSocketAddress}")
+                // Which of this attachment's addresses the phone dialled, by family rather than by
+                // literal: an exported report redacts addresses, and this is the line that says whether
+                // the link the phone chose is the one this run published.
+                val bound = runCatching { server.inetAddress }.getOrNull()
+                DiagLog.i(
+                    TAG,
+                    "airplay connection accepted family=" + when (bound) {
+                        is Inet6Address -> "IPv6"
+                        null -> "unknown"
+                        else -> "IPv4"
+                    } + " port=${server.localPort} from=${socket.remoteSocketAddress}",
+                )
                 // Read the volatile field the way the transport-error path does: the attachment this
                 // connection belongs to is whoever is attached right now, and a run that was replaced
                 // filters itself out on the listener's own side.

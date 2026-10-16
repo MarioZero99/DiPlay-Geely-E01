@@ -14,7 +14,7 @@ package com.shilapi.xcertplay
  * able to read the report top to bottom.
  */
 internal object DiagnosticDigest {
-    /** Matches the upload cap, so what was saved is what would be sent. */
+    /** What one saved report may weigh. The upload path splits its report instead of cutting it. */
     const val BUDGET_BYTES = 1024 * 1024
 
     private const val HEADER_KEEP_FRACTION = 0.25

@@ -217,7 +217,6 @@ class CarPlayBonjour(
     private var worker: Thread? = null
     @Volatile
     private var activeSocket: Socket? = null
-    private val interfaceMdns = mutableListOf<JmDNS>()
 
     private val interfaceListener = object : ServiceListener {
         override fun serviceAdded(event: ServiceEvent) {
@@ -321,23 +320,7 @@ class CarPlayBonjour(
                     requireNotNull(localAdvertisedAddress) {
                         "Interface mDNS requires a local advertised address"
                     }
-                    // One instance per address, because a JmDNS instance joins only its own family's
-                    // multicast group. Each both registers the AirPlay record and listens for the
-                    // phone's control service.
-                    for (address in advertisedAddresses) {
-                        val dns = JmDNS.create(address, "carplay-${config.deviceId.replace(":", "")}")
-                        interfaceMdns.add(dns)
-                        dns.addServiceListener("$CARPLAY_CONTROL_SERVICE_TYPE.local.", interfaceListener)
-                        dns.registerService(
-                            ServiceInfo.create(
-                                "$AIRPLAY_SERVICE_TYPE.local.", config.deviceName, config.port,
-                                0, 0, CarPlayBonjourProtocol.airPlayTxtRecords(config, identity),
-                            ),
-                        )
-                    }
-                    publishedFamilies = advertisedAddresses.joinToString(",") {
-                        if (it is Inet4Address) "IPv4" else "IPv6"
-                    }
+                    startInterfaceMdns()
                 } else {
                     registerAirPlay()
                     registrationRequested = true
@@ -364,7 +347,7 @@ class CarPlayBonjour(
                 }
                 worker?.interrupt()
                 worker = null
-                closeInterfaceMdns()
+                releaseInterfaceMdns()
                 publishedFamilies = "none"
                 if (multicastLock.isHeld) multicastLock.release()
                 throw error
@@ -372,15 +355,59 @@ class CarPlayBonjour(
         }
     }
 
-    /** Closes every instance and empties the list. Caller holds [lifecycleLock] or owns the list. */
-    private fun closeInterfaceMdns() {
-        interfaceMdns.forEach { dns -> runCatching { dns.close() } }
-        interfaceMdns.clear()
+    /**
+     * Publishes the AirPlay record and listens for the phone on every advertised address, taking 5353
+     * for this run.
+     *
+     * One instance per address, because a JmDNS instance joins only its own family's multicast group.
+     * The port, though, is one for the whole process, and an earlier run may still be holding it: a
+     * teardown that has not finished, a bring-up this one replaced, a session being handed over. Those
+     * instances are taken down here, before ours are created, because a retry ladder waits for nobody —
+     * and an advertisement that never appears reads exactly like a phone that never looked.
+     *
+     * Serialised on [interfaceMdnsLock] rather than [lifecycleLock]: the run being closed is not this
+     * one, and it has a lifecycle lock of its own.
+     */
+    private fun startInterfaceMdns() {
+        synchronized(interfaceMdnsLock) {
+            if (interfaceMdns.isNotEmpty()) {
+                DiagLog.w(TAG, "mDNS $MDNS_PORT was still held by an earlier run; closing it before listening")
+            }
+            closeInterfaceMdnsLocked()
+            interfaceMdnsOwner = this
+            for (address in advertisedAddresses) {
+                val dns = JmDNS.create(address, "carplay-${config.deviceId.replace(":", "")}")
+                interfaceMdns.add(dns)
+                dns.addServiceListener("$CARPLAY_CONTROL_SERVICE_TYPE.local.", interfaceListener)
+                dns.registerService(
+                    ServiceInfo.create(
+                        "$AIRPLAY_SERVICE_TYPE.local.", config.deviceName, config.port,
+                        0, 0, CarPlayBonjourProtocol.airPlayTxtRecords(config, identity),
+                    ),
+                )
+            }
+        }
+        publishedFamilies = advertisedAddresses.joinToString(",") {
+            if (it is Inet4Address) "IPv4" else "IPv6"
+        }
+    }
+
+    /**
+     * Gives the port up, if this run is the one holding it.
+     *
+     * A run that was already replaced leaves the newer run's instances alone: closing those would be
+     * the older run shutting the port the newer one advertises on.
+     */
+    private fun releaseInterfaceMdns() {
+        synchronized(interfaceMdnsLock) {
+            if (interfaceMdnsOwner !== this) return
+            interfaceMdnsOwner = null
+            closeInterfaceMdnsLocked()
+        }
     }
 
     override fun close() {
         val workerToJoin: Thread?
-        val dnsToClose: List<JmDNS>
         synchronized(lifecycleLock) {
             if (released) return
             released = true
@@ -398,17 +425,15 @@ class CarPlayBonjour(
             services.clear()
             interfaceServices.clear()
             discoveryEvents.clear()
-            // Closing a JmDNS instance can block on its own threads, so it happens outside this lock and
-            // the list is emptied here so nothing else can reach the instances it holds.
-            dnsToClose = interfaceMdns.toList()
-            interfaceMdns.clear()
+            // 5353 goes back only if this run is the one holding it: a run that was already replaced
+            // leaves the newer one's instances standing, since they are not this run's to close.
+            releaseInterfaceMdns()
             publishedFamilies = "none"
             workerToJoin = worker
             worker = null
             workerToJoin?.interrupt()
             if (multicastLock.isHeld) multicastLock.release()
         }
-        dnsToClose.forEach { dns -> runCatching { dns.close() } }
         workerToJoin?.let(::joinWorker)
     }
 
@@ -691,5 +716,25 @@ class CarPlayBonjour(
         const val READ_TIMEOUT_MILLIS = 3_000
         const val JOIN_TIMEOUT_MILLIS = 2_000L
         const val FAILURE_NONE = -1
+
+        /**
+         * The instances this process is holding on [MDNS_PORT], and the run that put them there.
+         *
+         * One port for the process, so one owner: whoever starts next takes down what is here before
+         * creating its own, rather than trusting a teardown to have finished in time.
+         */
+        private val interfaceMdnsLock = Any()
+        private val interfaceMdns = mutableListOf<JmDNS>()
+        private var interfaceMdnsOwner: CarPlayBonjour? = null
+
+        /**
+         * Caller holds [interfaceMdnsLock]. Closing an instance can block, and that is deliberate: the
+         * sockets have to be gone before the next run binds, not merely on their way out.
+         */
+        private fun closeInterfaceMdnsLocked() {
+            val closing = interfaceMdns.toList()
+            interfaceMdns.clear()
+            closing.forEach { dns -> runCatching { dns.close() } }
+        }
     }
 }

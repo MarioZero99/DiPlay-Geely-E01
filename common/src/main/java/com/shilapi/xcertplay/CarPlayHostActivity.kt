@@ -91,6 +91,7 @@ import com.shilapi.xcertplay.orchestration.connectionStepOf
 import com.shilapi.xcertplay.orchestration.ManualHotspotBand
 import com.shilapi.xcertplay.orchestration.ManualHotspotSecurity
 import com.shilapi.xcertplay.orchestration.MfiTarget
+import com.shilapi.xcertplay.orchestration.WirelessAddressFamilyGuess
 import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.orchestration.isManualHotspotChannelCompatible
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
@@ -209,7 +210,7 @@ class CarPlayHostActivity : ComponentActivity() {
         manualHotspotSecurity = manualHotspotSecurity,
         existingWifiSsid = existingWifiSsid,
         existingWifiPassphrase = existingWifiPassphrase,
-        wirelessAddressFamily = wirelessAddressFamily.takeIf { it.isNotEmpty() },
+        wirelessAddressFamily = wirelessAddressFamilyGuess.family,
         locationReportingEnabled = locationReportingEnabled,
     )
 
@@ -351,7 +352,14 @@ class CarPlayHostActivity : ComponentActivity() {
     private var manualHotspotSecurity = ManualHotspotSecurity.OPEN
     private var existingWifiSsid = ""
     private var existingWifiPassphrase = ""
-    private var wirelessAddressFamily = ""
+    /**
+     * Which address family this connect has moved to, and nothing that outlives it.
+     *
+     * Held here rather than in storage on purpose: the retry ladder reads it on every attempt it makes
+     * by itself, which is all the reach it needs, and the next connect starts from the default order
+     * again. See [WirelessAddressFamilyGuess].
+     */
+    private val wirelessAddressFamilyGuess = WirelessAddressFamilyGuess()
     private var awaitingVpnConsent = false
     private var awaitingWirelessPermissions = false
     private var awaitingLocationPermission = false
@@ -628,9 +636,6 @@ class CarPlayHostActivity : ComponentActivity() {
         // reaching for storage itself.
         existingWifiSsid = AirPlayPersistence.loadExistingWifiSsid(this)
         existingWifiPassphrase = AirPlayPersistence.loadExistingWifiPassphrase(this)
-        // Re-read here rather than kept from construction: the retry ladder makes attempts on its own,
-        // and the attempt that wrote a preference must not be the only one that can see it.
-        wirelessAddressFamily = AirPlayPersistence.loadWirelessAddressFamily(this)
         return storedHotspotSsid
     }
 
@@ -2041,6 +2046,9 @@ class CarPlayHostActivity : ComponentActivity() {
                     activeAirPlaySession = session
                     CarPlayBackgroundSession.active = true
                     reconnectAttempts = 0
+                    // The guess answered itself: this connect arrived, so nothing it concluded belongs
+                    // to whatever comes next.
+                    wirelessAddressFamilyGuess.clear()
                     syncAirPlayDarkMode()
                     appendLog("AirPlay session active")
                 }
@@ -2260,12 +2268,19 @@ class CarPlayHostActivity : ComponentActivity() {
             clearPairRecord = { AirPlayPersistence.clearLockdownRecord(this) },
             locationProvider = locationProvider,
             adapterBluetooth = adapterPage?.host,
-            // A wireless attempt whose address the phone never answered on leaves the other family
-            // behind for the next one. Storage is written here, not in the controller: the preference
-            // belongs to the driver's head unit, and the retry ladder that reads it is here too.
+            // A wireless attempt whose address the phone never answered on moves the next attempt to
+            // the other family — once, and only within this connect. What the watchdog found is a fact
+            // about the address this run published on this network, not a fact about the head unit, so
+            // it is neither written down nor carried into the next connect.
             onWirelessAddressFamilyUnusable = { family ->
-                AirPlayPersistence.saveWirelessAddressFamily(this, family)
-                wirelessAddressFamily = family
+                val taken = wirelessAddressFamilyGuess.onUnusable(family) != null
+                appendLog(
+                    if (taken) {
+                        "wireless address family move to $family taken for the next attempt"
+                    } else {
+                        "wireless address family move to $family not taken: this connect already moved once"
+                    },
+                )
             },
         )
         controller = next
@@ -2624,6 +2639,9 @@ class CarPlayHostActivity : ComponentActivity() {
         reconnectEpoch += 1
         reconnectScheduled = false
         reconnectAttempts = 0
+        // The driver is asking for a new connection, so this one starts from the front of the order
+        // again whatever the last one concluded about the address family.
+        wirelessAddressFamilyGuess.clear()
         showHandshakeLine("manual retry: start a new handshake")
         appendLog("manual retry: start a new handshake")
         if (handshakeResetInProgress) {

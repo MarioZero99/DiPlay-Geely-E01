@@ -630,7 +630,7 @@ class DiPlayActivity : ComponentActivity() {
             carPlaySizeControl(card)
             choice(card, getString(R.string.resolution), listOf(getString(R.string.resolution_native), getString(R.string.s_80_lighter_load), getString(R.string.s_60_lightest_load)), listOf(10, 8, 6).indexOf(AirPlayPersistence.loadDisplayScaleTenths(this)).coerceAtLeast(0)) { AirPlayPersistence.saveDisplayScaleTenths(this, listOf(10, 8, 6)[it]) }
             val bufferPresets = com.shilapi.xcertplay.media.MediaAudioBuffer.presets
-            choice(card, getString(R.string.music_buffer), listOf(getString(R.string.s_300_ms_default), getString(R.string.s_500_ms), getString(R.string.s_1000_ms_most_stable)),
+            choice(card, getString(R.string.music_buffer), listOf(getString(R.string.s_300_ms), getString(R.string.s_500_ms_default), getString(R.string.s_1000_ms_most_stable)),
                 bufferPresets.indexOf(AirPlayPersistence.loadMediaBufferMillis(this)).coerceAtLeast(0)) {
                 AirPlayPersistence.saveMediaBufferMillis(this, bufferPresets[it])
             }
@@ -2405,7 +2405,24 @@ class DiPlayActivity : ComponentActivity() {
             buildDiagnosticSections(appContext),
         )
 
-    /** Generates the same report as Save, then uploads that file. Only the button calls this. */
+    /**
+     * The report in full, oldest run first.
+     *
+     * Save fits the same content into one file by ranking it and cutting what does not fit (see
+     * [DiagnosticDigest]); uploading has no reason to cut anything, because the bucket's cap is per
+     * object and [SupabaseLogUpload.parts] splits the report across as many objects as it needs. A part
+     * therefore reads the way a log does — in the order things happened — instead of starting with the
+     * lines a ranking put first.
+     */
+    private fun buildCompleteReport(appContext: android.content.Context): String = buildString {
+        appendLine(buildDiagnosticHeader(appContext))
+        for (section in buildDiagnosticSections(appContext)) {
+            appendLine("--- ${section.name} ---")
+            section.lines.forEach { appendLine(it) }
+        }
+    }
+
+    /** Generates the whole report, then uploads it in as many objects as its size needs. */
     private fun uploadGeneratedReport() {
         if (uploadInProgress) return
         uploadInProgress = true
@@ -2416,19 +2433,33 @@ class DiPlayActivity : ComponentActivity() {
         val key = BuildConfig.SUPABASE_KEY
         Thread({
             val result = runCatching {
-                val report = buildDiagnosticReport(appContext)
-                val body = report.toByteArray(Charsets.UTF_8)
-                SupabaseLogUpload.post(url, key, fileName, body)
-                body.size
+                val report = buildCompleteReport(appContext)
+                val parts = SupabaseLogUpload.parts(report)
+                parts.forEachIndexed { index, body ->
+                    SupabaseLogUpload.post(
+                        url,
+                        key,
+                        SupabaseLogUpload.partName(fileName, index, parts.size),
+                        body,
+                    )
+                }
+                parts.size to report.toByteArray(Charsets.UTF_8).size
             }
             runOnUiThread {
                 uploadInProgress = false
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 uploadButton?.apply { isEnabled = true; text = getString(R.string.generate_and_upload_report) }
                 if (result.isSuccess) {
+                    val (count, bytes) = result.getOrThrow()
+                    val destination = if (count == 1) {
+                        fileName
+                    } else {
+                        SupabaseLogUpload.partName(fileName, 0, count) + " … " +
+                            SupabaseLogUpload.partName(fileName, count - 1, count)
+                    }
                     AlertDialog.Builder(this)
                         .setTitle(getString(R.string.report_uploaded))
-                        .setMessage(getString(R.string.report_uploaded_detail, fileName, result.getOrThrow()))
+                        .setMessage(getString(R.string.report_uploaded_detail, destination, bytes))
                         .setPositiveButton(getString(R.string.done), null)
                         .show()
                 } else {
