@@ -37,6 +37,13 @@
     <string name="existing_wifi_password_may_be_needed">If this head unit will not let DiPlay read the network’s password, the iPhone has nothing to join with and the connection waits here. Filling it in costs nothing if the car would have supplied it anyway.</string>
     <string name="existing_wifi_enter_password">Enter the Wi-Fi password</string>
     <string name="existing_wifi_change_password">Change the saved password</string>
+    <string name="existing_wifi_saved_networks_title">Saved Wi-Fi passwords</string>
+    <string name="existing_wifi_saved_networks_hint">DiPlay uses one of these only when the car will not give up its own copy of the password.</string>
+    <string name="existing_wifi_saved_networks_none">No Wi-Fi password saved yet.</string>
+    <string name="existing_wifi_edit_saved">Edit</string>
+    <string name="existing_wifi_delete_saved">Delete</string>
+    <string name="existing_wifi_edit_saved_title">Saved Wi-Fi password</string>
+    <string name="existing_wifi_edit_saved_hint">The password saved for the network named above. DiPlay uses it only when the car will not give up its own copy, and only for that name, which is what the entry is filed under — so the name is not changed here. A network saved under the wrong name is deleted from the list and filled in on the page instead.</string>
     <string name="network_error_empty_name">Enter the Wi-Fi network’s name</string>
     <string name="network_error_long_name">The network name must be at most 32 bytes</string>
     <string name="network_error_password_length">The Wi-Fi password must be 8–63 characters</string>

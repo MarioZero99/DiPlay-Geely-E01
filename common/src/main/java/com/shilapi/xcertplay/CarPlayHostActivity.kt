@@ -76,6 +76,7 @@ import com.shilapi.xcertplay.media.AndroidMediaSink
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.network.CarHotspotStatus
 import com.shilapi.xcertplay.network.CarPlayVpnService
+import com.shilapi.xcertplay.network.ExistingWifiDriverCredentials
 import com.shilapi.xcertplay.orchestration.CarPlayController
 import com.shilapi.xcertplay.orchestration.CarPlayRuntimeConfig
 import com.shilapi.xcertplay.orchestration.CarPlayFailureReason
@@ -208,8 +209,7 @@ class CarPlayHostActivity : ComponentActivity() {
         manualHotspotBand = manualHotspotBand,
         manualHotspotChannel = manualHotspotChannel,
         manualHotspotSecurity = manualHotspotSecurity,
-        existingWifiSsid = existingWifiSsid,
-        existingWifiPassphrase = existingWifiPassphrase,
+        existingWifiCredentials = existingWifiCredentials,
         wirelessAddressFamily = wirelessAddressFamilyGuess.family,
         locationReportingEnabled = locationReportingEnabled,
     )
@@ -350,8 +350,7 @@ class CarPlayHostActivity : ComponentActivity() {
     private var manualHotspotBand = ManualHotspotBand.AUTO
     private var manualHotspotChannel = 0
     private var manualHotspotSecurity = ManualHotspotSecurity.OPEN
-    private var existingWifiSsid = ""
-    private var existingWifiPassphrase = ""
+    private var existingWifiCredentials: List<ExistingWifiDriverCredentials> = emptyList()
     /**
      * Which address family this connect has moved to, and nothing that outlives it.
      *
@@ -631,11 +630,10 @@ class CarPlayHostActivity : ComponentActivity() {
             storedSecurity = AirPlayPersistence.loadManualHotspotSecurity(this),
             usedPassphrase = hotspotPassphrase,
         )
-        // The driver's copy of the joined network's password, for the head unit that will not hand the
-        // car's own over. Carried on the runtime config, so the manager can fall back to it without
-        // reaching for storage itself.
-        existingWifiSsid = AirPlayPersistence.loadExistingWifiSsid(this)
-        existingWifiPassphrase = AirPlayPersistence.loadExistingWifiPassphrase(this)
+        // The driver's copies of the network passwords they have saved, for the head unit that will not
+        // hand the car's own over. The whole list is carried on the runtime config and the manager picks
+        // the entry for the network the car is actually on, so nothing here has to guess which it is.
+        existingWifiCredentials = AirPlayPersistence.loadExistingWifiNetworks(this)
         return storedHotspotSsid
     }
 

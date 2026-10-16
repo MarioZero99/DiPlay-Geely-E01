@@ -37,6 +37,13 @@
     <string name="existing_wifi_password_may_be_needed">如果这台车机不让 DiPlay 读取这张网的密码，iPhone 就没有可入网的东西，连接会一直停在这里。就算车机本来会给，填一次也没有代价。</string>
     <string name="existing_wifi_enter_password">填写 Wi-Fi 密码</string>
     <string name="existing_wifi_change_password">修改已保存的密码</string>
+    <string name="existing_wifi_saved_networks_title">已保存的 Wi-Fi 密码</string>
+    <string name="existing_wifi_saved_networks_hint">只有当车机不肯交出自己那份密码时，DiPlay 才会用这里的一份。</string>
+    <string name="existing_wifi_saved_networks_none">还没有保存任何 Wi-Fi 密码。</string>
+    <string name="existing_wifi_edit_saved">编辑</string>
+    <string name="existing_wifi_delete_saved">删除</string>
+    <string name="existing_wifi_edit_saved_title">已保存的 Wi-Fi 密码</string>
+    <string name="existing_wifi_edit_saved_hint">这一份密码是给上面那张网存的。只有当车机不肯交出自己那份时，DiPlay 才会用这一份，而且只认上面那个网名；网名就是这条记录的存档名，所以不在这里修改——如果名字存错了，请把列表里那一条删掉，改在页面上重新填写。</string>
     <string name="network_error_empty_name">请输入这张 Wi-Fi 的名称</string>
     <string name="network_error_long_name">网络名称不能超过32字节</string>
     <string name="network_error_password_length">Wi-Fi 密码长度必须为8至63个字符</string>

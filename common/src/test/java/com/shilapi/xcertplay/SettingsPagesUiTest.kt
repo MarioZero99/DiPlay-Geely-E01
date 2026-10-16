@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
@@ -21,6 +22,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAlertDialog
 
 /**
  * The settings area is one page that carries every bucket, and the two routes still left.
@@ -368,6 +370,97 @@ class SettingsPagesUiTest {
             "the car's own hotspot is not claimed to be running",
             shown.any { it.startsWith("The car’s own hotspot is still on") },
         )
+    }
+
+    /**
+     * A saved password is shown for a network the car is not on -- the whole point of the list.
+     *
+     * `joinedWifiName()` reads the *live* connection, and on a head unit whose Wi-Fi has not come up
+     * yet -- every start after a reboot -- there is none to read. A page that took its idea of what is
+     * saved from that name alone said "not on any Wi-Fi yet", offered the dialog with both fields
+     * empty, and left the password the driver had already saved invisible and uneditable, which is
+     * what "my password was not saved" was read from. The list is storage's, so it is drawn the same
+     * whatever the radio is doing; this pins the head unit that is on nothing at all.
+     *
+     * The joined-state line is asserted first and is what makes the rest evidence: if this head unit
+     * ever started reporting a connection, the test would fail on that line rather than pass on a name
+     * that had come from the live network.
+     */
+    @Test fun aSavedPasswordIsShownForANetworkTheCarIsNotOn() {
+        val context = RuntimeEnvironment.getApplication()
+        AirPlayPersistence.saveWirelessHotspotMode(context, WirelessHotspotMode.EXISTING_WIFI)
+        AirPlayPersistence.saveExistingWifiNetwork(context, "Flat 12 Wi-Fi", "hunter2hunter2")
+
+        val activity = open("settings")
+        val shown = texts(activity)
+
+        assertTrue(
+            "this head unit is on no Wi-Fi at all",
+            "Car is not on any Wi-Fi yet · Connect it in the car’s Wi-Fi settings." in shown,
+        )
+        assertTrue("the saved network is named on the page", "Flat 12 Wi-Fi" in shown)
+        assertTrue(
+            "the saved password is offered for editing, not only listed",
+            views<Button>(activity).any { it.text?.toString() == "Edit" },
+        )
+    }
+
+    /**
+     * With nothing saved, the list says so instead of drawing no rows and no word about them.
+     *
+     * An empty list and a list the page failed to draw are the same picture otherwise, and on the head
+     * unit this page is for the driver has no other way to tell a password that was never saved from
+     * one the page cannot see.
+     */
+    @Test fun theSavedListSaysWhenThereIsNothingInIt() {
+        AirPlayPersistence.saveWirelessHotspotMode(
+            RuntimeEnvironment.getApplication(),
+            WirelessHotspotMode.EXISTING_WIFI,
+        )
+
+        val activity = open("settings")
+
+        assertTrue(
+            "the empty list is said in words",
+            "No Wi-Fi password saved yet." in texts(activity),
+        )
+        assertFalse(
+            "and no row is drawn for a network that is not there",
+            views<Button>(activity).any { it.text?.toString() in listOf("Edit", "Delete") },
+        )
+    }
+
+    /**
+     * The name in a saved row's dialog is shown, not typed into -- an edit must not be able to add.
+     *
+     * The entry is stored and looked up *by* its name, so an editable field there is not an edit: the
+     * save upserts by name, and a driver who corrected a spelling would get the corrected entry added
+     * while the old one, password and all, stayed in the list -- two rows for one network, from a
+     * dialog whose whole job is to change one. Held to the name its row carries, the dialog can only
+     * change that entry's password.
+     */
+    @Test fun theSavedRowsDialogShowsTheNameItCannotChange() {
+        val context = RuntimeEnvironment.getApplication()
+        AirPlayPersistence.saveWirelessHotspotMode(context, WirelessHotspotMode.EXISTING_WIFI)
+        AirPlayPersistence.saveExistingWifiNetwork(context, "HomeWiFi", "hunter2hunter2")
+
+        val activity = open("settings")
+        onlyButton(activity, "Edit").performClick()
+        val dialog = requireNotNull(ShadowAlertDialog.getLatestAlertDialog())
+
+        val fields = descendants(dialog.window!!.decorView).filterIsInstance<EditText>().toList()
+        val name = fields.first()
+        val password = fields.last()
+        assertEquals("the entry's own name is in the name field", "HomeWiFi", name.text.toString())
+        assertFalse("and the name cannot be typed over", name.isEnabled)
+        assertFalse("nor reached by the keyboard", name.isFocusable)
+        assertEquals("the password is what this dialog is for", "hunter2hunter2", password.text.toString())
+        assertTrue("and the password stays editable", password.isEnabled)
+    }
+
+    private fun descendants(view: View): Sequence<View> = sequence {
+        yield(view)
+        if (view is ViewGroup) for (index in 0 until view.childCount) yieldAll(descendants(view.getChildAt(index)))
     }
 
     /**

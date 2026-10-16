@@ -12,12 +12,17 @@ import com.shilapi.xcertplay.airplay.PairingStore
 import com.shilapi.xcertplay.airplay.SafeAreaCodec
 import com.shilapi.xcertplay.airplay.SafeAreaRect
 import com.shilapi.xcertplay.media.NavigationAudioStream
+import com.shilapi.xcertplay.network.ExistingWifiDriverCredentials
+import com.shilapi.xcertplay.network.existingWifiPassphraseFor
+import com.shilapi.xcertplay.network.sameWifiNetworkName
 import com.shilapi.xcertplay.orchestration.ManualHotspotBand
 import com.shilapi.xcertplay.orchestration.ManualHotspotSecurity
 import com.shilapi.xcertplay.orchestration.MfiTarget
 import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.LockdownPairRecord
 import java.io.File
+import org.json.JSONArray
+import org.json.JSONObject
 
 /** SharedPreferences persistence for the accessory identity and paired controllers. */
 object AirPlayPersistence {
@@ -50,9 +55,14 @@ object AirPlayPersistence {
     private const val KEY_MANUAL_HOTSPOT_CHANNEL = "manual_hotspot_channel"
     private const val KEY_MANUAL_HOTSPOT_SECURITY = "manual_hotspot_security"
 
-    /** The network the car joined and the password the driver typed for it, as a pair. */
+    /** Every network the car has been on and the password the driver typed for each, as pairs. */
     private const val KEY_EXISTING_WIFI_SSID = "existing_wifi_ssid"
     private const val KEY_EXISTING_WIFI_PASSPHRASE = "existing_wifi_passphrase"
+    private const val KEY_EXISTING_WIFI_NETWORKS = "existing_wifi_networks"
+
+    /** The two fields of one entry of [KEY_EXISTING_WIFI_NETWORKS]. */
+    private const val KEY_EXISTING_WIFI_ENTRY_SSID = "ssid"
+    private const val KEY_EXISTING_WIFI_ENTRY_PASSPHRASE = "passphrase"
     private const val KEY_DEBUG_LOGS_ENABLED = "debug_logs_enabled"
     private const val KEY_MANUFACTURER = "manufacturer"
     private const val KEY_MODEL = "model"
@@ -301,40 +311,102 @@ object AirPlayPersistence {
     }
 
     /**
-     * The password of the network the car is on, when the driver has typed it in.
+     * Every password the driver has saved, one per network.
      *
-     * Stored as a pair rather than on its own: a password belongs to one network, and the same
-     * password under a different name is a wrong password. [loadExistingWifiPassphrase] is only
-     * used where its own SSID matches the network the car actually joined, which is what keeps a
-     * password entered for yesterday's network from being sent as today's.
+     * A password belongs to one network, and the same password filed under a different name is a wrong
+     * password — so each entry carries its network's name, and the connect path uses the one whose name
+     * matches the network the car actually joined. Keeping only the last one would make saving a
+     * password for today's network throw away yesterday's, and the driver would be asked for the same
+     * password again the next time they were on it.
      *
      * This exists because the platform is allowed to refuse. `WifiManager.getConfiguredNetworks()`
-     * hands an app the network's details but not always its key, and on a head unit that refuses,
-     * the phone is told to join a secured network with no password to join it with. The car's own
-     * copy is tried first; this is what the driver can supply when the car will not.
+     * hands an app the network's details but not always its key, and on a head unit that refuses, the
+     * phone is told to join a secured network with no password to join it with. The car's own copy is
+     * tried first; this is what the driver can supply when the car will not.
+     *
+     * Reading never throws and never hands back an entry that could not be sent. The text parsed here
+     * is ours, but it is also just a file: it can be truncated, hand-edited, or left by a build with a
+     * different idea of what an entry is, and none of those may cost the driver the passwords that are
+     * still readable in it.
      */
-    fun loadExistingWifiSsid(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_EXISTING_WIFI_SSID, null)
-            .orEmpty()
+    fun loadExistingWifiNetworks(context: Context): List<ExistingWifiDriverCredentials> {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        prefs.getString(KEY_EXISTING_WIFI_NETWORKS, null)
+            ?.let(::decodeExistingWifiNetworks)
+            ?.let { return it }
+        // Nothing readable under the list's key. The single pair is the whole of what a build from
+        // before this change could have written, so it seeds the list — this is what carries a password
+        // saved before the list existed forward, once. It is not written back as a list here: the next
+        // save or removal answers for the list itself, and until then the pair is still the truth.
+        return legacyExistingWifiCredentials(
+            prefs.getString(KEY_EXISTING_WIFI_SSID, null),
+            prefs.getString(KEY_EXISTING_WIFI_PASSPHRASE, null),
+        )
+    }
 
-    fun loadExistingWifiPassphrase(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_EXISTING_WIFI_PASSPHRASE, null)
-            .orEmpty()
+    /**
+     * The password held for that network, or `""`.
+     *
+     * Which entry is this network's is answered by [existingWifiPassphraseFor], the same function the
+     * connect path asks: the page and the session get their answer from one rule, so what this reports
+     * as saved is what would be sent, and a change to how names are matched cannot reach one of them
+     * without reaching the other.
+     */
+    fun loadExistingWifiPassphrase(context: Context, ssid: String): String =
+        existingWifiPassphraseFor(loadExistingWifiNetworks(context), ssid).orEmpty()
 
-    fun saveExistingWifiCredentials(context: Context, ssid: String, passphrase: String) {
+    /**
+     * Saves the driver's password for one network.
+     *
+     * A network already in the list keeps its place and takes the new password: the list is written
+     * oldest first, and a network does not become the newest thing in it because its password was
+     * corrected. A network that is not in it yet is appended.
+     *
+     * The single pair this app used to keep is written as well, holding what was just saved. A build
+     * from before this change reads only that pair, and the one password it can hold is best spent on
+     * the network the driver typed a password for last.
+     */
+    fun saveExistingWifiNetwork(context: Context, ssid: String, passphrase: String) {
+        val stored = loadExistingWifiNetworks(context)
+        val held = stored.indexOfFirst { sameWifiNetworkName(it.ssid, ssid) }
+        val updated = if (held >= 0) {
+            stored.toMutableList().apply {
+                this[held] = ExistingWifiDriverCredentials(ssid, passphrase)
+            }
+        } else {
+            stored + ExistingWifiDriverCredentials(ssid, passphrase)
+        }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_EXISTING_WIFI_NETWORKS, encodeExistingWifiNetworks(updated))
             .putString(KEY_EXISTING_WIFI_SSID, ssid)
             .putString(KEY_EXISTING_WIFI_PASSPHRASE, passphrase)
             .apply()
     }
 
+    /**
+     * Forgets the password held for one network and leaves every other one alone.
+     *
+     * The single pair goes with it when it names the same network: it is a second copy of one of these
+     * entries, and a build from before this change would otherwise go on handing out a password the
+     * driver has just taken away. Its own name is what decides — clearing it whenever any network is
+     * removed would throw away the one password such a build can still use.
+     */
+    fun removeExistingWifiNetwork(context: Context, ssid: String) {
+        val remaining = loadExistingWifiNetworks(context)
+            .filterNot { sameWifiNetworkName(it.ssid, ssid) }
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+            .putString(KEY_EXISTING_WIFI_NETWORKS, encodeExistingWifiNetworks(remaining))
+        val legacySsid = prefs.getString(KEY_EXISTING_WIFI_SSID, null).orEmpty()
+        if (legacySsid.isNotEmpty() && sameWifiNetworkName(legacySsid, ssid)) {
+            editor.remove(KEY_EXISTING_WIFI_SSID).remove(KEY_EXISTING_WIFI_PASSPHRASE)
+        }
+        editor.apply()
+    }
+
     /** Whether a password is held for this network, so the page can say so instead of asking again. */
     fun hasExistingWifiPassphrase(context: Context, ssid: String): Boolean =
-        ssid.isNotEmpty() &&
-            loadExistingWifiSsid(context) == ssid &&
-            loadExistingWifiPassphrase(context).isNotEmpty()
+        ssid.isNotEmpty() && loadExistingWifiPassphrase(context, ssid).isNotEmpty()
 
     fun loadDebugLogsEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -746,4 +818,60 @@ object AirPlayPersistence {
 
     private fun safeAreaKey(widthPixels: Int, heightPixels: Int): String =
         "$SAFE_AREA_KEY_PREFIX${widthPixels}x$heightPixels"
+
+    /**
+     * The stored list, or null when there is nothing under the key that can be read as one.
+     *
+     * "[A] list was stored here" and "nothing readable was stored here" are different answers — the
+     * first is a driver with no saved passwords, the second is a driver whose list this build has to
+     * seed from the single pair — and only null can carry the difference to the caller.
+     *
+     * Inside the list, one bad element is dropped and the rest are kept. Every rule here is one the
+     * value has to satisfy to be worth sending: an entry with no name cannot be looked up, an entry
+     * with U+0000 in either field is not a name or a password any iAP2 message can carry, and a
+     * passphrase of the wrong length is one the phone will reject at association — sending it would
+     * turn "no password" into "wrong password", which is worse.
+     */
+    private fun decodeExistingWifiNetworks(text: String): List<ExistingWifiDriverCredentials>? =
+        runCatching {
+            val entries = JSONArray(text)
+            (0 until entries.length()).mapNotNull { index ->
+                val entry = entries.optJSONObject(index) ?: return@mapNotNull null
+                val ssid = entry.opt(KEY_EXISTING_WIFI_ENTRY_SSID) as? String
+                val passphrase = entry.opt(KEY_EXISTING_WIFI_ENTRY_PASSPHRASE) as? String
+                if (ssid.isNullOrBlank() || passphrase == null) return@mapNotNull null
+                if ('\u0000' in ssid || '\u0000' in passphrase) return@mapNotNull null
+                if (passphrase.isNotEmpty() && passphrase.length !in 8..63) return@mapNotNull null
+                ExistingWifiDriverCredentials(ssid, passphrase)
+            }
+        }.getOrNull()
+
+    private fun encodeExistingWifiNetworks(
+        networks: List<ExistingWifiDriverCredentials>,
+    ): String {
+        val entries = JSONArray()
+        networks.forEach { network ->
+            entries.put(
+                JSONObject()
+                    .put(KEY_EXISTING_WIFI_ENTRY_SSID, network.ssid)
+                    .put(KEY_EXISTING_WIFI_ENTRY_PASSPHRASE, network.passphrase),
+            )
+        }
+        return entries.toString()
+    }
+
+    /**
+     * The pair as a list of one, for the build that had only the pair.
+     *
+     * Only a complete pair counts: half of it is a name with no password or a password with no name,
+     * and neither is a password that could be sent to anyone.
+     */
+    private fun legacyExistingWifiCredentials(
+        ssid: String?,
+        passphrase: String?,
+    ): List<ExistingWifiDriverCredentials> = if (ssid.isNullOrEmpty() || passphrase.isNullOrEmpty()) {
+        emptyList()
+    } else {
+        listOf(ExistingWifiDriverCredentials(ssid, passphrase))
+    }
 }

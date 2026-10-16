@@ -29,7 +29,6 @@ import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import com.shilapi.xcertplay.network.CarPlayBonjour
 import com.shilapi.xcertplay.network.CarHotspotController
 import com.shilapi.xcertplay.network.CarHotspotStatus
-import com.shilapi.xcertplay.network.ExistingWifiDriverCredentials
 import com.shilapi.xcertplay.network.ExistingWifiManager
 import com.shilapi.xcertplay.network.HotspotAddressPolicy
 import com.shilapi.xcertplay.network.HotspotAddressRecovery
@@ -1279,7 +1278,12 @@ class CarPlayController(
                 passphrase = hotspotInfo.passphrase,
                 channel = hotspotInfo.channel,
                 security = hotspotInfo.security,
-                ipAddresses = listOf(hostAddressText),
+                // Every address the listener is bound on and Bonjour publishes has to be named here
+                // too, or the phone can only ever dial the one this side happened to prefer: the other
+                // family is bound and advertised and invisible to it, and the phone picks out of this
+                // list, not out of the advertisement. The preferred address stays first, the rest are
+                // the same set the bind and the advertisement were given.
+                ipAddresses = (listOf(hostAddress) + additionalAddresses).map { hostAddressText(it) },
                 airPlayPort = listenPort,
                 deviceIdentifier = deviceIdentifier,
                 publicKey = identity.publicKeyHex,
@@ -2108,11 +2112,9 @@ class CarPlayController(
                     // the messages already sent are stale, so the bring-up starts over rather than
                     // sitting on a link the phone can no longer reach.
                     onNetworkChanged = { if (!closed && phase == Phase.WIRELESS) restartWireless() },
-                    // Where the car's own copy is not readable, this is the password the driver typed
-                    // for this network. Matched on the name inside the manager.
-                    driverCredentials = config.existingWifiSsid
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { ExistingWifiDriverCredentials(it, config.existingWifiPassphrase.orEmpty()) },
+                    // Where the car's own copy is not readable, these are the passwords the driver
+                    // typed, one per network. Matched on the name inside the manager.
+                    driverCredentials = config.existingWifiCredentials,
                 )
             }
         }

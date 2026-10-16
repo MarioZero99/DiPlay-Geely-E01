@@ -54,6 +54,7 @@ import com.shilapi.xcertplay.host.BuildConfig
 import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.media.NavigationAudioStream
 import com.shilapi.xcertplay.network.CarHotspotController
+import com.shilapi.xcertplay.network.sameWifiNetworkName
 import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.WirelessGap
@@ -1555,13 +1556,50 @@ class DiPlayActivity : ComponentActivity() {
                     false,
                 ) {
                     askExistingWifiCredentials { ssid, password ->
-                        AirPlayPersistence.saveExistingWifiCredentials(this, ssid, password)
+                        AirPlayPersistence.saveExistingWifiNetwork(this, ssid, password)
                         render()
                         toast(getString(R.string.saved_for_your_next_connection))
                     }
                 },
                 matchButton(10, 60),
             )
+            // Every password the driver has saved, one row per network, read from storage on every
+            // redraw. The two lines above name only the network the car is on, and on a head unit whose
+            // Wi-Fi has not come up yet — every start after a reboot — that is no network at all, so a
+            // saved password with no way to see or change it is what "my password was not saved" was
+            // read from. Nothing here asks which network the car is on: the list is the same list
+            // whatever the radio is doing.
+            card.addView(label(getString(R.string.existing_wifi_saved_networks_title), 18, TEXT, true).apply { setPadding(0, dp(20), 0, 0) })
+            card.addView(label(getString(R.string.existing_wifi_saved_networks_hint), 14, MUTED).apply { setPadding(0, dp(6), 0, dp(4)) })
+            val savedNetworks = AirPlayPersistence.loadExistingWifiNetworks(this)
+            if (savedNetworks.isEmpty()) {
+                card.addView(label(getString(R.string.existing_wifi_saved_networks_none), 15, MUTED).apply { setPadding(0, dp(8), 0, 0) })
+            } else {
+                savedNetworks.forEach { network ->
+                    val savedRow = row().apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(10), 0, 0) }
+                    // The name takes the room the two buttons leave, and wraps inside it: a network
+                    // name is up to 32 bytes, and the buttons are the same width whatever it says.
+                    savedRow.addView(label(network.ssid, 16, TEXT), LinearLayout.LayoutParams(0, -2, 1f))
+                    savedRow.addView(
+                        button(getString(R.string.existing_wifi_edit_saved), false) {
+                            askSavedWifiCredentials(network.ssid, network.passphrase) { ssid, password ->
+                                AirPlayPersistence.saveExistingWifiNetwork(this, ssid, password)
+                                render()
+                                toast(getString(R.string.saved_for_your_next_connection))
+                            }
+                        },
+                        LinearLayout.LayoutParams(-2, dp(56)).apply { marginStart = dp(12) },
+                    )
+                    savedRow.addView(
+                        button(getString(R.string.existing_wifi_delete_saved), false) {
+                            AirPlayPersistence.removeExistingWifiNetwork(this, network.ssid)
+                            render()
+                        },
+                        LinearLayout.LayoutParams(-2, dp(56)).apply { marginStart = dp(8) },
+                    )
+                    card.addView(savedRow)
+                }
+            }
         } else {
             card.addView(label(getString(R.string.turn_the_car_s_wi_fi_switch_on_allow_location_nearby_devic), 16, MUTED))
             card.addView(button(getString(R.string.open_car_wi_fi_settings), false) { openCarClientWifiSettings() }, matchButton(12, 60))
@@ -1638,27 +1676,78 @@ class DiPlayActivity : ComponentActivity() {
      * fields, so both are held to the same rules. What differs is who supplies them — there the driver
      * copies them off the car's hotspot screen, here they type the network's own password because the
      * platform would not hand DiPlay the copy the car saved.
+     *
+     * The fields start from what is stored for the network the car is on and from nothing else: a
+     * password belongs to one network, and one offered under another name is a wrong password rather
+     * than a missing one. With the car on no network there is nothing to start from, and the list
+     * further up this card is where a password is changed instead.
      */
     private fun askExistingWifiCredentials(done: (String, String) -> Unit): Unit {
         val joined = joinedWifiName()
-        // Only the password saved for *this* network. The stored pair belongs to one network, and
-        // prefilling it under another one's name invites a driver to press Save without retyping —
-        // which writes the wrong password against the right name, and that is a pair the phone will
-        // be handed as though it were correct. A password from the wrong network is worse than none.
-        val saved = joined?.takeIf { AirPlayPersistence.hasExistingWifiPassphrase(this, it) }
+        // Only the password saved for *this* network. Each stored entry belongs to one network, and
+        // prefilling one under another name invites a driver to press Save without retyping — which
+        // writes the wrong password against the right name, and that is a pair the phone will be
+        // handed as though it were correct. A password from the wrong network is worse than none.
+        //
+        // The name is the stored entry's own spelling, and only the stored entry's: that lookup is
+        // [AirPlayPersistence.hasExistingWifiPassphrase]'s, so the entry prefilled here is the entry
+        // that would be sent. Both fields come off the one entry, never one off each.
+        val stored = joined
+            ?.takeIf { AirPlayPersistence.hasExistingWifiPassphrase(this, it) }
+            ?.let { name ->
+                AirPlayPersistence.loadExistingWifiNetworks(this)
+                    .firstOrNull { sameWifiNetworkName(it.ssid, name) }
+            }
         askNetworkCredentials(
             title = getString(R.string.existing_wifi_password_title),
             hint = getString(R.string.copy_these_from_the_wi_fi_the_car_is_on),
             nameHint = getString(R.string.wifi_network_name),
             passwordHint = getString(R.string.wifi_network_password),
-            initialSsid = joined.orEmpty(),
-            initialPassphrase = if (saved == null) "" else AirPlayPersistence.loadExistingWifiPassphrase(this),
+            initialSsid = stored?.ssid ?: joined.orEmpty(),
+            initialPassphrase = stored?.passphrase.orEmpty(),
             validate = ::existingWifiError,
             done = done,
         )
     }
 
-    /** The two fields a network's name and password are typed into, wherever they come from. */
+    /**
+     * The two fields for one password already saved, opened from that network's own row.
+     *
+     * The same dialog as the one above, for the same reason and under the same rules — what differs is
+     * where it starts from. There it is the network the car is on, which is not a network the driver
+     * can choose; here it is the row that was tapped, which is the only way to correct a password for a
+     * network the car is not on right now.
+     *
+     * The name is shown, not offered: a stored entry is looked up by its name, so the name is that
+     * entry's identity rather than one of its fields, and the save below upserts by name. An editable
+     * field here would let a driver correct a spelling and thereby file a *second* entry under the new
+     * name — the old one, password and all, left in the list, which is an edit that silently adds a
+     * network. Held to the tapped row's name, this dialog changes that entry's password and can write
+     * no other.
+     *
+     * A name that is genuinely wrong is corrected by deleting the row and filling the password in on the
+     * card above, which is where a network not in the list gets one.
+     */
+    private fun askSavedWifiCredentials(ssid: String, passphrase: String, done: (String, String) -> Unit) =
+        askNetworkCredentials(
+            title = getString(R.string.existing_wifi_edit_saved_title),
+            hint = getString(R.string.existing_wifi_edit_saved_hint),
+            nameHint = getString(R.string.wifi_network_name),
+            passwordHint = getString(R.string.wifi_network_password),
+            initialSsid = ssid,
+            initialPassphrase = passphrase,
+            validate = ::existingWifiError,
+            editableName = false,
+            done = done,
+        )
+
+    /**
+     * The two fields a network's name and password are typed into, wherever they come from.
+     *
+     * [editableName] is false for the one caller that edits a stored entry rather than typing a new
+     * pair: an entry is looked up by its name, so there the name is drawn greyed and cannot be typed
+     * over. Every other caller is asking for a name as much as for a password, and leaves it true.
+     */
     private fun askNetworkCredentials(
         title: String,
         hint: String,
@@ -1668,10 +1757,16 @@ class DiPlayActivity : ComponentActivity() {
         initialPassphrase: String,
         validate: (String, String) -> String?,
         done: (String, String) -> Unit,
+        editableName: Boolean = true,
     ) {
         val fields = column().apply { setPadding(dp(24), dp(12), dp(24), dp(12)) }
         fields.addView(label(hint, 16, MUTED))
-        val ssid = EditText(this).apply { this.hint = nameHint; setText(initialSsid); setSingleLine() }
+        val ssid = EditText(this).apply {
+            this.hint = nameHint; setText(initialSsid); setSingleLine()
+            // Filled but greyed: what this entry is filed under, which is not something this dialog can
+            // change. Disabled as well as unfocusable, so neither a tap nor a keyboard can reach it.
+            if (!editableName) { isEnabled = false; isFocusable = false }
+        }
         val password = EditText(this).apply {
             this.hint = passwordHint; setText(initialPassphrase); setSingleLine()
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD

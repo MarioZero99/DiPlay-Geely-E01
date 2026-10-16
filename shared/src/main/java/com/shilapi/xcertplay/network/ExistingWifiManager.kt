@@ -14,8 +14,10 @@ import android.os.Looper
 import androidx.annotation.RequiresApi
 import com.shilapi.xcertplay.transport.Iap2WirelessSecurity
 import java.io.IOException
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
+import java.util.BitSet
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -46,12 +48,14 @@ class ExistingWifiManager(
     private val onDiagnostic: (String) -> Unit = {},
     private val onNetworkChanged: () -> Unit = {},
     /**
-     * The password the driver typed for the network the car is on, when they had to.
+     * Every password the driver has saved, one per network, for the network the car is on.
      *
-     * Used only where the platform would not hand the car's own copy over, and only where the name
-     * matches: see [ExistingWifiDriverCredentials].
+     * Used only where the platform would not hand the car's own copy over, and the one used is the one
+     * whose name matches the network the head unit actually joined — which is not necessarily the one
+     * that was saved last, because the car is not always on the same network. See
+     * [ExistingWifiDriverCredentials] for what a saved entry is.
      */
-    private val driverCredentials: ExistingWifiDriverCredentials? = null,
+    private val driverCredentials: List<ExistingWifiDriverCredentials> = emptyList(),
 ) : WirelessHotspotManager {
     private val appContext = context.applicationContext ?: context
     private val connectivity =
@@ -68,6 +72,14 @@ class ExistingWifiManager(
     @Volatile private var interfaceName: String? = null
     private var interfaceIndex = 0
     private var callbackRegistered = false
+
+    /**
+     * Whether anything other than the router ever turned up on the network the car joined.
+     *
+     * Null until [attach] has pinned a baseline, which is the whole of a session that never attached.
+     * Read only by [connectionDiagnosticSnapshot], and it decides nothing: see [WirelessLanPeers].
+     */
+    @Volatile private var lanPeers: WirelessLanPeers? = null
 
     /**
      * What the last look at the platform was still missing.
@@ -153,6 +165,15 @@ class ExistingWifiManager(
         if (current == null || !sameLink(current) || invalidated.get()) {
             throw IOException("The Wi-Fi connection changed while DiPlay was reading it; connect again")
         }
+        // The peer baseline is pinned here, at the moment this session takes the link over, and not at
+        // the first sample: that first sample is ten seconds later, and a phone that arrived inside
+        // those ten seconds would be recorded as having been on the network all along — which is
+        // exactly the question the field exists to answer. Pinned before it is published, so the
+        // observer can never see the object without its baseline. The read sits after the check above
+        // rather than inside the window that check closes: nothing may slow that check down.
+        val peers = WirelessLanPeers(attached.interfaceName, defaultGateway(attached.properties))
+        peers.pin()
+        lanPeers = peers
         val password = existingWifiPassword(credentials.passphrase, driverCredentials, attached.ssid)
         // Two lines, and the split is the whole point of them. The report's redactor drops a line that
         // carries a credential keyword — whole, not field by field — and both `ssid` and `pass…` are on
@@ -277,6 +298,18 @@ class ExistingWifiManager(
     }
 
     /**
+     * The router's address on the link the attachment carries, or null when the platform names none.
+     *
+     * Taken from the link properties already in hand rather than looked up: this runs in the middle of
+     * attaching, and nothing here may go and ask the platform for anything new. The default route on
+     * the network the car has joined is the router by definition, and only its IPv4 form is taken,
+     * because IPv4 is the family the neighbour table this is used against counts in.
+     */
+    private fun defaultGateway(properties: LinkProperties): String? =
+        properties.routes.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }
+            ?.gateway?.hostAddress
+
+    /**
      * The access point's address, or null when there is nothing worth telling the phone.
      *
      * The phone acts on whatever it is given here, so the value is only passed on when it looks like a
@@ -303,7 +336,12 @@ class ExistingWifiManager(
     }
 
     override fun connectionDiagnosticSnapshot(): String =
-        "existingWifiLink=${if (closed || invalidated.get()) "lost" else "attached"}"
+        "existingWifiLink=${if (closed || invalidated.get()) "lost" else "attached"}" +
+            // The peer count rides on this line instead of one of its own. This is the one string the
+            // session's periodic observer asks this backend for, and that observer keeps only the first
+            // four lines of what it samples — the kernel receive counters already fill the rest — so a
+            // line of its own would be dropped before it ever reached the report.
+            (lanPeers?.let { " " + it.snapshot() } ?: "")
 
     override fun close() {
         synchronized(lock) {
@@ -355,12 +393,14 @@ internal data class ExistingWifiCredentials(
 )
 
 /**
- * The password the driver typed for the network the car is on.
+ * The password the driver typed for one network the car goes on.
  *
  * Carried as a pair because that is what it is. A platform that will not hand the car's key over is
  * the reason this exists, and the phone cannot join a secured network without one — so the driver is
  * given somewhere to type it. The name travels with it so that it is used for the network it was
- * typed for and no other.
+ * typed for and no other, which is also what lets one be kept per network: every pair the driver has
+ * saved is carried together, and the one that is used is the one whose name matches the network the
+ * head unit is actually on.
  */
 data class ExistingWifiDriverCredentials(
     val ssid: String,
@@ -371,6 +411,16 @@ data class ExistingWifiDriverCredentials(
 internal data class ExistingWifiPassword(val value: String?, val source: String)
 
 /**
+ * Whether two network names are the same network.
+ *
+ * Public because storage in the `common` module keys its list by this same question, and two answers
+ * to "is this the same network" is how a saved password comes to be filed under a name nothing looks
+ * it up by.
+ */
+fun sameWifiNetworkName(left: String, right: String): Boolean =
+    left == right || left.trim().equals(right.trim(), ignoreCase = true)
+
+/**
  * Which copy of the password the phone is told to use.
  *
  * The car's own leads: it is the one the head unit joined the network with, so it is the one that is
@@ -379,17 +429,42 @@ internal data class ExistingWifiPassword(val value: String?, val source: String)
  * that pair is a wrong password rather than a missing one. An empty typed value counts as none: it is
  * what a field left blank looks like, and it is not a password.
  *
+ * [driver] is every password the driver has saved, one per network, and which of them belongs to this
+ * connection is answered by [existingWifiPassphraseFor]; the matching rule lives there and not here.
+ *
  * [source] is carried out with the value because the page cannot see this decision and a report has
  * to: "absent" on its own cannot tell a head unit that refuses apart from a driver who never typed one.
  */
 internal fun existingWifiPassword(
     fromCar: String?,
-    driver: ExistingWifiDriverCredentials?,
+    driver: List<ExistingWifiDriverCredentials>,
     ssid: String,
 ): ExistingWifiPassword {
     if (fromCar != null) return ExistingWifiPassword(fromCar, "car")
-    val typed = driver?.takeIf { it.ssid == ssid }?.passphrase?.takeIf { it.isNotEmpty() }
+    val typed = existingWifiPassphraseFor(driver, ssid)?.takeIf { it.isNotEmpty() }
     return ExistingWifiPassword(typed, if (typed != null) "driver" else "nowhere")
+}
+
+/**
+ * The password saved for the network with this name, or null when none is.
+ *
+ * An exact name wins outright, and only then is the tolerant comparison asked. A network's name is
+ * case-sensitive on the wire and case-preserving everywhere it is stored, but a driver reads it off a
+ * head unit's screen and types it back, and `MyCarWiFi` typed where the car reports `mycarwifi` is the
+ * same network with a different capitalisation — discarding the password over that hands the phone a
+ * secured network with nothing to join it with.
+ *
+ * The fallback takes an entry only when it is the only one: two saved networks whose names differ only
+ * in case cannot be told apart from the name the head unit reports, and guessing between two passwords
+ * is a wrong password rather than a missing one. Both are dropped, and the session goes on without a
+ * driver's copy — which is what it would have done had neither been saved.
+ */
+fun existingWifiPassphraseFor(
+    stored: List<ExistingWifiDriverCredentials>,
+    ssid: String,
+): String? {
+    stored.firstOrNull { it.ssid == ssid }?.let { return it.passphrase }
+    return stored.filter { sameWifiNetworkName(it.ssid, ssid) }.singleOrNull()?.passphrase
 }
 
 /**
@@ -418,15 +493,52 @@ internal fun existingWifiCredentials(
     // Some platforms answer with a mask instead of nothing when they will not hand the key over.
     val passphrase = unquoted(saved.preSharedKey)
         ?.takeIf { it.isNotEmpty() && it != REDACTED_PASSWORD }
-    val keyManagement = saved.allowedKeyManagement
-    val open = keyManagement != null &&
-        keyManagement.cardinality() == 1 &&
-        keyManagement.get(WifiConfiguration.KeyMgmt.NONE)
     return ExistingWifiCredentials(
         passphrase = passphrase,
-        security = if (open) Iap2WirelessSecurity.NONE else Iap2WirelessSecurity.WPA_WPA2,
+        security = existingWifiSecurity(saved.allowedKeyManagement),
     )
 }
+
+/**
+ * The security type the saved key-management mask describes, which is the one the phone is told to
+ * join with.
+ *
+ * The phone acts on this value, so a wrong one is a wrong network rather than a wrong detail: it is
+ * the field the iPhone uses to decide how to associate, and a WPA3 network announced as
+ * WPA2-Personal is a join that fails. The mask is the only thing the head unit keeps that says which
+ * of them the network is.
+ *
+ * An unknown or empty mask stays [Iap2WirelessSecurity.WPA_WPA2], which is where every secured
+ * network landed before this function existed, and only a mask that is [WifiConfiguration.KeyMgmt.NONE]
+ * and nothing else is read as open: unknown is not open, and reading a mask this code does not
+ * recognise as one would invite the phone onto a network it has no password for.
+ *
+ * WPA3-Personal in transition mode is stored as the SAE bit together with a PSK bit, and SAE on its
+ * own is WPA3-only — so the two are told apart by what sits beside SAE, not by SAE itself. `OWE`
+ * ("Enhanced Open") is a network with no password that is still not a plain open one; iAP2 has no
+ * value for it, and [Iap2WirelessSecurity.NONE] is the only one that says what the phone actually has
+ * to do, which is associate with nothing typed in.
+ *
+ * WEP, SUITE_B_192, DPP, FILS_* and WAPI_* are deliberately left on the WPA_WPA2 fallback: the masks
+ * handled here are not a list of every mask the platform can hand out, and a reader who takes this for
+ * one would go looking for the branch that was never meant to be here.
+ */
+internal fun existingWifiSecurity(keyManagement: BitSet?): Iap2WirelessSecurity {
+    if (keyManagement == null) return Iap2WirelessSecurity.WPA_WPA2
+    val bits = keyManagement.cardinality()
+    if (bits == 0) return Iap2WirelessSecurity.WPA_WPA2
+    val single = bits == 1
+    if (single && keyManagement.get(WifiConfiguration.KeyMgmt.NONE)) return Iap2WirelessSecurity.NONE
+    if (single && keyManagement.get(KEY_MGMT_OWE)) return Iap2WirelessSecurity.NONE
+    if (!keyManagement.get(KEY_MGMT_SAE)) return Iap2WirelessSecurity.WPA_WPA2
+    val psk = keyManagement.get(WifiConfiguration.KeyMgmt.WPA_PSK) ||
+        keyManagement.get(WifiConfiguration.KeyMgmt.WPA2_PSK)
+    return if (psk) Iap2WirelessSecurity.WPA3_TRANSITION else Iap2WirelessSecurity.WPA3_ONLY
+}
+
+// The API 29 values of WifiConfiguration.KeyMgmt.SAE and .OWE, named as literals so API 19 still loads.
+private const val KEY_MGMT_SAE = 8
+private const val KEY_MGMT_OWE = 9
 
 /** WifiConfiguration quotes what it stores; the wire format does not. */
 private fun unquoted(value: String?): String? = value?.removeSurrounding("\"")

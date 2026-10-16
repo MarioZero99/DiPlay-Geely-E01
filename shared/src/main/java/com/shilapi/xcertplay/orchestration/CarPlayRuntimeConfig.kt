@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.orchestration
 
+import com.shilapi.xcertplay.network.ExistingWifiDriverCredentials
 import com.shilapi.xcertplay.network.HotspotAddressPolicy
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
 import com.shilapi.xcertplay.transport.UsbDeviceId
@@ -59,14 +60,15 @@ class CarPlayRuntimeConfig(
     val manualHotspotChannel: Int = 0,
     val manualHotspotSecurity: ManualHotspotSecurity = ManualHotspotSecurity.WPA2,
     /**
-     * The network the car is on and the password the driver typed for it, in existing-Wi-Fi mode.
+     * Every password the driver has saved, one per network, in existing-Wi-Fi mode.
      *
      * Read from storage at the moment a connection is attempted rather than held from the page, so a
-     * password typed while a session is retrying is used by the next attempt. Null when the driver has
-     * never typed one, which is the ordinary case: the car's own copy is tried first either way.
+     * password typed while a session is retrying is used by the next attempt. The whole list travels
+     * to the attempt and the backend picks the entry whose name matches the network the head unit is
+     * actually on, so a password saved for a network the car is not on is carried and never used.
+     * Empty is the ordinary case — the car's own copy is tried first either way.
      */
-    val existingWifiSsid: String? = null,
-    val existingWifiPassphrase: String? = null,
+    val existingWifiCredentials: List<ExistingWifiDriverCredentials> = emptyList(),
     /**
      * Which address family to publish this attempt, as the last run left it: `"IPv4"`, `"IPv6"`, or null
      * for the default order.
@@ -144,19 +146,20 @@ class CarPlayRuntimeConfig(
                 "manualHotspotPassphrase is required for secured manual hotspots"
             }
         }
-        // The driver's copy of an existing network's password goes into the same two iAP2 fields as a
-        // manual hotspot's, so it is held to the same rules. Both are optional together: no driver copy
-        // is the ordinary case, and the car's own is what is used then.
-        val existingSsid = existingWifiSsid.orEmpty()
-        val existingPassphrase = existingWifiPassphrase.orEmpty()
-        require('\u0000' !in existingSsid) {
-            "existingWifiSsid must not contain U+0000"
-        }
-        require('\u0000' !in existingPassphrase) {
-            "existingWifiPassphrase must not contain U+0000"
-        }
-        require(existingPassphrase.isEmpty() || existingPassphrase.length in 8..63) {
-            "existingWifiPassphrase must be empty or between 8 and 63 characters"
+        // The driver's copies of an existing network's password go into the same two iAP2 fields as a
+        // manual hotspot's, so each is held to the same rules. It is a list rather than a pair because
+        // the car is not always on the same network: a password saved yesterday is kept while today's
+        // is typed, and whichever one is not for the network in use is simply never picked.
+        existingWifiCredentials.forEach { credentials ->
+            require('\u0000' !in credentials.ssid) {
+                "existingWifiCredentials ssid must not contain U+0000"
+            }
+            require('\u0000' !in credentials.passphrase) {
+                "existingWifiCredentials passphrase must not contain U+0000"
+            }
+            require(credentials.passphrase.isEmpty() || credentials.passphrase.length in 8..63) {
+                "existingWifiCredentials passphrase must be empty or between 8 and 63 characters"
+            }
         }
         require(wirelessAddressFamily == null || HotspotAddressPolicy.parseFamily(wirelessAddressFamily) != null) {
             "wirelessAddressFamily must be one of the two published families"
