@@ -505,4 +505,12 @@
     <string name="connection_diagnostics_show">Show</string>
     <string name="connection_diagnostics_hide">Hide</string>
     <string name="connection_settings_incomplete">The connection settings are incomplete · open Settings and fill in the car hotspot</string>
+    <string name="appearance">Appearance</string>
+    <string name="skin_zeekr_white">Zeekr white</string>
+    <string name="skin_flyme_blue">Flyme blue</string>
+    <string name="skin_night">Night</string>
+    <string name="day_night_switching">Day and night</string>
+    <string name="day_night_follow_car">Follow the car</string>
+    <string name="day_night_follow_time">Follow the time</string>
+    <string name="day_night_manual">Manual</string>
 </resources>

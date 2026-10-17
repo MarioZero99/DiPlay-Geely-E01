@@ -104,9 +104,12 @@ object CockpitThemeManager {
 
     fun resolvePalette(skin: AppSkin, schedule: ThemeSchedule, uiMode: Int, currentHour: Int): ThemePalette {
         val carDark = isDarkMode(uiMode)
+        // The two automatic schedules are different answers to "who decides": the car's own
+        // head-unit signal, or the clock. OR-ing them made both follow whichever said night first,
+        // which is how "follow the car" turned dark at six in the evening with the car still in day.
         val isDark = when (schedule) {
-            ThemeSchedule.AUTO_CAR -> carDark || isNightHour(currentHour)
-            ThemeSchedule.AUTO_TIME -> isNightHour(currentHour) || carDark
+            ThemeSchedule.AUTO_CAR -> carDark
+            ThemeSchedule.AUTO_TIME -> isNightHour(currentHour)
             ThemeSchedule.MANUAL -> skin == AppSkin.NIGHT_DARK
         }
         if (isDark) {

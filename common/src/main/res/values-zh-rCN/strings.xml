@@ -505,4 +505,12 @@
     <string name="connection_diagnostics_show">展开</string>
     <string name="connection_diagnostics_hide">收起</string>
     <string name="connection_settings_incomplete">连接配置不完整 · 请在设置里填写车机热点</string>
+    <string name="appearance">外观</string>
+    <string name="skin_zeekr_white">极氪白</string>
+    <string name="skin_flyme_blue">魅族蓝</string>
+    <string name="skin_night">暗夜</string>
+    <string name="day_night_switching">日夜切换</string>
+    <string name="day_night_follow_car">跟随车机</string>
+    <string name="day_night_follow_time">按时间</string>
+    <string name="day_night_manual">手动</string>
 </resources>

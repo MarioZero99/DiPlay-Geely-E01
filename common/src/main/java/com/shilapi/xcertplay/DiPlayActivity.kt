@@ -64,8 +64,17 @@ import com.shilapi.xcertplay.transport.WirelessReadinessInput
 import com.shilapi.xcertplay.transport.adapter.AdapterPage
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
+import com.shilapi.xcertplay.ui.component.HeroStageCard
+import com.shilapi.xcertplay.ui.component.QuickWidgetsView
+import com.shilapi.xcertplay.ui.component.SettingsDrawerView
+import com.shilapi.xcertplay.ui.component.SlimDockView
+import com.shilapi.xcertplay.ui.theme.AppSkin
+import com.shilapi.xcertplay.ui.theme.CockpitThemeManager
+import com.shilapi.xcertplay.ui.theme.ThemePalette
+import com.shilapi.xcertplay.ui.theme.ThemeSchedule
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -73,7 +82,21 @@ import kotlin.math.roundToInt
 /** DiAuto's visual language, with a connection flow for an independent CarPlay receiver. */
 class DiPlayActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
+    /** The pages this build still has. Everything else is the home page — see [render]. */
+    private val KNOWN_PAGES = setOf("home", "display", "system", "settings", "about", PAGE_FIRMWARE)
+
     private var page = "home"
+    /**
+     * The cockpit's own views, held so the once-a-second tick repaints them in place rather than
+     * rebuilding the page — see [refreshStatus]. Null on every page but home.
+     */
+    private var hero: HeroStageCard? = null
+    private var widgets: QuickWidgetsView? = null
+    private var cockpitHost: FrameLayout? = null
+    private var drawer: SettingsDrawerView? = null
+    private var drawerOpen = false
+    /** The palette this redraw resolved to; the cockpit's views are built from it. */
+    private var palette: ThemePalette = CockpitThemeManager.ZEEKR_WHITE_PALETTE
     private var pendingCarHotspotSetup = false
 
     /**
@@ -215,6 +238,12 @@ class DiPlayActivity : ComponentActivity() {
         wakeCarHotspotInBackground()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // The drawer is drawn over the page, so back closes it before it changes page: a key
+                // that took the driver off the page behind an open panel would look like a jump.
+                if (drawer?.isOpen() == true) {
+                    closeSettingsDrawer()
+                    return
+                }
                 // The firmware page is left by its own control and by nothing else while a write is in
                 // flight: back would take the driver off the one screen that says what is happening.
                 if (page == PAGE_FIRMWARE && firmwareRunning()) return
@@ -277,6 +306,22 @@ class DiPlayActivity : ComponentActivity() {
         cachedReport = null
         cachedHotspot = null
         cachedPageState = null
+        // A route that no longer exists — "wireless" and "wired" were pages once — lands on the home
+        // page rather than on a header with nothing under it.
+        if (page !in KNOWN_PAGES) page = "home"
+        // The cockpit is rebuilt on every redraw, so the drawer is dropped with it and built again on
+        // the next open — except when it was open a moment ago, in which case it is put straight back
+        // (see cockpitRoot): a setting changed inside the drawer must not close it under the driver.
+        val drawerWasOpen = drawerOpen
+        hero = null; widgets = null; cockpitHost = null; drawer = null; drawerOpen = false
+        // Read here rather than per view: the car's own day/night signal arrives as a configuration
+        // change, which calls render(), so one read per redraw is exactly one read per signal.
+        palette = CockpitThemeManager.resolvePalette(
+            AirPlayPersistence.loadAppSkin(this),
+            AirPlayPersistence.loadThemeSchedule(this),
+            resources.configuration.uiMode,
+            Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
+        )
         pageScroll?.let { if (scrollYPage == page) pageScrollY = it.scrollY }
         if (scrollYPage != page) { scrollYPage = page; pageScrollY = 0 }
         val scroll = ScrollView(this).apply { setBackgroundColor(BG); isFillViewport = true; clipToPadding = false }
@@ -307,11 +352,15 @@ class DiPlayActivity : ComponentActivity() {
             "settings" -> settings(content)
             "about" -> about(content)
             PAGE_FIRMWARE -> firmwareProgress(content)
-            else -> home(content)
+            else -> Unit
         }
-        setContentView(scroll)
-        pageScroll = scroll
-        restoreScroll(scroll, pageScrollY)
+        if (page == "home") {
+            setContentView(cockpitRoot(drawerWasOpen))
+        } else {
+            setContentView(scroll)
+            pageScroll = scroll
+            restoreScroll(scroll, pageScrollY)
+        }
         refreshStatus()
     }
 
@@ -343,135 +392,231 @@ class DiPlayActivity : ComponentActivity() {
         })
     }
 
-    private fun home(content: LinearLayout) {
-        val wide = resources.configuration.screenWidthDp >= WIDE_LAYOUT_MIN_WIDTH_DP
-        val body = column()
-        val left = column()
-        left.addView(label(getString(R.string.your_phone_your_drive), 12, ACCENT, true).apply {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) letterSpacing = .16f
-        })
-        left.addView(label(getString(R.string.a_familiar_drive), if (wide) 42 else 36, TEXT, true).apply { setPadding(0, dp(12), 0, dp(10)) })
-        left.addView(label(getString(R.string.your_maps_music_and_conversations_carplay_right_here_on_yo), 19, MUTED))
-        val wireless = deviceSupportsWireless()
-        val wired = UsableConnection.USB in connectionReport().usable
-        val card = card()
-        status = label(getString(R.string.ready_when_you_are), 24, TEXT, true)
-        card.addView(status)
-        card.addView(supportedConnectionLabel())
-        adapterStatusView()?.let { card.addView(it) }
-        // Both ways in, on the page. They used to sit behind a dialog that had to be dismissed
-        // before the choice could even be read — which is exactly the moment the driver is standing
-        // at the car with a cable in one hand.
-        val entries = if (wide) row().apply { gravity = Gravity.TOP } else column()
-        var chosen = 0
-        fun addEntry(view: View) {
-            entries.addView(
-                view,
-                if (wide) {
-                    LinearLayout.LayoutParams(0, -2, 1f).apply { if (chosen > 0) marginStart = dp(16) }
-                } else {
-                    LinearLayout.LayoutParams(-1, -2).apply { if (chosen > 0) topMargin = dp(16) }
-                },
-            )
-            chosen++
-        }
-        addEntry(
-            connectionEntry(
-                title = getString(R.string.wireless_carplay),
-                hint = when {
-                    // Ahead of the route's own state: a head unit with no radio that could carry the leg
-                    // has nothing to switch on, and "no usable route" would read as something to fix.
-                    !hasWirelessRadio() -> getString(R.string.this_head_unit_is_not_supported_for_wireless_carplay)
-                    wireless -> wirelessEntryHint()
-                    else -> getString(R.string.connection_entry_wireless_unavailable)
-                },
-                note = if (wireless && carHotspotOff()) getString(R.string.msg_car_hotspot_off, hotspotSsid()) else null,
-                action = getString(R.string.connect_phone),
-                enabled = sessionIsIdle(),
-                onClick = { connect(true) },
-            ),
+    /**
+     * The home page as three zones on a 1920-wide head unit: the rail, the connection stage, and the
+     * quick column. The page used to be one vertical stack, which left two thirds of the screen empty
+     * on this hardware.
+     *
+     * Everything the old stack carried is still here rather than dropped for the wider shape: the
+     * stage holds the readiness card's notes and the gap lines, and the drawer holds every setting.
+     */
+    private fun cockpitRoot(restoreDrawer: Boolean): View {
+        val root = FrameLayout(this).apply { setBackgroundColor(palette.screenBg) }
+        val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+        val rail = SlimDockView(
+            this,
+            palette,
+            onHomeClick = { if (page != "home") { page = "home"; render() } },
+            onAudioClick = { openSettingsDrawer(getString(R.string.audio_routing)) },
+            onSettingsClick = { if (drawer?.isOpen() == true) closeSettingsDrawer() else openSettingsDrawer() },
+            onExitClick = { confirmExit() },
         )
-        addEntry(
-            connectionEntry(
-                title = getString(R.string.connect_with_usb),
-                hint = if (wired) {
-                    getString(R.string.plug_your_iphone_into_a_usb_data_port_allow_carplay_when_y)
-                } else {
-                    getString(R.string.connection_entry_wired_unavailable)
-                },
-                note = null,
-                action = getString(R.string.connect_phone),
-                enabled = sessionIsIdle(),
-                onClick = { connect(false) },
-            ),
+
+        val stage = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        val stageCard = HeroStageCard(
+            this,
+            palette,
+            sessionPhase = pageState().session,
+            pairedPhoneName = DiPlayPreferences.phoneName(this),
+            hasUsbHost = UsableConnection.USB in connectionReport().usable,
+            setupError = setupError,
+            supportedConnectionView = supportedConnectionLabel(),
+            adapterStatusView = adapterStatusView(),
+            hotspotOffNote = if (deviceSupportsWireless() && carHotspotOff()) {
+                getString(R.string.msg_car_hotspot_off, hotspotSsid())
+            } else {
+                null
+            },
+            onConnectWireless = { connect(true) },
+            onConnectUsb = { connect(false) },
+            onOpenProjection = { openProjection() },
+            onDisconnect = { CarPlayBackgroundSession.stop { runOnUiThread { refreshStatus() } } },
+            onOpenSettings = { openSettingsDrawer() },
         )
-        if (chosen > 0) {
-            card.addView(entries, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
-        }
-        // A refused connection says why here, under the button that was pressed, rather than sending the
-        // driver to a settings page to find out. "Open settings" is theirs to press: the page is not
-        // chosen for them.
-        val readiness = pageState().readiness
-        if (wirelessBlocked && readiness.gaps.isNotEmpty()) {
-            gapsCard(card, readiness)
-            card.addView(
-                button(getString(R.string.open_settings), false) { page = "settings"; render() },
-                matchButton(12, 60),
-            )
-        }
-        liveSessionNote(card)
-        connectButton = button(getString(R.string.open_carplay), true) { openProjection() }
-            .apply { visibility = View.GONE }
-        card.addView(connectButton, matchButton(18, 68))
-        disconnectButton = button(getString(R.string.disconnect), false) {
-            disconnectButton?.isEnabled = false
-            CarPlayBackgroundSession.stop { runOnUiThread { refreshStatus() } }
-        }.apply { visibility = View.GONE }
-        card.addView(disconnectButton, matchButton(10, 56))
-        val right = column().apply { gravity = Gravity.CENTER_HORIZONTAL }
-        val logo = ImageView(this).apply {
-            setImageResource(R.drawable.ic_carplay)
-            contentDescription = getString(R.string.carplay_icon)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-        }
-        val branding = column().apply {
-            gravity = Gravity.CENTER
-            addView(logo, LinearLayout.LayoutParams(dp(96), dp(96)))
-        }
-        right.addView(button(getString(R.string.settings), false) { page = "settings"; render() }, matchButton())
-        right.addView(label(getString(R.string.make_diplay_feel_right_for_your_car), 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(0, dp(10), 0, dp(24)) })
-        right.addView(label("${getString(R.string.home_public_preview)}${version()}", 12, MUTED).apply {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) letterSpacing = .08f
-        })
-        // Who this port is by, on the line under the version it belongs to. A fork is read as the
-        // project it forked from unless it says otherwise, and this one is not the upstream author's.
-        right.addView(label(getString(R.string.home_author), 12, MUTED).apply {
-            setPadding(0, dp(6), 0, 0)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) letterSpacing = .08f
-        })
-        if (wide) {
-            // Both rows share column widths. The USB button starts at the wireless
-            // card's top edge, independently of hero wrapping or font scaling.
-            fun columns(first: View, second: View, stretchSecond: Boolean = false) = row().apply {
-                gravity = Gravity.TOP
-                addView(first, LinearLayout.LayoutParams(0, -2, 1.6f))
-                addView(space(40), LinearLayout.LayoutParams(dp(40), 1))
-                addView(second, LinearLayout.LayoutParams(0, if (stretchSecond) -1 else -2, 1f))
-            }
-            body.addView(columns(left, branding, true))
-            body.addView(space(26))
-            body.addView(columns(card, right))
+        hero = stageCard
+
+        val quick = QuickWidgetsView(
+            this,
+            palette,
+            currentHotspotMode(),
+            hotspotSsid(),
+            joinedWifiName(),
+            audioChannelLabel(),
+            onModeSwitch = { applyWirelessLink(it) },
+            onOpenHotspotSettings = { openCarWifiSettings() },
+            onEditHotspotPass = { editHotspotCredentials() },
+            onOpenWifiSettings = { openCarClientWifiSettings() },
+            onEditWifiPass = {
+                askExistingWifiCredentials { ssid, password ->
+                    AirPlayPersistence.saveExistingWifiNetwork(this, ssid, password)
+                    render()
+                    toast(getString(R.string.saved_for_your_next_connection))
+                }
+            },
+            onAudioSelect = { openSettingsDrawer(getString(R.string.audio_routing)) },
+            onOpenDrawer = { openSettingsDrawer() },
+        )
+        widgets = quick
+
+        stage.addView(stageCard, LinearLayout.LayoutParams(0, -1, 58f))
+        stage.addView(View(this), LinearLayout.LayoutParams(dp(14), 1))
+        stage.addView(quick, LinearLayout.LayoutParams(0, -1, 42f))
+
+        // Right-hand drive mirrors the rail to the far edge by putting it on the other side of the
+        // column, which is the whole of what that setting means for this layout.
+        val stageParams = LinearLayout.LayoutParams(0, -1, 1f)
+        val railParams = LinearLayout.LayoutParams(dp(82), -1)
+        if (AirPlayPersistence.loadRightHandDrive(this)) {
+            horizontal.addView(stage, stageParams)
+            horizontal.addView(rail, railParams)
         } else {
-            body.addView(left)
-            body.addView(space(26))
-            body.addView(card)
-            body.addView(space(26))
-            body.addView(branding)
-            body.addView(space(24))
-            body.addView(right)
+            horizontal.addView(rail, railParams)
+            horizontal.addView(stage, stageParams)
         }
-        setupError?.let { body.addView(label(it, 16, WARNING).apply { setPadding(0, dp(16), 0, 0) }) }
-        content.addView(body)
+        root.addView(horizontal, FrameLayout.LayoutParams(-1, -1))
+        cockpitHost = root
+        // A drawer that was open before the redraw comes back without its slide: it never left.
+        if (restoreDrawer) openSettingsDrawer()
+        return root
+    }
+
+    /** The mode the page draws, which is the mode it would connect with — see [displayedHotspotMode]. */
+    private fun currentHotspotMode(): WirelessHotspotMode = displayedHotspotMode(
+        pendingCarHotspotSetup,
+        AirPlayPersistence.loadWirelessHotspotMode(this),
+        connectionReport().wirelessModes,
+    )
+
+    /**
+     * What the audio row says: the routing this build actually uses, and the stream it is on. The
+     * stream number is the stored one — the same value the routing card writes — rather than a
+     * channel name invented for the card.
+     */
+    private fun audioChannelLabel(): String =
+        if (AirPlayPersistence.loadAdvancedAudioChannelMapping(this)) {
+            getString(R.string.advanced_audio_channel_mapping)
+        } else {
+            "${getString(R.string.navigation_stream_type)} · $navigationStreamType"
+        }
+
+    private fun openSettingsDrawer(scrollTo: String? = null) {
+        val host = cockpitHost ?: return
+        val view = drawer ?: buildSettingsDrawer().also {
+            drawer = it
+            host.addView(it, FrameLayout.LayoutParams(-1, -1))
+        }
+        drawerOpen = true
+        view.open()
+        scrollTo?.let { view.scrollToText(it) }
+    }
+
+    private fun closeSettingsDrawer() {
+        drawerOpen = false
+        drawer?.close()
+    }
+
+    /**
+     * The drawer's sections are the settings page's own builders, handed in as lambdas: the same
+     * controls, in the same order, rather than a second set that could drift from them.
+     */
+    private fun buildSettingsDrawer(): SettingsDrawerView = SettingsDrawerView(
+        this,
+        palette,
+        buildThemeSection = { buildThemeSection(it) },
+        buildConnectionSection = { column ->
+            // One column: the drawer is 520dp wide whatever the screen is, and the page's two-column
+            // pairing measures the screen, not the panel it is drawn in.
+            val readiness = pageState().readiness
+            wirelessCards(CardColumns(column, forceNarrow = true), readiness)
+            wiredCards(CardColumns(column, forceNarrow = true))
+        },
+        buildDisplaySection = { displayCards(CardColumns(it, forceNarrow = true)) },
+        buildSystemSection = { systemCards(CardColumns(it, forceNarrow = true)) },
+        buildExperimentalSection = if (ExperimentalFeatures.enabled) {
+            { experimentalCards(CardColumns(it, forceNarrow = true)) }
+        } else {
+            null
+        },
+        onClose = { closeSettingsDrawer() },
+    )
+
+    /**
+     * Skin and day/night, which belong to this page's chrome rather than to a connection. Written
+     * straight to storage and redrawn: no session is rebuilt for a colour.
+     */
+    private fun buildThemeSection(column: LinearLayout) {
+        column.addView(
+            label(getString(R.string.appearance), 20, palette.textMain, true).apply { setPadding(0, dp(10), 0, 0) },
+        )
+        val skins = listOf(AppSkin.ZEEKR_WHITE, AppSkin.FLYME_WHITE, AppSkin.NIGHT_DARK)
+        themeChooser(
+            column,
+            getString(R.string.appearance),
+            listOf(
+                getString(R.string.skin_zeekr_white),
+                getString(R.string.skin_flyme_blue),
+                getString(R.string.skin_night),
+            ),
+            skins.indexOf(AirPlayPersistence.loadAppSkin(this)),
+        ) { index ->
+            AirPlayPersistence.saveAppSkin(this, skins[index])
+            render()
+        }
+        val schedules = listOf(ThemeSchedule.AUTO_CAR, ThemeSchedule.AUTO_TIME, ThemeSchedule.MANUAL)
+        themeChooser(
+            column,
+            getString(R.string.day_night_switching),
+            listOf(
+                getString(R.string.day_night_follow_car),
+                getString(R.string.day_night_follow_time),
+                getString(R.string.day_night_manual),
+            ),
+            schedules.indexOf(AirPlayPersistence.loadThemeSchedule(this)),
+        ) { index ->
+            AirPlayPersistence.saveThemeSchedule(this, schedules[index])
+            render()
+        }
+    }
+
+    /** One row of equally wide picks, drawn in the palette rather than the old page's fixed colours. */
+    private fun themeChooser(column: LinearLayout, title: String, labels: List<String>, current: Int, onPick: (Int) -> Unit) {
+        column.addView(
+            label(title, 15, palette.textMuted).apply { setPadding(0, dp(16), 0, dp(6)) },
+        )
+        val picks = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        labels.forEachIndexed { index, text ->
+            val chosen = index == current
+            picks.addView(
+                Button(this).apply {
+                    this.text = text
+                    isAllCaps = false
+                    textSize = 14f
+                    setTextColor(if (chosen) palette.btnMainFg else palette.textMain)
+                    background = GradientDrawable().apply {
+                        setColor(if (chosen) palette.btnMainBg else palette.cardInner)
+                        cornerRadius = dp(10).toFloat()
+                        setStroke(dp(1), palette.cardBorder)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) stateListAnimator = null
+                    setOnClickListener { onPick(index) }
+                },
+                LinearLayout.LayoutParams(0, dp(52), 1f).apply { if (index > 0) marginStart = dp(8) },
+            )
+        }
+        column.addView(picks)
+    }
+
+    /** Leaving the app is a press, a question and a press — never one press. */
+    private fun confirmExit() {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.close_app))
+            .setPositiveButton(getString(R.string.exit_application)) { _, _ -> closeTheApp() }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
     }
 
     private fun loadConnectionSettings() {
@@ -2433,6 +2578,18 @@ class DiPlayActivity : ComponentActivity() {
             lastRunning = running
         }
         connectButton?.isEnabled = setupError == null
+        // The cockpit's stage is repainted here rather than rebuilt: this runs on every tick, and a
+        // rebuild a second would be the churn the in-place design exists to avoid. The gaps are the
+        // same ones the settings page prints, from the same one readiness object.
+        hero?.let { card ->
+            val readiness = pageState().readiness
+            card.updateState(
+                pageState().session,
+                DiPlayPreferences.phoneName(this),
+                readiness.gaps.map { gapText(it, readiness.adapter) },
+                wirelessBlocked && readiness.gaps.isNotEmpty(),
+            )
+        }
     }
     private fun reportFileName() = "DiPlay-${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())}.txt"
 
@@ -2742,8 +2899,8 @@ class DiPlayActivity : ComponentActivity() {
      * the audio card measures its own grid against the screen rather than against the card it sits in,
      * and half a row would put that grid straight out of the card.
      */
-    private inner class CardColumns(private val content: LinearLayout) {
-        private val wide = resources.configuration.screenWidthDp >= WIDE_LAYOUT_MIN_WIDTH_DP
+    private inner class CardColumns(private val content: LinearLayout, forceNarrow: Boolean = false) {
+        private val wide = !forceNarrow && resources.configuration.screenWidthDp >= WIDE_LAYOUT_MIN_WIDTH_DP
         private var openRow: LinearLayout? = null
         private var inRow = 0
 
@@ -2901,14 +3058,22 @@ class DiPlayActivity : ComponentActivity() {
         /** The same budget the connect-time switch gets: the firmware is polled until it reports. */
         private const val CAR_HOTSPOT_AUTO_ENABLE_TIMEOUT_MILLIS = 15_000L
 
-        private val BG = Color.rgb(12, 17, 27)
-        private val SURFACE = Color.rgb(21, 30, 44)
-        private val BORDER = Color.rgb(42, 56, 75)
-        private val ACCENT = Color.rgb(166, 200, 255)
-        private val TEXT = Color.rgb(241, 245, 252)
-        private val MUTED = Color.rgb(168, 182, 202)
         private val WARNING = Color.rgb(255, 196, 128)
     }
+
+    /**
+     * The page's own colours, taken from the palette the redraw resolved.
+     *
+     * They used to be fixed dark constants, which is why every page but the cockpit stayed dark-navy
+     * under a white skin. One set of names, one source: [palette] is recomputed once per redraw, so
+     * these move with it and no card has to know which skin is in effect.
+     */
+    private val BG: Int get() = palette.screenBg
+    private val SURFACE: Int get() = palette.cardBg
+    private val BORDER: Int get() = palette.cardBorder
+    private val ACCENT: Int get() = palette.accent
+    private val TEXT: Int get() = palette.textMain
+    private val MUTED: Int get() = palette.textMuted
 }
 
 /**
