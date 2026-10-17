@@ -829,7 +829,7 @@ object AirPlayPersistence {
      * Inside the list, one bad element is dropped and the rest are kept. Every rule here is one the
      * value has to satisfy to be worth sending: an entry with no name cannot be looked up, an entry
      * with U+0000 in either field is not a name or a password any iAP2 message can carry, and a
-     * passphrase of the wrong length is one the phone will reject at association — sending it would
+     * passphrase of the wrong shape is one the phone will reject at association — sending it would
      * turn "no password" into "wrong password", which is worse.
      */
     private fun decodeExistingWifiNetworks(text: String): List<ExistingWifiDriverCredentials>? =
@@ -841,7 +841,7 @@ object AirPlayPersistence {
                 val passphrase = entry.opt(KEY_EXISTING_WIFI_ENTRY_PASSPHRASE) as? String
                 if (ssid.isNullOrBlank() || passphrase == null) return@mapNotNull null
                 if ('\u0000' in ssid || '\u0000' in passphrase) return@mapNotNull null
-                if (passphrase.isNotEmpty() && passphrase.length !in 8..63) return@mapNotNull null
+                if (passphrase.isNotEmpty() && !isWifiPassphraseShape(passphrase)) return@mapNotNull null
                 ExistingWifiDriverCredentials(ssid, passphrase)
             }
         }.getOrNull()
@@ -869,9 +869,29 @@ object AirPlayPersistence {
     private fun legacyExistingWifiCredentials(
         ssid: String?,
         passphrase: String?,
-    ): List<ExistingWifiDriverCredentials> = if (ssid.isNullOrEmpty() || passphrase.isNullOrEmpty()) {
-        emptyList()
-    } else {
-        listOf(ExistingWifiDriverCredentials(ssid, passphrase))
-    }
+    ): List<ExistingWifiDriverCredentials> =
+        if (
+            ssid.isNullOrBlank() ||
+            passphrase.isNullOrEmpty() ||
+            '\u0000' in ssid ||
+            '\u0000' in passphrase ||
+            !isWifiPassphraseShape(passphrase)
+        ) {
+            emptyList()
+        } else {
+            listOf(ExistingWifiDriverCredentials(ssid, passphrase))
+        }
+
+    /**
+     * Whether a non-empty [text] has the shape of a WPA password.
+     *
+     * WPA defines two forms and both are legal in the field: 8–63 characters of passphrase, and 64
+     * hexadecimal characters standing for the 256-bit key itself. A head unit configured out of band
+     * can hold the second form, and refusing it over its length threw away a password that would
+     * have worked. An empty value is the open network case and is not this function's business.
+     */
+    private fun isWifiPassphraseShape(text: String): Boolean =
+        text.length in 8..63 || (text.length == 64 && text.all { it in HEX_DIGITS })
+
+    private const val HEX_DIGITS = "0123456789abcdefABCDEF"
 }

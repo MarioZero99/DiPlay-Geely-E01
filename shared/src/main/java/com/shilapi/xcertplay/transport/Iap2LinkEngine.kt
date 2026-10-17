@@ -17,6 +17,7 @@ import java.util.ArrayDeque
  */
 class Iap2LinkEngine(
     private val config: Iap2LinkConfig = Iap2LinkConfig(),
+    private val onTrace: (String) -> Unit = {},
 ) {
     enum class State {
         IDLE,
@@ -431,12 +432,18 @@ class Iap2LinkEngine(
              * is only borrowing it, so deliver the data half instead of counting the sequence
              * twice.
              */
-            if (!lastReceivedSequenceCarriedPayload &&
-                packet.sessionId == CONTROL_SESSION_ID &&
-                packet.payload.isNotEmpty()
-            ) {
-                lastReceivedSequenceCarriedPayload = true
-                enqueueEvent(Event.Control(packet.payload))
+            if (!lastReceivedSequenceCarriedPayload && packet.payload.isNotEmpty()) {
+                if (packet.sessionId == CONTROL_SESSION_ID) {
+                    lastReceivedSequenceCarriedPayload = true
+                    enqueueEvent(Event.Control(packet.payload))
+                } else {
+                    // Traced, not counted. Only a control-session payload takes the sequence: if a
+                    // frame this layer cannot deliver marked the number as carried, a control frame
+                    // arriving behind it under that same number -- the order the note above is about
+                    // -- would read as a repeat and be dropped. Warning about the payload it cannot
+                    // use does not have to cost that.
+                    onTrace("iap2 rx unhandled session=${packet.sessionId} payload_bytes=${packet.payload.size}")
+                }
             }
             sendAcknowledgement()
             return
@@ -470,8 +477,12 @@ class Iap2LinkEngine(
             val inOrder = outOfOrder.removeAt(0)
             lastReceivedInOrder = inOrder.sequence
             lastReceivedSequenceCarriedPayload = inOrder.payload.isNotEmpty()
-            if (inOrder.sessionId == CONTROL_SESSION_ID && inOrder.payload.isNotEmpty()) {
-                enqueueEvent(Event.Control(inOrder.payload))
+            if (inOrder.payload.isNotEmpty()) {
+                if (inOrder.sessionId == CONTROL_SESSION_ID) {
+                    enqueueEvent(Event.Control(inOrder.payload))
+                } else {
+                    onTrace("iap2 rx unhandled session=${inOrder.sessionId} payload_bytes=${inOrder.payload.size}")
+                }
             }
         }
 
@@ -641,11 +652,17 @@ class Iap2LinkEngine(
         acknowledgementTimeoutMillis = if (config.zeroAcknowledgements) 0 else config.acknowledgementTimeoutMillis,
         maxRetransmissions = if (config.zeroAcknowledgements) 0 else DEFAULT_MAX_RETRANSMISSIONS,
         maxAcknowledgements = if (config.zeroAcknowledgements) 0 else DEFAULT_MAX_ACKNOWLEDGEMENTS,
-        sessions = listOf(
-            SessionDescriptor(CONTROL_SESSION_ID, 0, config.controlSessionVersion),
-            SessionDescriptor(EA_SESSION_ID, 2, 1),
-            SessionDescriptor(FILE_TRANSFER_SESSION_ID, 1, 2),
-        ),
+        sessions = if (config.declareOptionalSessions) {
+            listOf(
+                SessionDescriptor(CONTROL_SESSION_ID, 0, config.controlSessionVersion),
+                SessionDescriptor(EA_SESSION_ID, 2, 1),
+                SessionDescriptor(FILE_TRANSFER_SESSION_ID, 1, 2),
+            )
+        } else {
+            listOf(
+                SessionDescriptor(CONTROL_SESSION_ID, 0, config.controlSessionVersion),
+            )
+        },
     )
 
     private class ReceiveBuffer {
@@ -763,6 +780,14 @@ data class Iap2LinkConfig(
     val acknowledgementTimeoutMillis: Int = 500,
     val zeroAcknowledgements: Boolean = false,
     val controlSessionVersion: Int = 1,
+    /**
+     * Whether the synchronization frame declares the EA and file-transfer sessions beside session 10.
+     *
+     * True is the historical declaration and stays the default: a link that names fewer sessions than
+     * the accessory can serve is a protocol-visible change, so a route gives them up on purpose and
+     * never by omission. The wireless RFCOMM link is the one that does — see `Iap2LinkChannel`.
+     */
+    val declareOptionalSessions: Boolean = true,
     val maximumQueuedPackets: Int = 64,
     val maximumOutOfOrderPackets: Int = 64,
     val maximumPendingOutputBytes: Int = 1_048_576,

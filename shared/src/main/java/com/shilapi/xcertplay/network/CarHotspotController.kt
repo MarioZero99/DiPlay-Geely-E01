@@ -164,14 +164,28 @@ class CarHotspotController(context: Context) {
      * firmware that refuses is reported and the session fails with that reason, rather than the app
      * reaching for another way to spend the driver's radio.
      *
-     * @return why it could not be switched off, or null when it is off (or already was).
+     * A firmware that accepts the call and then does not report the new state within [timeoutMillis]
+     * is not a refusal: the request did go out, and a radio that is still going down is the state the
+     * attach that follows is about to find out about. That case is logged and answered with null, so
+     * the caller carries on and the attempt that follows is what says whether the radio was free.
+     *
+     * @return why the request was refused, or null when it was not — the hotspot was already off, the
+     *   firmware accepted the call, or it accepted it without the new state having been confirmed yet.
      */
-    fun releaseForStationMode(): String? {
+    fun releaseForStationMode(timeoutMillis: Long = 2000L): String? {
         if (CarHotspotStatus.isEnabled(appContext) != true) return null
         val wifi = wifi ?: return "there is no Wi-Fi service"
         val setAp = setApEnabled ?: return "this firmware does not expose the hotspot API"
         return try {
-            if (setAp.invoke(wifi, null, false) as Boolean) null else "the car refused the request"
+            val success = setAp.invoke(wifi, null, false) as Boolean
+            if (!success) {
+                "the car refused the request"
+            } else {
+                if (!awaitDisabled(timeoutMillis)) {
+                    DiagLog.w(TAG, "Hotspot disable requested but not confirmed within ${timeoutMillis}ms; continuing")
+                }
+                null
+            }
         } catch (error: ReflectiveOperationException) {
             refusalReason(error)
         } catch (error: SecurityException) {
@@ -218,6 +232,15 @@ class CarHotspotController(context: Context) {
             SystemClock.sleep(STATE_POLL_MILLIS)
         }
         return CarHotspotStatus.isEnabled(appContext) == true
+    }
+
+    private fun awaitDisabled(timeoutMillis: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMillis
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (CarHotspotStatus.isEnabled(appContext) != true) return true
+            SystemClock.sleep(STATE_POLL_MILLIS)
+        }
+        return CarHotspotStatus.isEnabled(appContext) != true
     }
 
     private companion object {

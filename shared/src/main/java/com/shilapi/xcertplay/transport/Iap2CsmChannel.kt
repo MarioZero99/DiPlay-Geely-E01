@@ -222,15 +222,24 @@ class Iap2CsmChannel private constructor(
         private const val DEFAULT_SEND_TIMEOUT_MILLIS = 5_000L
 
         /** Opens the owned iAP2 link over an owned carkit stream. */
-        fun open(underlying: BlockingDuplexByteStream): Iap2CsmChannel =
-            Iap2CsmChannel(Iap2LinkChannel.open(underlying))
+        fun open(
+            underlying: BlockingDuplexByteStream,
+            onTrace: (String) -> Unit = {},
+        ): Iap2CsmChannel =
+            Iap2CsmChannel(Iap2LinkChannel.open(underlying, onTrace))
 
         /** Opens the owned iAP2 link over an owned wireless RFCOMM stream. */
-        fun openWireless(underlying: BlockingDuplexByteStream): Iap2CsmChannel =
-            Iap2CsmChannel(Iap2LinkChannel.openWireless(underlying))
+        fun openWireless(
+            underlying: BlockingDuplexByteStream,
+            onTrace: (String) -> Unit = {},
+        ): Iap2CsmChannel =
+            Iap2CsmChannel(Iap2LinkChannel.openWireless(underlying, onTrace))
 
         /** Opens the owned iAP2 link over an AirPlay type-130 tunnel. */
-        fun openTunnel(underlying: BlockingDuplexByteStream): Iap2CsmChannel =
-            Iap2CsmChannel(Iap2LinkChannel.openTunnel(underlying))
+        fun openTunnel(
+            underlying: BlockingDuplexByteStream,
+            onTrace: (String) -> Unit = {},
+        ): Iap2CsmChannel =
+            Iap2CsmChannel(Iap2LinkChannel.openTunnel(underlying, onTrace))
     }
 }

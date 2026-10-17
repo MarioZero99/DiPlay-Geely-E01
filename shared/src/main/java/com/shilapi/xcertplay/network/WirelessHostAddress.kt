@@ -35,11 +35,18 @@ internal fun existingWifiHostAddresses(
             !it.isAnyLocalAddress && !it.isMulticastAddress
     }
     val ipv6 = if (interfaceIndex > 0) {
-        addresses.filterIsInstance<Inet6Address>().firstOrNull { it.isLinkLocalAddress }?.let {
-            Inet6Address.getByAddress(null, it.address, interfaceIndex)
+        val linkLocal = addresses.filterIsInstance<Inet6Address>().firstOrNull { it.isLinkLocalAddress }
+        if (linkLocal != null) {
+            Inet6Address.getByAddress(null, linkLocal.address, interfaceIndex)
+        } else {
+            addresses.filterIsInstance<Inet6Address>().firstOrNull {
+                !it.isLoopbackAddress && !it.isMulticastAddress && !it.isAnyLocalAddress
+            }
         }
     } else {
-        null
+        addresses.filterIsInstance<Inet6Address>().firstOrNull {
+            !it.isLinkLocalAddress && !it.isLoopbackAddress && !it.isMulticastAddress && !it.isAnyLocalAddress
+        }
     }
     return listOfNotNull(ipv4, ipv6)
 }

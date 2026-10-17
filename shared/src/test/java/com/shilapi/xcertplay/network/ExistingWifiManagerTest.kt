@@ -175,6 +175,28 @@ class ExistingWifiManagerTest {
     }
 
     @Test
+    fun transientMultipleWifiNetworksAreToleratedIfSettledWithinGracePeriod() {
+        val transientNetwork = ShadowNetwork.newInstance(2)
+        shadowOf(connectivity).addNetwork(transientNetwork, null)
+        shadowOf(connectivity).setNetworkCapabilities(transientNetwork, wifiCapabilities())
+
+        val executor = Executors.newSingleThreadScheduledExecutor()
+        try {
+            // After 250ms, remove the transient network to simulate AP teardown settling
+            executor.schedule({
+                shadowOf(connectivity).removeNetwork(transientNetwork)
+            }, 250, TimeUnit.MILLISECONDS)
+
+            manager().use { manager ->
+                val result = start(manager, timeout = 2_000)
+                assertEquals("192.0.2.10", result.hostAddress!!.hostAddress)
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun anotherTransportIsNotAWifiNetwork() {
         val cellular = ShadowNetwork.newInstance(3)
         shadowOf(connectivity).addNetwork(cellular, null)

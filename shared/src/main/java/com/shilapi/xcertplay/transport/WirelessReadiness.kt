@@ -47,6 +47,7 @@ enum class WirelessGap {
      * point and a station at once.
      */
     HOTSPOT_ON,
+    CAR_WIFI_DISCONNECTED,
     RADIO_NOT_CHOSEN,
     CAR_BLUETOOTH_OFF,
     PHONE_NOT_CHOSEN,
@@ -81,6 +82,15 @@ data class WirelessReadinessInput(
      * whoever builds this value: a caller that forgot the mode used to disable both.
      */
     val mode: WirelessHotspotMode,
+    /**
+     * Whether the car is on a Wi-Fi network right now, as a station.
+     *
+     * Read by [WirelessGap.CAR_WIFI_DISCONNECTED], which only the same-network route produces: the
+     * other routes build their own access point or drive the head unit's. Deliberately has no
+     * default — a value that answers itself is a gap that can never be reported, which is how this
+     * one came to be declared and never produced.
+     */
+    val carWifiAssociated: Boolean,
 )
 
 data class WirelessReadiness(
@@ -105,6 +115,7 @@ object WirelessReadinessCheck {
             }
             WirelessHotspotMode.EXISTING_WIFI -> {
                 if (input.hotspotOn == true) gaps += WirelessGap.HOTSPOT_ON
+                if (!input.carWifiAssociated) gaps += WirelessGap.CAR_WIFI_DISCONNECTED
             }
             WirelessHotspotMode.WIFI_P2P, WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> Unit
         }

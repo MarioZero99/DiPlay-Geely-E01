@@ -135,14 +135,25 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
             throw IphoneUsbException.TimedOut("Timed out waiting for iAP2 control session readiness")
         }
 
+        var currentConfig = config
+        var retried = false
         while (true) {
             val frame = session.recv(remainingMillis(deadlineNanos))
                 ?: throw IphoneUsbException.TimedOut("Timed out waiting for iAP2 identification")
             when (frame.messageId) {
-                START_IDENTIFICATION -> session.send(identificationInformation(config), remainingMillis(deadlineNanos))
+                START_IDENTIFICATION -> session.send(identificationInformation(currentConfig), remainingMillis(deadlineNanos))
                 IDENTIFICATION_ACCEPTED -> return
                 IDENTIFICATION_REJECTED -> {
                     val rejected = Iap2BodyReader.of(frame).list().mapTo(LinkedHashSet()) { it.id }
+                    if (!retried && (currentConfig.vehicleStatusEnabled || currentConfig.locationInformationEnabled)) {
+                        retried = true
+                        currentConfig = currentConfig.copy(
+                            vehicleStatusEnabled = false,
+                            locationInformationEnabled = false,
+                        )
+                        session.send(identificationInformation(currentConfig), remainingMillis(deadlineNanos))
+                        continue
+                    }
                     throw Iap2IdentificationException.Rejected(rejected)
                 }
                 else -> throw Iap2IdentificationException.UnexpectedMessage(frame.messageId)
@@ -270,15 +281,10 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
             0xaa01, // AuthenticationCertificate
             0xaa03, // AuthenticationResponse
             0x5000, // StartNowPlayingUpdates
-            0x5002, // StopNowPlayingUpdates
             0x5200, // StartRouteGuidanceUpdates
-            0x5203, // StopRouteGuidanceUpdates
             0xae00, // StartPowerUpdates
-            0xae02, // StopPowerUpdates
             0x4157, // StartCommunicationsUpdates
-            0x4159, // StopCommunicationsUpdates
             0x4154, // StartCallStateUpdates
-            0x4156, // StopCallStateUpdates
             0xae03, // PowerSourceUpdate
             0x4301, // CarPlayStartSession
         )
@@ -287,8 +293,6 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
             0xaa02, // RequestAuthenticationChallengeResponse
             0xaa04, // AuthenticationFailed
             0xaa05, // AuthenticationSucceeded
-            0xea00, // StartExternalAccessoryProtocolSession
-            0xea01, // StopExternalAccessoryProtocolSession
             0x5001, // NowPlayingUpdate
             0x5201, // RouteGuidanceUpdate
             0x5202, // RouteGuidanceManeuverUpdate

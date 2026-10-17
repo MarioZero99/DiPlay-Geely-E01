@@ -193,12 +193,18 @@ class Iap2WirelessControlClient(
                     }
 
                     CARPLAY_AVAILABILITY -> {
-                        onProgress("iap2 rx=0x4300 carplay-availability")
-                        send(carPlayStartSession(endpoint), deadlineNanos)
-                        stage = later(stage, Iap2WirelessControlStage.CARPLAY_START_SENT)
-                        carPlayStartSessionsSent++
-                        onCarPlayStartSessionSent()
-                        onProgress("iap2 tx=0x4301 carplay-start-session")
+                        val availability = Iap2CarPlayMessages.availability(incoming)
+                        val isAvailable = availability.wireless?.available != false
+                        onProgress("iap2 rx=0x4300 carplay-availability wireless=$isAvailable")
+                        if (isAvailable) {
+                            send(carPlayStartSession(endpoint), deadlineNanos)
+                            stage = later(stage, Iap2WirelessControlStage.CARPLAY_START_SENT)
+                            carPlayStartSessionsSent++
+                            onCarPlayStartSessionSent()
+                            onProgress("iap2 tx=0x4301 carplay-start-session")
+                        } else {
+                            onProgress("iap2 carplay-availability wireless=false; not sending 0x4301")
+                        }
                     }
 
                     WIRELESS_CARPLAY_UPDATE -> {
@@ -425,6 +431,14 @@ class Iap2WirelessCarPlayEndpoint(
      */
     accessPointBssid: ByteArray? = null,
 ) {
+    /**
+     * The addresses exactly as they go on the wire: bare literals, never with a scope suffix.
+     *
+     * A `%wlan0` / `%3` suffix is local — it names the interface on *this* side, and means nothing to
+     * the phone, which reaches these addresses over its own link. So a scoped literal is refused
+     * here rather than quietly truncated: truncating would put a different address in the message
+     * than the caller asked for, and the failure would surface as a phone that never dials.
+     */
     val ipAddresses: List<String> = ipAddresses.toList()
     val accessPointBssid: ByteArray? = accessPointBssid?.copyOf()
 
@@ -448,6 +462,9 @@ class Iap2WirelessCarPlayEndpoint(
         require(ipAddresses.isNotEmpty()) { "At least one wireless IP address is required" }
         require(ipAddresses.all { it.isNotBlank() && '\u0000' !in it }) {
             "Every wireless IP address must be non-blank and must not contain U+0000"
+        }
+        require(this.ipAddresses.none { '%' in it }) {
+            "Every wireless IP address must be a bare literal, without a %scope suffix"
         }
         require(airPlayPort in 1..65535) { "airPlayPort must be in 1..65535" }
         require(deviceIdentifier.isNotBlank()) { "deviceIdentifier is required and must not be blank" }

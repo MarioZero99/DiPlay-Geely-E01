@@ -94,16 +94,30 @@ class Iap2LinkEngineAcknowledgementTest {
     /**
      * Brings a fresh engine to the state a wireless run reaches once the phone has synchronized:
      * marker exchanged, our synchronization sent, the phone's synchronization acknowledged.
+     *
+     * Built from the configuration the wireless RFCOMM link actually runs on — including its
+     * control-session-only declaration — so what is guarded here is the link the car uses, not one
+     * assembled to make an assertion hold.
      */
     private fun openNegotiatedLink(): Iap2LinkEngine {
-        val engine = Iap2LinkEngine(Iap2LinkConfig(maxOutgoing = 4, controlSessionVersion = 2))
+        val engine = Iap2LinkEngine(
+            Iap2LinkConfig(
+                maxOutgoing = 4,
+                controlSessionVersion = 2,
+                zeroAcknowledgements = false,
+                declareOptionalSessions = false,
+            ),
+        )
         engine.start(wiredInitiator = false, nowMillis = 0)
         assertEquals("starting a link should emit only the marker", IAP2_MARKER.size, engine.takeOutput().size)
 
         engine.feed(IAP2_MARKER, 1)
 
         val synchronization = engine.takeOutput()
-        assertEquals("the marker should have produced exactly one synchronization frame", 29, synchronization.size)
+        // 9 header + 10 sync payload + (1 session * 3 bytes) + 1 checksum = 23 bytes: one session is
+        // all this link declares, and the length is written down as bytes because that is what the
+        // phone parses.
+        assertEquals("the marker should have produced exactly one synchronization frame", 23, synchronization.size)
         assertEquals(0x80, synchronization[4].toInt() and 0xff)
         assertEquals(OUR_SEQUENCE, synchronization[5].toInt() and 0xff)
 

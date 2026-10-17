@@ -122,6 +122,30 @@ class Iap2WirelessControlClientTest {
     }
 
     @Test
+    fun carPlayAvailabilityReadsBooleanAvailabilityTrue() {
+        val wirelessGroup = Iap2ParameterList.of(Iap2Parameter(0, byteArrayOf(1)))
+        val frame = Iap2Frame(
+            0x4300,
+            Iap2ParameterList.of(Iap2Parameter(1, wirelessGroup.encode())).encode(),
+        )
+
+        val availability = com.shilapi.xcertplay.iap2.message.Iap2CarPlayMessages.availability(frame)
+        assertEquals(true, availability.wireless?.available)
+    }
+
+    @Test
+    fun carPlayAvailabilityReadsBooleanAvailabilityFalse() {
+        val wirelessGroup = Iap2ParameterList.of(Iap2Parameter(0, byteArrayOf(0)))
+        val frame = Iap2Frame(
+            0x4300,
+            Iap2ParameterList.of(Iap2Parameter(1, wirelessGroup.encode())).encode(),
+        )
+
+        val availability = com.shilapi.xcertplay.iap2.message.Iap2CarPlayMessages.availability(frame)
+        assertEquals(false, availability.wireless?.available)
+    }
+
+    @Test
     fun wiredIdentificationKeepsCarPlayStartSessionDeclaration() {
         val config = Iap2IdentificationConfig(
             name = "wired",
@@ -140,13 +164,26 @@ class Iap2WirelessControlClientTest {
         assertTrue(0x4300 in u16Values(parameters.single { it.id == 7 }.payload))
     }
 
-    private fun endpoint(passphrase: String? = "secret123"): Iap2WirelessCarPlayEndpoint =
+    @Test
+    fun endpointRefusesScopedIpAddressesInsteadOfTruncatingThem() {
+        // The scope is a fact about this side's interface, so it has no wire form. Truncating it
+        // would send an address the caller never named; refusing says so where it can still be read.
+        assertThrows(IllegalArgumentException::class.java) {
+            endpoint(ipAddresses = listOf("fe80::1%wlan0", "192.168.2.1"))
+        }
+        assertEquals(listOf("fe80::1", "192.168.2.1"), endpoint(ipAddresses = listOf("fe80::1", "192.168.2.1")).ipAddresses)
+    }
+
+    private fun endpoint(
+        passphrase: String? = "secret123",
+        ipAddresses: List<String> = listOf("192.168.2.1"),
+    ): Iap2WirelessCarPlayEndpoint =
         Iap2WirelessCarPlayEndpoint(
         ssid = "LIVI",
         passphrase = passphrase,
         channel = 36,
         security = Iap2WirelessSecurity.WPA3_TRANSITION,
-        ipAddresses = listOf("192.168.2.1"),
+        ipAddresses = ipAddresses,
         airPlayPort = 49152,
         deviceIdentifier = "dev-1",
         publicKey = "aabbcc",

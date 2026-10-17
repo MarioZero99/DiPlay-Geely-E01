@@ -86,6 +86,20 @@ class WirelessReadinessCheckTest {
         assertTrue(off.ready)
     }
 
+    @Test fun theSameNetworkModeIsBlockedWhenCarWifiNotAssociated() {
+        val disconnected = WirelessReadinessCheck.assess(
+            input(
+                mode = WirelessHotspotMode.EXISTING_WIFI,
+                hotspotOn = false,
+                hop = WirelessBluetoothHop.CAR,
+                phoneChosen = true,
+                carWifiAssociated = false,
+            ),
+        )
+        assertEquals(listOf(WirelessGap.CAR_WIFI_DISCONNECTED), disconnected.gaps)
+        assertFalse(disconnected.ready)
+    }
+
     /** The other direction: a mode that is happy with the hotspot on must not be told to turn it off. */
     @Test fun onlyTheSameNetworkModeCaresAboutTheCarsOwnHotspot() {
         for (mode in listOf(
@@ -110,5 +124,6 @@ class WirelessReadinessCheckTest {
         adapterPlugged: Boolean = false,
         adapter: WirelessAdapterStatus? = null,
         mode: WirelessHotspotMode = WirelessHotspotMode.MANUAL,
-    ) = WirelessReadinessInput(credentialsSaved, hotspotOn, hop, phoneChosen, carBluetoothOn, adapterPlugged, adapter, mode)
+        carWifiAssociated: Boolean = true,
+    ) = WirelessReadinessInput(credentialsSaved, hotspotOn, hop, phoneChosen, carBluetoothOn, adapterPlugged, adapter, mode, carWifiAssociated)
 }

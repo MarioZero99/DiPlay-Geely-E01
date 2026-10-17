@@ -74,5 +74,24 @@ class ExistingWifiHostAddressesTest {
         )
     }
 
+    @Test
+    fun ulaAndGlobalIpv6AddressesArePreservedEvenWhenNoLinkLocal() {
+        val ula = address("fd00::1")
+        val addresses = existingWifiHostAddresses(listOf(address("192.0.2.10"), ula), interfaceIndex)
+        assertEquals(2, addresses.size)
+        assertEquals("192.0.2.10", addresses[0].hostAddress)
+        assertEquals(ula, addresses[1])
+    }
+
+    @Test
+    fun linkLocalIsPreferredOverUlaWhenBothPresent() {
+        val linkLocal = address("fe80::1234")
+        val ula = address("fd00::1")
+        val addresses = existingWifiHostAddresses(listOf(address("192.0.2.10"), ula, linkLocal), interfaceIndex)
+        assertEquals(2, addresses.size)
+        assertEquals("192.0.2.10", addresses[0].hostAddress)
+        assertTrue(addresses[1] is Inet6Address && (addresses[1] as Inet6Address).isLinkLocalAddress)
+    }
+
     private fun address(literal: String): InetAddress = InetAddress.getByName(literal)
 }

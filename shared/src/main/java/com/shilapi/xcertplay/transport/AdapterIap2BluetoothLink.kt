@@ -13,9 +13,13 @@ import java.io.IOException
 internal class AdapterIap2BluetoothLink(
     private val host: AdapterBluetoothHost,
     private val configuredAddress: String? = null,
+    private val fallbackName: String? = null,
 ) : Iap2BluetoothLink {
     override val localAddress: String?
         get() = host.localAddress
+
+    override val localName: String?
+        get() = host.localName ?: fallbackName
 
     override fun target(): PairedTarget? {
         val paired = host.pairedTarget() ?: return null

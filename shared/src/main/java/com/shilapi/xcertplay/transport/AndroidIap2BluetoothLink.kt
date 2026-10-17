@@ -35,6 +35,9 @@ internal class AndroidIap2BluetoothLink(
 
     override val localAddress: String = accessoryBluetoothMac()
 
+    override val localName: String?
+        get() = adapter.name
+
     override fun target(): PairedTarget? {
         val device = selectDevice() ?: return null
         selected = device

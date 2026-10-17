@@ -367,6 +367,16 @@ class CarPlayController(
      * repeat of the old number -- the one stimulus every answered run has answered.
      */
     private val wirelessAuthenticationAttempts = AtomicInteger(0)
+    /**
+     * Bounds the automatic restarts of one wireless run, so flapping interfaces cannot restart it
+     * forever.
+     *
+     * The budget is per connect: [start] hands it back in full, because a driver pressing connect
+     * again is asking for a fresh attempt rather than extending a spent one. It is deliberately not
+     * restored in [startWireless] — [restartWireless] goes through [startWireless] after its backoff,
+     * so resetting there would make the breaker unable to trip at all.
+     */
+    private val wirelessRestartLimiter = WirelessRestartLimiter()
     private val wirelessConnectionProof = WirelessConnectionProof<AirPlaySession>()
 
     private var permissionCloseable: Closeable? = null
@@ -480,6 +490,12 @@ class CarPlayController(
         synchronized(this) {
             if (closed) return
         }
+        // The driver asked for this connection, so the restart budget starts here and nowhere else:
+        // `restartWireless()` re-enters `startWireless()`, and a reset there would be a budget that
+        // refills itself. Without this, a run that spent its five restarts could not be tried again
+        // from the page at all — the only way back would be restarting the app.
+        wirelessAuthenticationAttempts.set(0)
+        wirelessRestartLimiter.reset()
         if (config.transport == CarPlayTransport.WIRED) {
             permissionCloseable = iphoneHost.registerPermissionReceiver(::onIphonePermission)
             attachCloseable = iphoneHost.registerAttachReceiver(::onIphoneAttached)
@@ -500,6 +516,7 @@ class CarPlayController(
         if (closed) return
         // Asked for by hand, so it gets the whole budget again.
         wirelessAuthenticationAttempts.set(0)
+        wirelessRestartLimiter.reset()
         if (mfiSession == null) {
             startMfi()
         } else if (config.transport == CarPlayTransport.WIRELESS) {
@@ -953,9 +970,45 @@ class CarPlayController(
     }
 
     private fun restartWireless() {
+        val backoff = wirelessRestartLimiter.nextBackoffOrNull()
+        if (backoff == null) {
+            val count = wirelessRestartLimiter.currentAttempts
+            debugLog("wireless restart budget exhausted ($count/${wirelessRestartLimiter.maxAttempts}), failing session")
+            // Nothing will run after this, so the stack is torn down here rather than reported and
+            // left standing: every other failure path out of the bring-up closes first and fails
+            // second, and with the budget spent there is no later run to release Bonjour, RFCOMM, the
+            // AirPlay listener or the hotspot. `fail` only turns the lamp red — it stops nothing.
+            //
+            // The generation is moved first, so a bring-up still in flight treats itself as superseded
+            // and lets go of what it opened instead of continuing into a torn-down stack.
+            wirelessGeneration.incrementAndGet()
+            Thread(
+                {
+                    closeWirelessStack()
+                    fail(
+                        IOException(
+                            "Wireless CarPlay failed: maximum restart budget " +
+                                "(${wirelessRestartLimiter.maxAttempts}) exceeded due to persistent " +
+                                "network flapping",
+                        ),
+                    )
+                },
+                "xcertplay-wireless-restart-exhausted",
+            ).apply {
+                isDaemon = true
+                start()
+            }
+            return
+        }
         wirelessGeneration.incrementAndGet()
         Thread(
             {
+                debugLog("wireless restart scheduled with backoff=${backoff}ms (attempt=${wirelessRestartLimiter.currentAttempts})")
+                try {
+                    Thread.sleep(backoff)
+                } catch (ignored: InterruptedException) {
+                    return@Thread
+                }
                 closeWirelessStack()
                 if (!closed) startWireless()
             },
@@ -1040,9 +1093,18 @@ class CarPlayController(
                 onTimeout = { onFirstTcpTimedOut(generation) },
                 log = { message -> if (!isStaleWirelessRun(generation)) debugLog(message) },
             )
+            // A link-local IPv6 has to carry a scope to be useful at all: the scope is what says
+            // which interface the fe80::/64 belongs to, and it is read locally by JmDNS and by every
+            // socket that binds this address. One that arrives without it names nothing this side can
+            // reach, so it is refused rather than published.
+            //
+            // A global IPv6 is a different case and is allowed: it carries no scope by nature and is
+            // routable for a phone on the same network, which is a shape the same-network route can
+            // now produce (see [existingWifiHostAddresses]).
             if (
                 hostAddress is Inet6Address &&
-                (!hostAddress.isLinkLocalAddress || hostAddress.scopeId == 0)
+                hostAddress.isLinkLocalAddress &&
+                hostAddress.scopeId == 0
             ) {
                 throw IOException(
                     "Wireless hotspot link-local IPv6 address is not scoped",
@@ -1095,6 +1157,7 @@ class CarPlayController(
                 adapterBluetooth,
                 config.wirelessBluetoothDeviceAddress,
                 ::debugLog,
+                fallbackAdapterName = config.identification.name,
             ) {
                 // A hop this build ships, for head units whose own stack cannot carry the leg. Absent
                 // from builds that have none, which is the ordinary case.
@@ -1278,11 +1341,11 @@ class CarPlayController(
             // inquiry makes it file this exchange under an accessory it has never paired with, which is
             // the exact condition the requirement exists to prevent; a session that cannot name itself
             // honestly is worth less than a session that says why it did not start.
-            val radioName = CarBluetoothHops.active?.localName(appContext)
-                ?: throw IOException(
-                    "The head unit would not say what its Bluetooth is called, and the name the phone " +
-                        "is given has to be that one (§18.4). Wireless CarPlay cannot start.",
-                )
+            val radioName = WirelessIdentityResolver.resolveRadioName(
+                link = link,
+                hopType = config.wirelessBluetoothHop,
+                fallbackCarHopName = CarBluetoothHops.active?.localName(appContext),
+            )
             debugLog("wireless radio name=$radioName")
             val identification = config.identification.copy(
                 name = radioName,
@@ -1408,6 +1471,13 @@ class CarPlayController(
         wirelessTunnelChannel = channel
         val generation = wirelessGeneration.get()
         debugLog("wireless iAP2 tunnel control starting")
+        val tunnelWatchdog = Runnable {
+            if (!wirelessTunnelReady.get() && generation == wirelessGeneration.get()) {
+                debugLog("wireless iAP2 tunnel handshake timed out after 10s waiting for identification/auth")
+                closeBestEffort("stuck iAP2 tunnel link") { channel.close() }
+            }
+        }
+        mainHandler.postDelayed(tunnelWatchdog, 10_000L)
         return try {
             tunnelExecutor.execute {
                 try {
@@ -1421,6 +1491,7 @@ class CarPlayController(
                         locationProvider = locationProvider,
                         vehicleStatusProvider = vehicleStatusProvider,
                         onReady = {
+                            mainHandler.removeCallbacks(tunnelWatchdog)
                             onWirelessTunnelReady(generation)
                         },
                         onIncoming = ::onRouteFrame,
@@ -1447,11 +1518,13 @@ class CarPlayController(
                         )
                     }
                 } finally {
+                    mainHandler.removeCallbacks(tunnelWatchdog)
                     if (wirelessTunnelChannel === channel) wirelessTunnelChannel = null
                 }
             }
             true
         } catch (error: Throwable) {
+            mainHandler.removeCallbacks(tunnelWatchdog)
             if (wirelessTunnelChannel === channel) wirelessTunnelChannel = null
             closeBestEffort("tunneled iAP2 link") { channel.close() }
             debugLog("iAP2 tunnel executor rejected the link", error)
@@ -1514,6 +1587,7 @@ class CarPlayController(
         if (!wirelessActiveReported.compareAndSet(false, true)) return
         // A bring-up that got all the way through is proof the next one starts from a clean budget.
         wirelessAuthenticationAttempts.set(0)
+        wirelessRestartLimiter.reset()
         val generation = wirelessGeneration.get()
         Thread(
             {
@@ -1533,6 +1607,15 @@ class CarPlayController(
                 ) {
                     return@Thread
                 }
+                // The channel is reported as the endpoint named it and nothing is derived from it.
+                // This used to log a band and two different radio treatments, and both branches then
+                // ran the same call: the spec's per-band handling (§23.2.5.5) is not implemented
+                // anywhere in this build, so a log must not be read as evidence that it is. The band
+                // that matters is already on the bring-up line, from the hotspot's own reading.
+                debugLog(
+                    "wireless handoff: AirPlay endpoint channel=" +
+                        (wirelessAirPlayEndpoint?.channel?.toString() ?: "unknown"),
+                )
                 // RFCOMM is already down. Quiet the USB adapter only after a handoff that stuck:
                 // a failed attempt leaves scan on, or the iPhone cannot be paired again.
                 idleAdapterRadio()

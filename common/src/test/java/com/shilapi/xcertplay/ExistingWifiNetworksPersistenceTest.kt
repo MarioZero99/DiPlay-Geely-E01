@@ -92,6 +92,41 @@ class ExistingWifiNetworksPersistenceTest {
         )
     }
 
+    @Test
+    fun malformedLegacyCredentialsAreRejected() {
+        // Passphrase too short (< 8 chars)
+        prefs.edit()
+            .putString("existing_wifi_ssid", "Car Wi-Fi")
+            .putString("existing_wifi_passphrase", "short")
+            .remove(KEY_NETWORKS)
+            .apply()
+        assertEquals(emptyList<ExistingWifiDriverCredentials>(), AirPlayPersistence.loadExistingWifiNetworks(context))
+
+        // Contains NUL
+        prefs.edit()
+            .putString("existing_wifi_ssid", "Car\u0000Wi-Fi")
+            .putString("existing_wifi_passphrase", "valid-pass-123")
+            .remove(KEY_NETWORKS)
+            .apply()
+        assertEquals(emptyList<ExistingWifiDriverCredentials>(), AirPlayPersistence.loadExistingWifiNetworks(context))
+
+        // Passphrase contains NUL
+        prefs.edit()
+            .putString("existing_wifi_ssid", "Car Wi-Fi")
+            .putString("existing_wifi_passphrase", "valid\u0000pass-123")
+            .remove(KEY_NETWORKS)
+            .apply()
+        assertEquals(emptyList<ExistingWifiDriverCredentials>(), AirPlayPersistence.loadExistingWifiNetworks(context))
+
+        // Blank SSID
+        prefs.edit()
+            .putString("existing_wifi_ssid", "   ")
+            .putString("existing_wifi_passphrase", "valid-pass-123")
+            .remove(KEY_NETWORKS)
+            .apply()
+        assertEquals(emptyList<ExistingWifiDriverCredentials>(), AirPlayPersistence.loadExistingWifiNetworks(context))
+    }
+
     /** Once the list exists it is the whole truth, and the pair beside it is stale by construction. */
     @Test
     fun theListWinsOverTheSinglePairOnceItIsThere() {

@@ -20,6 +20,10 @@ interface AdapterBluetoothHost : Closeable {
     /** The adapter's own address, once the stack has read it. */
     val localAddress: String?
 
+    /** The adapter's advertised Bluetooth local name, or null if unknown. */
+    val localName: String?
+        get() = null
+
     /**
      * Brings the stack up over the adapter and names it. [discoverable] false leaves inquiry and page scan
      * off, so the iPhone does not see the name until the car hotspot is known to be on.

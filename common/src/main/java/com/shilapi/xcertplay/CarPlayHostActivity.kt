@@ -204,8 +204,10 @@ class CarPlayHostActivity : ComponentActivity() {
             modelIdentifier = normalizedModel(),
             manufacturer = normalizedManufacturer(),
             serialNumber = "DIPLAY-" + DiPlayBootstrap.deviceId(airPlayIdentity).replace(":", ""),
-            firmwareVersion = "0.1.0",
-            hardwareVersion = "1.0",
+            firmwareVersion = runCatching {
+                packageManager.getPackageInfo(packageName, 0).versionName
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: "1.0.0",
+            hardwareVersion = Build.HARDWARE.takeIf { !it.isNullOrBlank() && '\u0000' !in it } ?: "1.0",
             carPlayUsbInterfaceNumber = 3,
             locationInformationEnabled = locationReportingEnabled,
         ),

@@ -7,6 +7,10 @@ internal interface Iap2BluetoothLink {
     /** This head unit's own Bluetooth address; null when no adapter can supply one. */
     val localAddress: String?
 
+    /** The broadcast name of the radio carrying this iAP2 link, matching its EIR (§18.4). */
+    val localName: String?
+        get() = null
+
     /** The iPhone to open the iAP2 channel to; null means nothing is paired yet. */
     fun target(): PairedTarget?
 
@@ -40,6 +44,7 @@ internal object Iap2BluetoothLinks {
         configuredAddress: String?,
         onDiagnostic: (String) -> Unit = {},
         externalRouteEnabled: Boolean = AdapterRoutes.available,
+        fallbackAdapterName: String? = null,
         car: () -> Iap2BluetoothLink,
     ): Iap2BluetoothLink {
         if (hop == WirelessBluetoothHop.USB_ADAPTER) {
@@ -51,7 +56,7 @@ internal object Iap2BluetoothLinks {
             )
             val paired = adapter.pairedTarget()?.address ?: "unpaired"
             onDiagnostic("wireless Bluetooth hop=usb-adapter address=$paired")
-            return AdapterIap2BluetoothLink(adapter, configuredAddress)
+            return AdapterIap2BluetoothLink(adapter, configuredAddress, fallbackAdapterName)
         }
         onDiagnostic("wireless Bluetooth hop=car chosen")
         return car()

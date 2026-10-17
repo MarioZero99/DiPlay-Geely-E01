@@ -334,6 +334,20 @@ class ExistingWifiCredentialsTest {
         assertEquals("nowhere", password.source)
     }
 
+    @Test
+    fun wepNetworksAreRejectedAndNotTreatedAsOpen() {
+        val wep = WifiConfiguration().apply {
+            SSID = "\"$ssid\""
+            networkId = LIVE_NETWORK_ID
+            wepKeys[0] = "\"12345\""
+            wepTxKeyIndex = 0
+            allowedKeyManagement.clear()
+            allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE)
+        }
+        val credentials = existingWifiCredentials(listOf(wep), ssid, LIVE_NETWORK_ID)
+        assertNull(credentials)
+    }
+
     private fun saved(
         ssid: String = this.ssid,
         passphrase: String?,

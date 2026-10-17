@@ -89,6 +89,7 @@ class ExistingWifiManager(
      * first look, which is what makes that first look log.
      */
     @Volatile private var waitingFor = ""
+    @Volatile private var multipleNetworksDetectedAt: Long? = null
 
     /**
      * Why the last look for the saved configuration came up empty, for the message that ends the run.
@@ -116,6 +117,10 @@ class ExistingWifiManager(
         }
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
         check(selected == null) { "ExistingWifiManager has already started" }
+        // One wait, one grace. This instance is built per bring-up, so the field cannot outlive the
+        // attempt it measures today — clearing it here says so, and keeps it true if the manager is
+        // ever reused for a second bring-up.
+        multipleNetworksDetectedAt = null
         val started = System.nanoTime()
         while (!closed) {
             val attached = readAttachment()
@@ -228,11 +233,21 @@ class ExistingWifiManager(
             } == true
         }
         if (networks.size > 1) {
-            throw IOException(
-                "The car is on ${networks.size} Wi-Fi networks at once; leave it on the one " +
-                    "the iPhone is on and connect again",
-            )
+            val now = System.currentTimeMillis()
+            val firstSeen = multipleNetworksDetectedAt
+            if (firstSeen == null) {
+                multipleNetworksDetectedAt = now
+                return waitFor("multiple Wi-Fi networks to settle (${networks.size} detected)")
+            } else if (now - firstSeen < MULTIPLE_NETWORKS_GRACE_MILLIS) {
+                return waitFor("multiple Wi-Fi networks to settle (${networks.size} detected)")
+            } else {
+                throw IOException(
+                    "The car is on ${networks.size} Wi-Fi networks at once; leave it on the one " +
+                        "the iPhone is on and connect again",
+                )
+            }
         }
+        multipleNetworksDetectedAt = null
         val network = networks.singleOrNull() ?: return waitFor("a Wi-Fi connection")
         val properties = connectivity.getLinkProperties(network) ?: return waitFor("the Wi-Fi interface")
         val name = properties.interfaceName ?: return waitFor("the Wi-Fi interface")
@@ -281,11 +296,19 @@ class ExistingWifiManager(
         }
         val credentials = existingWifiCredentials(configurations, ssid, networkId)
         if (credentials == null) {
-            // Counted, not named: the name is on the screen and in the message around this, and what
-            // the reader has to tell apart here is a list that is empty from a list that is not.
-            savedDetailsMissing =
+            // The helper is the one place that decides a saved network cannot be used; this says
+            // which of the two reasons it was. WEP is named rather than counted, because the driver
+            // can act on it — it is a network that has to change, not a lookup that came up empty.
+            val saved = configurations?.firstOrNull { networkId >= 0 && it.networkId == networkId }
+                ?: configurations?.firstOrNull { unquoted(it.SSID) == ssid }
+            savedDetailsMissing = if (saved != null && isWepConfiguration(saved)) {
+                "network uses WEP which is insecure and not supported by CarPlay"
+            } else {
+                // Counted, not named: the name is on the screen and in the message around this, and what
+                // the reader has to tell apart here is a list that is empty from a list that is not.
                 "none of the ${configurations?.size ?: 0} saved networks is the one the car is on " +
                     "(its id is $networkId)"
+            }
         }
         return credentials
     }
@@ -383,6 +406,7 @@ class ExistingWifiManager(
 
     private companion object {
         const val POLL_MILLIS = 200L
+        const val MULTIPLE_NETWORKS_GRACE_MILLIS = 600L
     }
 }
 
@@ -490,6 +514,7 @@ internal fun existingWifiCredentials(
     val saved = configurations?.firstOrNull { networkId >= 0 && it.networkId == networkId }
         ?: configurations?.firstOrNull { unquoted(it.SSID) == ssid }
         ?: return null
+    if (isWepConfiguration(saved)) return null
     // Some platforms answer with a mask instead of nothing when they will not hand the key over.
     val passphrase = unquoted(saved.preSharedKey)
         ?.takeIf { it.isNotEmpty() && it != REDACTED_PASSWORD }
@@ -497,6 +522,12 @@ internal fun existingWifiCredentials(
         passphrase = passphrase,
         security = existingWifiSecurity(saved.allowedKeyManagement),
     )
+}
+
+internal fun isWepConfiguration(config: WifiConfiguration): Boolean {
+    val hasWepKeys = config.wepKeys?.any { !it.isNullOrEmpty() && it != "\"\"" } == true
+    val isSharedAuth = config.allowedAuthAlgorithms?.get(WifiConfiguration.AuthAlgorithm.SHARED) == true
+    return hasWepKeys || isSharedAuth
 }
 
 /**

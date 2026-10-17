@@ -2337,6 +2337,10 @@ class DiPlayActivity : ComponentActivity() {
                 adapterPlugged = plugged,
                 adapter = if (plugged || hop == WirelessBluetoothHop.USB_ADAPTER) seen else null,
                 mode = mode,
+                // The same-network route is the only one that asks the car to be a station, and the
+                // only one whose gap list reads this. Answered from the same read the page already
+                // uses to show the driver which network the car joined.
+                carWifiAssociated = joinedWifiName() != null,
             ),
         )
     }
@@ -2345,6 +2349,7 @@ class DiPlayActivity : ComponentActivity() {
         WirelessGap.HOTSPOT_CREDENTIALS -> getString(R.string.gap_hotspot_credentials)
         WirelessGap.HOTSPOT_OFF -> getString(R.string.gap_hotspot_off)
         WirelessGap.HOTSPOT_ON -> getString(R.string.gap_car_hotspot_on)
+        WirelessGap.CAR_WIFI_DISCONNECTED -> getString(R.string.gap_car_wifi_disconnected)
         WirelessGap.RADIO_NOT_CHOSEN -> getString(R.string.gap_radio)
         WirelessGap.CAR_BLUETOOTH_OFF -> getString(carBluetoothOffText(AdapterRoutes.available))
         WirelessGap.PHONE_NOT_CHOSEN -> getString(R.string.gap_phone)

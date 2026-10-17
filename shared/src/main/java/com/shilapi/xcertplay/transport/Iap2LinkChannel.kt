@@ -19,6 +19,12 @@ class Iap2LinkChannel private constructor(
     private val underlying: BlockingDuplexByteStream,
     private val linkConfig: Iap2LinkConfig,
     private val initiateNegotiation: Boolean,
+    /**
+     * Where the link engine's own warnings go — currently the payload it received on a session it
+     * cannot deliver. Empty by default in this class, but every production route passes the session's
+     * log sink: a warning whose only reader is a unit test is indistinguishable from no warning.
+     */
+    private val onTrace: (String) -> Unit = {},
 ) : AutoCloseable {
     private data class Command(val control: ByteArray)
 
@@ -140,7 +146,7 @@ class Iap2LinkChannel private constructor(
     }
 
     private fun runPump() {
-        val engine = Iap2LinkEngine(linkConfig)
+        val engine = Iap2LinkEngine(linkConfig, onTrace)
         try {
             engine.start(wiredInitiator = initiateNegotiation, nowMillis = nowMillis())
             while (!isClosing()) {
@@ -343,31 +349,56 @@ class Iap2LinkChannel private constructor(
             maxOutgoing = 4,
             controlSessionVersion = 2,
             zeroAcknowledgements = true,
+            // Wired CarPlay is the route that works on the car today, and this is the declaration it
+            // runs on. Stated here rather than left to the default: the wireless work below must give
+            // sessions up on purpose, and must not do it to the cable by accident.
+            declareOptionalSessions = true,
         )
         private val WIRELESS_LINK_CONFIG = Iap2LinkConfig(
             maxOutgoing = 4,
             controlSessionVersion = 2,
+            // Control session only. EA is not implemented on this link and the accessory no longer
+            // names the EA messages either, so declaring the session would offer a channel the phone
+            // can open and nothing here can answer.
+            declareOptionalSessions = false,
+        )
+        private val TUNNEL_LINK_CONFIG = Iap2LinkConfig(
+            maxOutgoing = 4,
+            controlSessionVersion = 2,
+            zeroAcknowledgements = true,
+            // Same session set as the RFCOMM leg it continues: the tunnel carries the wireless
+            // session over Wi-Fi, and EA is not implemented there either.
+            declareOptionalSessions = false,
         )
 
         /** Opens and immediately starts a wired iAP2 link, taking ownership of the supplied stream. */
-        fun open(underlying: BlockingDuplexByteStream): Iap2LinkChannel =
-            Iap2LinkChannel(underlying, WIRED_LINK_CONFIG, initiateNegotiation = true)
+        fun open(
+            underlying: BlockingDuplexByteStream,
+            onTrace: (String) -> Unit = {},
+        ): Iap2LinkChannel =
+            Iap2LinkChannel(underlying, WIRED_LINK_CONFIG, initiateNegotiation = true, onTrace = onTrace)
                 .also { it.worker.start() }
 
         /**
          * Opens a wireless RFCOMM link. LIVI sends the iAP2 marker but lets the phone initiate
          * synchronization, and keeps acknowledgements enabled for Bluetooth.
          */
-        fun openWireless(underlying: BlockingDuplexByteStream): Iap2LinkChannel =
-            Iap2LinkChannel(underlying, WIRELESS_LINK_CONFIG, initiateNegotiation = false)
+        fun openWireless(
+            underlying: BlockingDuplexByteStream,
+            onTrace: (String) -> Unit = {},
+        ): Iap2LinkChannel =
+            Iap2LinkChannel(underlying, WIRELESS_LINK_CONFIG, initiateNegotiation = false, onTrace = onTrace)
                 .also { it.worker.start() }
 
         /**
          * Opens the iAP2 link carried by an AirPlay type-130 tunnel. The accessory initiates
          * synchronization and zero-acknowledgement mode matches the Wi-Fi transport.
          */
-        fun openTunnel(underlying: BlockingDuplexByteStream): Iap2LinkChannel =
-            Iap2LinkChannel(underlying, WIRED_LINK_CONFIG, initiateNegotiation = true)
+        fun openTunnel(
+            underlying: BlockingDuplexByteStream,
+            onTrace: (String) -> Unit = {},
+        ): Iap2LinkChannel =
+            Iap2LinkChannel(underlying, TUNNEL_LINK_CONFIG, initiateNegotiation = true, onTrace = onTrace)
                 .also { it.worker.start() }
 
         private fun nowMillis(): Long = System.nanoTime() / NANOS_PER_MILLISECOND
