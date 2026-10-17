@@ -53,16 +53,54 @@ android {
         // this project hands out are release builds: one application id, one key, and each installs
         // over the other with its settings kept.
         release {
+            // R8 and resource shrinking, for the package that is handed out. This was off, and it is
+            // what the size was made of: 13.6 MB of dex before shrinking, 4.9 MB of it inside the APK.
+            // The only classes this app looks up by name are the two constants in proguard-rules.pro.
             optimization {
-                enable = false
+                enable = true
             }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             signingConfig = signingConfigs.getByName("release")
         }
     }
+
+    // Java resources carried by the libraries, cut down to the ones this app can reach. They are
+    // packaged as they sit in the jars, so R8 cannot drop them: unused cryptography parameter tables
+    // are here as files, not as code, and they are not small.
+    //
+    // org/bouncycastle/pqc/** is the Picnic signature parameter tables (L1/L3/L5, 1.19 MB). BouncyCastle
+    // is used for ChaCha20-Poly1305, X25519, Ed25519, HKDF and SHA-512 and for nothing else; no PQC
+    // code path is called. org/bouncycastle/x509/CertPathReviewerMessages* is the PKIX certificate-path
+    // reviewer's message catalogue (90 KB), which belongs to the provider registration this app does
+    // not do — BouncyCastle is used through its low-level API, never as a java.security.Provider.
+    packaging {
+        resources {
+            excludes += listOf(
+                "org/bouncycastle/pqc/**",
+                "org/bouncycastle/x509/CertPathReviewerMessages*",
+            )
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
         isCoreLibraryDesugaringEnabled = true
+    }
+    androidResources {
+        // AppLocale offers exactly two languages (AppLocale.ALL: system, English, Simplified Chinese),
+        // and this project's own strings exist in exactly those two. Everything else in the resource
+        // table is a translation the libraries ship — about 80 locales of "Cancel" and "OK" — which no
+        // path in this app can reach. Dropping them keeps the resource table to what the language
+        // setting can actually produce.
+        // Resource qualifiers, passed to aapt2's -c as they are written: "zh-CN" is refused outright
+        // ("invalid config 'zh-CN' for -c option"), and the bare "zh" links without complaint while
+        // matching no directory in this tree — it takes the Chinese strings out silently. The
+        // qualifier here is the one the resources use, values-zh-rCN.
+        localeFilters += listOf("en", "zh-rCN")
     }
 }
 
