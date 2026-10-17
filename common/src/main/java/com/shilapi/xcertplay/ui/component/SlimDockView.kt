@@ -14,10 +14,13 @@ import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.ui.theme.ThemePalette
 
 /**
- * The 82dp rail down one edge of the home page: home, audio, settings, exit.
+ * The 82dp rail down one edge of the home page: home, audio, settings, the car's own launcher, exit.
  *
- * Four controls and nothing else, because that is all the home page needs from the driver at a
- * stoplight. Every touch target is 56dp tall whatever the icon measures, and the icon is centred
+ * Five controls and nothing else, because that is all the home page needs from the driver at a
+ * stoplight. The launcher control and the exit control are the two ways off the page, and they are
+ * deliberately not the same thing: the launcher leaves DiPlay on screen but keeps it running — the
+ * session, the socket and the reconnect all survive — while exit ends the app. Every touch target is
+ * 56dp tall whatever the icon measures, and the icon is centred
  * in its own frame rather than trusting the drawable's padding. The rail mirrors with
  * right-hand drive by being placed on the other side of the content, which is the Activity's
  * decision — this view only ever draws itself top to bottom.
@@ -28,6 +31,7 @@ class SlimDockView(
     private val onHomeClick: () -> Unit,
     private val onAudioClick: () -> Unit,
     private val onSettingsClick: () -> Unit,
+    private val onLauncherClick: () -> Unit,
     private val onExitClick: () -> Unit,
 ) : LinearLayout(context) {
 
@@ -45,9 +49,12 @@ class SlimDockView(
         // The spacer takes the slack, so the two groups sit at the two ends of the rail.
         addView(View(context), LayoutParams(1, 0, 1f))
 
-        // Bottom group: settings, and the one control that ends the app. Exit is last and red,
-        // and its confirmation is the caller's — see DiPlayActivity's onExitClick.
+        // Bottom group: settings, then the two ways off the page — out to the car's launcher with
+        // DiPlay still running, and out of the app. Exit is last and red, and its confirmation is
+        // the caller's — see DiPlayActivity's onExitClick.
         addView(iconButton(R.drawable.ic_dp_about, palette.textMuted, onSettingsClick))
+        addView(View(context).apply { layoutParams = LayoutParams(1, dp(16)) })
+        addView(iconButton(R.drawable.ic_dp_launcher, palette.textMuted, onLauncherClick))
         addView(View(context).apply { layoutParams = LayoutParams(1, dp(16)) })
         addView(iconButton(R.drawable.ic_dp_exit, EXIT_TINT, onExitClick))
     }

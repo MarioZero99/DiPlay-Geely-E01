@@ -513,4 +513,6 @@
     <string name="day_night_follow_car">Follow the car</string>
     <string name="day_night_follow_time">Follow the time</string>
     <string name="day_night_manual">Manual</string>
+    <string name="exit_confirm_body">The CarPlay session ends with it. To use DiPlay again, open it from the car\'s launcher.</string>
+    <string name="cluster_display_not_detected">No dashboard display is attached right now. The dashboard controls appear on their own once the car exposes one.</string>
 </resources>

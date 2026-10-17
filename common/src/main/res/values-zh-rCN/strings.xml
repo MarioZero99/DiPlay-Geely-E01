@@ -513,4 +513,6 @@
     <string name="day_night_follow_car">跟随车机</string>
     <string name="day_night_follow_time">按时间</string>
     <string name="day_night_manual">手动</string>
+    <string name="exit_confirm_body">当前 CarPlay 连接会随之中断。下次使用时，从车机桌面重新打开 DiPlay。</string>
+    <string name="cluster_display_not_detected">当前没有检测到仪表副屏。等车机把副屏交出来，这里的仪表控件会自己出现。</string>
 </resources>

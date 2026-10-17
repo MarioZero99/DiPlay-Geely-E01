@@ -64,6 +64,7 @@ import com.shilapi.xcertplay.transport.WirelessReadinessInput
 import com.shilapi.xcertplay.transport.adapter.AdapterPage
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
+import com.shilapi.xcertplay.ui.component.ConfirmSheetView
 import com.shilapi.xcertplay.ui.component.HeroStageCard
 import com.shilapi.xcertplay.ui.component.QuickWidgetsView
 import com.shilapi.xcertplay.ui.component.SettingsDrawerView
@@ -96,6 +97,8 @@ class DiPlayActivity : ComponentActivity() {
     private var drawer: SettingsDrawerView? = null
     private var drawerOpen = false
     /** The palette this redraw resolved to; the cockpit's views are built from it. */
+    /** The exit question, while it is up: one instance, so a second press cannot stack a second sheet. */
+    private var exitSheet: ConfirmSheetView? = null
     private var palette: ThemePalette = CockpitThemeManager.ZEEKR_WHITE_PALETTE
     private var pendingCarHotspotSetup = false
 
@@ -239,6 +242,9 @@ class DiPlayActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 // The drawer is drawn over the page, so back closes it before it changes page: a key
+                // The exit question is drawn over everything else, so it is answered or dismissed
+                // before back is allowed to mean anything about pages.
+                exitSheet?.let { it.dismiss(); return }
                 // that took the driver off the page behind an open panel would look like a jump.
                 if (drawer?.isOpen() == true) {
                     closeSettingsDrawer()
@@ -313,7 +319,7 @@ class DiPlayActivity : ComponentActivity() {
         // the next open — except when it was open a moment ago, in which case it is put straight back
         // (see cockpitRoot): a setting changed inside the drawer must not close it under the driver.
         val drawerWasOpen = drawerOpen
-        hero = null; widgets = null; cockpitHost = null; drawer = null; drawerOpen = false
+        hero = null; widgets = null; cockpitHost = null; drawer = null; drawerOpen = false; exitSheet = null
         // Read here rather than per view: the car's own day/night signal arrives as a configuration
         // change, which calls render(), so one read per redraw is exactly one read per signal.
         palette = CockpitThemeManager.resolvePalette(
@@ -411,6 +417,7 @@ class DiPlayActivity : ComponentActivity() {
             onAudioClick = { openSettingsDrawer(getString(R.string.audio_routing)) },
             onSettingsClick = { if (drawer?.isOpen() == true) closeSettingsDrawer() else openSettingsDrawer() },
             onExitClick = { confirmExit() },
+            onLauncherClick = { leaveToLauncher() },
         )
 
         val stage = LinearLayout(this).apply {
@@ -610,13 +617,43 @@ class DiPlayActivity : ComponentActivity() {
         column.addView(picks)
     }
 
-    /** Leaving the app is a press, a question and a press — never one press. */
+    /**
+     * Leaving the app is a press, a question and a press — never one press.
+     *
+     * The question is a card on the page rather than a platform dialog: it comes from the palette, so
+     * it matches whichever skin is running instead of arriving as a grey system rectangle, and the
+     * stage it is asking about stays visible behind it. See [ConfirmSheetView].
+     */
     private fun confirmExit() {
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.close_app))
-            .setPositiveButton(getString(R.string.exit_application)) { _, _ -> closeTheApp() }
-            .setNegativeButton(getString(R.string.cancel), null)
-            .show()
+        val host = cockpitHost ?: return
+        if (exitSheet != null) return
+        val sheet = ConfirmSheetView(
+            this,
+            palette,
+            title = getString(R.string.close_app),
+            body = getString(R.string.exit_confirm_body),
+            confirmLabel = getString(R.string.exit_application),
+            cancelLabel = getString(R.string.cancel),
+            onConfirm = {
+                exitSheet = null
+                closeTheApp()
+            },
+            onDismiss = { exitSheet = null },
+        )
+        exitSheet = sheet
+        host.addView(sheet, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    /**
+     * Out to the car's own launcher with DiPlay still running.
+     *
+     * This is the other half of what the rail's last two controls mean: the session, the mDNS socket
+     * and the reconnect all keep going here, and DiPlay's icon on the launcher brings this page back.
+     * [closeTheApp] is the one that ends them.
+     */
+    private fun leaveToLauncher() {
+        if (drawer?.isOpen() == true) closeSettingsDrawer()
+        startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
     }
 
     private fun loadConnectionSettings() {
@@ -880,7 +917,15 @@ class DiPlayActivity : ComponentActivity() {
         // The cluster map keeps a gate of its own: it draws AirPlay's alt-screen stream on a public
         // presentation display, so what it needs is that display, not the car's HUD services. It used
         // to sit inside the BYD section and was hidden wherever those services were absent.
-        if (ClusterMapPresentation.findDisplay(this) != null) columns.card(R.string.instrument_cluster_map, R.drawable.ic_dp_navigation) { card ->
+        val clusterDisplay = ClusterMapPresentation.findDisplay(this)
+        columns.card(R.string.instrument_cluster_map, R.drawable.ic_dp_navigation) { card ->
+            // The card is here on every head unit, including one that has no dashboard display at
+            // the moment: a setting that silently disappears reads as one that was taken away, and
+            // the note says which part of the car it is waiting for.
+            if (clusterDisplay == null) {
+                card.addView(label(getString(R.string.cluster_display_not_detected), 14, MUTED))
+                return@card
+            }
             toggle(card, getString(R.string.carplay_map_on_instrument_cluster_experimental),
                 getString(R.string.shows_the_iphone_s_cluster_map_on_the_instrument_cluster_c),
                 AirPlayPersistence.loadClusterMapEnabled(this)) {
