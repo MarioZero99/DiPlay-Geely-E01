@@ -48,6 +48,7 @@ import com.shilapi.xcertplay.network.WirelessInterfaceDiagnostics
 import com.shilapi.xcertplay.network.WirelessReceiveDiagnostics
 import com.shilapi.xcertplay.network.WirelessStartupDiagnostics
 import com.shilapi.xcertplay.network.WirelessStartupPolicy
+import com.shilapi.xcertplay.network.arpPeersOn
 import com.shilapi.xcertplay.transport.AndroidIap2BluetoothLink
 import com.shilapi.xcertplay.transport.Iap2BluetoothLink
 import com.shilapi.xcertplay.transport.Iap2BluetoothLinks
@@ -68,6 +69,7 @@ import com.shilapi.xcertplay.transport.Iap2WirelessCarPlayEndpoint
 import com.shilapi.xcertplay.transport.Iap2WirelessControlClient
 import com.shilapi.xcertplay.transport.Iap2WirelessControlTerminal
 import com.shilapi.xcertplay.transport.Iap2WirelessIdentification
+import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.I2cTransport
 import com.shilapi.xcertplay.transport.I2cTransportException
 import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
@@ -93,6 +95,7 @@ import java.io.Closeable
 import java.io.IOException
 import java.net.InetAddress
 import java.net.NetworkInterface
+import java.net.Inet4Address
 import java.net.Inet6Address
 import java.util.Locale
 import java.util.UUID
@@ -186,6 +189,19 @@ enum class CarPlayFailureReason {
      * so this is the one failure here whose retry is not the same attempt again.
      */
     FIRST_TCP_TIMEOUT,
+
+    /**
+     * No device ever appeared on the access point, so the address this receiver published was never
+     * the question.
+     *
+     * From the listening socket this and [FIRST_TCP_TIMEOUT] look identical — a port nobody opened —
+     * and they are fixed in different places: one by publishing the other address family, the other
+     * by getting the phone onto the network at all. The separation is only ever made on evidence: an
+     * IPv4 session whose access point shows no resolved neighbour other than this receiver. Then the
+     * retry is deliberately *not* told to move the address family, because a phone that never joined
+     * cannot be helped by a different address on a network it is not on.
+     */
+    WIRELESS_PHONE_NOT_ON_NETWORK,
 }
 
 /**
@@ -204,6 +220,15 @@ internal class CarHotspotStaysOnException(message: String) : IOException(message
  * readings of one event rather than two guesses at it.
  */
 internal class FirstTcpTimeoutException(message: String) : IOException(message)
+
+/**
+ * The access point never saw the phone, so there was no address for it to fail to reach.
+ *
+ * A separate type from [FirstTcpTimeoutException] because the screen has to say the other sentence:
+ * nothing was retried with a different address, and the thing to fix is the network the phone should
+ * have joined — not the one this receiver handed it.
+ */
+internal class WirelessPhoneNotOnNetworkException(message: String) : IOException(message)
 
 internal fun isWirelessHandoffInProgress(
     handoffRequested: Boolean,
@@ -240,6 +265,7 @@ internal fun reportsLockdownError(error: Throwable, code: String): Boolean {
 internal fun failureReasonFor(error: Throwable): CarPlayFailureReason = when {
     error is CarHotspotStaysOnException -> CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON
     error is FirstTcpTimeoutException -> CarPlayFailureReason.FIRST_TCP_TIMEOUT
+    error is WirelessPhoneNotOnNetworkException -> CarPlayFailureReason.WIRELESS_PHONE_NOT_ON_NETWORK
     reportsLockdownError(error, "InvalidHostID") -> CarPlayFailureReason.HOST_ID_REJECTED
     else -> CarPlayFailureReason.BRING_UP_FAILED
 }
@@ -345,6 +371,11 @@ class CarPlayController(
     @Volatile private var wirelessPublishedAddress: InetAddress? = null
     @Volatile private var wirelessAlternateAddress: InetAddress? = null
     @Volatile private var wirelessAddressRecovery: HotspotAddressRecovery? = null
+    /**
+     * The interface the access point came up on, kept only for the question asked when no TCP arrives:
+     * whose neighbour table to read. Null whenever no hotspot of this run is up.
+     */
+    @Volatile private var wirelessHotspotInterface: String? = null
     @Volatile private var vpnService: CarPlayVpnService? = null
     @Volatile private var vpnBound = false
     private val wirelessHandoffRequested = AtomicBoolean(false)
@@ -1058,11 +1089,19 @@ class CarPlayController(
 
             val mfi = mfiSession?.client
                 ?: throw IOException("MFi coprocessor client is unavailable")
+            // Before the hotspot, not after the Bonjour advertisement. §18.4's name comes from the car's
+            // own radio, and a radio that will not say what it is called ends the run whatever else came
+            // up — so asking first costs one service call instead of a whole bring-up: hotspot switched
+            // on, AirPlay listener bound, 5353 taken, RFCOMM open, and only then the name refused, with
+            // the failure landing on the data link rather than on identity. The authoritative reading
+            // still happens below; this is the same question asked at a point where the answer is cheap.
+            requireCarHopRadioName()
             val hotspotInfo = startWirelessHotspot(generation)
             if (isStaleWirelessRun(generation)) {
                 closeWirelessStack()
                 return
             }
+            wirelessHotspotInterface = hotspotInfo.interfaceName
             val startedHotspot = hotspot
             wirelessConnectionProof.begin(generation) {
                 if (!isStaleWirelessRun(generation)) startedHotspot?.onCarPlayConfirmed()
@@ -1428,7 +1467,7 @@ class CarPlayController(
                 // [FirstTcpWatchdog]'s question, and it has already been answered or already fired by now.
                 Iap2WirelessControlTerminal.TIMED_OUT ->
                     if (!wirelessActiveReported.get()) {
-                        onStatus(CarPlayStatus.ControlEnded)
+                        tearDownAtControlEnded(generation)
                     }
             }
         } catch (error: Throwable) {
@@ -1503,7 +1542,7 @@ class CarPlayController(
                     if (closed || generation != wirelessGeneration.get()) return@execute
                     when (result.terminal) {
                         Iap2WirelessControlTerminal.TIMED_OUT ->
-                            onStatus(CarPlayStatus.ControlEnded)
+                            tearDownAtControlEnded(generation)
                         Iap2WirelessControlTerminal.CHANNEL_CLOSED ->
                             onStatus(CarPlayStatus.Failed(CarPlayFailureReason.WIRELESS_CONTROL_CHANNEL_CLOSED))
                     }
@@ -2141,6 +2180,49 @@ class CarPlayController(
         type.equals("disableBluetooth", ignoreCase = true) ||
             type.equals("disable-bluetooth", ignoreCase = true)
 
+    /**
+     * §18.4's name, asked for before anything is started.
+     *
+     * Only the car's own radio is asked. The USB adapter path answers through its own
+     * [Iap2BluetoothLink.localName], which does not exist until the link does, and that path already
+     * falls back to the configured name instead of refusing; a gate here would reject a run the later
+     * read would have accepted. For the car hop the answer is exactly what the identification is built
+     * from, so this cannot refuse a run the later read would allow either.
+     *
+     * The cost it avoids is the whole front half of the bring-up: hotspot switched on, AirPlay listener
+     * bound, mDNS 5353 taken, RFCOMM opened, and only then a name that was never going to arrive —
+     * reported, misleadingly, as a data-link failure rather than an identity one.
+     *
+     * Asked more than once before it refuses, because the answer arrives through a service bind whose
+     * callback is dispatched on the main thread: a main thread busy with the app's own start-up turns a
+     * readable name into null for that call and for no other reason. Waiting was what this check used to
+     * get from being late — the hotspot and the advertisement took tens of seconds before it was asked —
+     * and taking that away without a retry would trade a slow failure for a wrong one.
+     */
+    private fun requireCarHopRadioName() {
+        if (config.wirelessBluetoothHop != WirelessBluetoothHop.CAR) return
+        val hop = CarBluetoothHops.active ?: throw WirelessIdentityResolver.missingNameException(
+            WirelessBluetoothHop.CAR,
+        )
+        repeat(RADIO_NAME_ATTEMPTS) { attempt ->
+            val name = hop.localName(appContext)?.trim()?.takeIf { it.isNotEmpty() }
+            if (name != null) {
+                debugLog("wireless radio name (before the hotspot) =$name attempt=${attempt + 1}")
+                return
+            }
+            if (attempt + 1 < RADIO_NAME_ATTEMPTS) {
+                try {
+                    Thread.sleep(RADIO_NAME_RETRY_MILLIS)
+                } catch (interrupted: InterruptedException) {
+                    // The run is being wound down: stop asking rather than hold the thread a while longer.
+                    Thread.currentThread().interrupt()
+                    throw WirelessIdentityResolver.missingNameException(WirelessBluetoothHop.CAR)
+                }
+            }
+        }
+        throw WirelessIdentityResolver.missingNameException(WirelessBluetoothHop.CAR)
+    }
+
     private fun startWirelessHotspot(generation: Int): WirelessHotspotInfo {
         val hotspotMode = effectiveHotspotMode(config.wirelessHotspotMode, Build.VERSION.SDK_INT)
         if (hotspotMode == WirelessHotspotMode.MANUAL) {
@@ -2267,6 +2349,44 @@ class CarPlayController(
         }
     }
 
+    /**
+     * Ends a session the control conversation walked away from, and lets go of what it was holding.
+     *
+     * Reporting the end and stopping there left the hotspot switched on, mDNS 5353 bound, the AirPlay
+     * listener open and RFCOMM held for as long as the app lived: nothing after this point closes them,
+     * and the screen has already been told the session is over, so nothing ever asks again. The
+     * teardown runs on its own thread for the same reason [onFirstTcpTimedOut] does — it closes sockets
+     * out from under the control loop that is calling it — and re-checks the generation first, because
+     * a newer run may already own the shared fields by the time this thread gets to them.
+     *
+     * What it must not do is end a session that is still being used. This control loop's deadline says
+     * only that *it* went quiet; a phone that streams without ever asking for the Bluetooth handoff
+     * leaves the same loop running until the deadline while the Wi-Fi tunnel carries the screen, and
+     * [wirelessActiveReported] stays false the whole time because it is set by the handoff request.
+     * Tearing down on that evidence would switch the hotspot off under a session that is working. So
+     * the stack is released only when nothing is left holding it: no AirPlay session, and no tunnel
+     * that has finished its iAP2 handshake. Anything else is reported and left alone — the paths that
+     * do own a session close these themselves when it ends.
+     */
+    private fun tearDownAtControlEnded(generation: Int) {
+        onStatus(CarPlayStatus.ControlEnded)
+        if (activeSession != null || wirelessTunnelReady.get()) {
+            debugLog("wireless control window ended while a session is still up; keeping the link")
+            return
+        }
+        Thread(
+            {
+                if (isStaleWirelessRun(generation)) return@Thread
+                debugLog("wireless control window ended; releasing the hotspot, Bonjour and the link")
+                closeWirelessStack()
+            },
+            "xcertplay-wireless-control-ended",
+        ).apply {
+            isDaemon = true
+            start()
+        }
+    }
+
     private fun closeWirelessStack(service: CarPlayVpnService? = vpnService) {
         val diagnostics = wirelessDiagnostics
         wirelessDiagnostics = null
@@ -2275,6 +2395,7 @@ class CarPlayController(
         wirelessPublishedAddress = null
         wirelessAlternateAddress = null
         wirelessAddressRecovery = null
+        wirelessHotspotInterface = null
         media.setIapTunnelHandler(null)
         val activeTunnel = wirelessTunnelChannel
         wirelessTunnelChannel = null
@@ -2375,6 +2496,29 @@ class CarPlayController(
         Thread(
             {
                 if (closed || isStaleWirelessRun(generation) || wirelessActiveReported.get()) return@Thread
+                // Both are read before anything is closed: the teardown clears the published address
+                // and the recovery that reads it, and the access point's name is what says where to
+                // look for the phone.
+                val ssid = wirelessAirPlayEndpoint?.ssid
+                val interfaceName = wirelessHotspotInterface
+                val peers = ipv4PeersOnAccessPoint()
+                if (peers != null && peers.isEmpty()) {
+                    // Nobody ever resolved an address on this access point, so the address this
+                    // receiver published was never in play: moving it to the other family would
+                    // change the next attempt in a way that cannot help, and would spend the family
+                    // budget learning the same thing again.
+                    closeWirelessStack()
+                    fail(
+                        WirelessPhoneNotOnNetworkException(
+                            "no device joined ${ssid ?: "the access point"} " +
+                                "(${interfaceName ?: "unknown interface"}) within " +
+                                "${WirelessStartupPolicy.FIRST_TCP_MILLIS} ms of CarPlay StartSession: " +
+                                "no IPv4 peer was ever resolved on it, so the phone either did not " +
+                                "join the network or never got an address from it",
+                        ),
+                    )
+                    return@Thread
+                }
                 flipWirelessAddressFamily()
                 closeWirelessStack()
                 fail(
@@ -2388,6 +2532,23 @@ class CarPlayController(
             isDaemon = true
             start()
         }
+    }
+
+    /**
+     * Who the access point has heard from, or null where that cannot be read.
+     *
+     * The kernel keeps IPv6 neighbours somewhere `/proc` cannot see, so an IPv6 session is never
+     * judged by this table: the address family is exactly what such a run is already unsure about,
+     * and "the phone never joined" read off evidence that cannot exist would replace one wrong
+     * answer with another. A null answer — no interface recorded, no readable table, a published
+     * address that is not IPv4 — is the answer that leaves the old behaviour intact.
+     */
+    private fun ipv4PeersOnAccessPoint(): Set<String>? {
+        if (wirelessPublishedAddress !is Inet4Address) return null
+        val interfaceName = wirelessHotspotInterface ?: return null
+        val peers = arpPeersOn(interfaceName) ?: return null
+        debugLog("wireless first TCP timeout: iface=$interfaceName ipv4Peers=${peers.size}")
+        return peers
     }
 
     private fun closeBestEffort(name: String, close: () -> Unit) {
@@ -2617,6 +2778,16 @@ class CarPlayController(
         private const val DEVICE_AVAILABILITY_POLL_INTERVAL_MILLIS = 2_000L
         private const val WIRELESS_HANDOFF_TIMEOUT_MILLIS = 45_000L
         private const val MAXIMUM_REENUMERATION_ATTEMPTS = 2
+
+        /**
+         * How many times the radio is asked for its name before a run is refused.
+         *
+         * The answer comes back through a service bind dispatched on the main thread, so one null is
+         * not evidence of anything at app start-up. Three asks is one service call plus two retries —
+         * a few seconds against a bring-up that would otherwise run for a minute and fail anyway.
+         */
+        private const val RADIO_NAME_ATTEMPTS = 3
+        private const val RADIO_NAME_RETRY_MILLIS = 700L
 
         /**
          * How many whole wireless bring-ups a phone that never answers the certificate gets before the

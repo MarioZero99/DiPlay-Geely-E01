@@ -84,8 +84,22 @@ class CarPlayBonjourTest {
         // Not the exact spelling: how many groups are written out is the platform's business.
         assertTrue(scoped.hostAddress!!.endsWith("%3"))
         assertEquals(InetAddress.getByName("192.168.49.1"), advertisedHostAddress("192.168.49.1"))
-        // A global address is not something the phone can dial back on the AP.
-        assertThrows(IllegalArgumentException::class.java) { advertisedHostAddress("2001:db8::1") }
+    }
+
+    /**
+     * A global IPv6 is an address this receiver can be reached on, not a typo to refuse.
+     *
+     * The old rule only allowed link-local, and the constructor threw on anything else — which the
+     * caller catches by carrying on *without an advertisement at all*. On a network somebody else owns,
+     * an interface handed only a global prefix then published nothing anywhere, while 0x4301 went on
+     * naming the same address. What is still refused is what is not a host on the interface.
+     */
+    @Test
+    fun aGlobalIpv6AdvertisedHostIsAcceptedAndOnlyNonUnicastIsRefused() {
+        assertEquals(InetAddress.getByName("2001:db8::1"), advertisedHostAddress("2001:db8::1"))
+        assertThrows(IllegalArgumentException::class.java) { advertisedHostAddress("ff02::1") }
+        assertThrows(IllegalArgumentException::class.java) { advertisedHostAddress("0.0.0.0") }
+        assertThrows(IllegalArgumentException::class.java) { advertisedHostAddress("127.0.0.1") }
     }
 
     @Test

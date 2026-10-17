@@ -28,4 +28,23 @@ class CarPlayFailureReasonTest {
             failureReasonFor(java.io.IOException("something else went wrong")),
         )
     }
+
+    /**
+     * A phone that never joined gets the sentence that says so, not the one about the other address.
+     *
+     * From the listening socket the two are the same event, and the screen used to report both as
+     * "retrying with the other network address" — a claim that is false here, because this failure is
+     * the one case that deliberately does not move the address family.
+     */
+    @Test
+    fun aPhoneThatNeverJoinedIsNotReportedAsAnAddressFamilyProblem() {
+        assertEquals(
+            CarPlayFailureReason.WIRELESS_PHONE_NOT_ON_NETWORK,
+            failureReasonFor(WirelessPhoneNotOnNetworkException("no device joined the access point")),
+        )
+        assertEquals(
+            CarPlayFailureReason.FIRST_TCP_TIMEOUT,
+            failureReasonFor(FirstTcpTimeoutException("no AirPlay TCP")),
+        )
+    }
 }

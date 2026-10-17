@@ -132,6 +132,9 @@ object CarPlayBonjourProtocol {
  * address was built from a numeric index — which is both how the platform spells one and what JmDNS
  * needs to join the right multicast group. The bare literal is what iAP2 wants, and that stripping
  * happens on the iAP2 side rather than here, because the two are different requirements.
+ *
+ * Either IPv6 form is accepted. A global address needs no scope and is what an interface handed only a
+ * global prefix will have; a link-local one is unusable without the scope this keeps.
  */
 internal fun advertisedHostAddress(advertisedHost: String?): InetAddress? {
     val value = advertisedHost?.trim()?.takeIf { it.isNotEmpty() } ?: return null
@@ -143,8 +146,13 @@ internal fun advertisedHostAddress(advertisedHost: String?): InetAddress? {
     require(!address.isLoopbackAddress) {
         "advertisedHost must not be a loopback address"
     }
-    require(address !is Inet6Address || address.isLinkLocalAddress) {
-        "advertisedHost must be link-local IPv6 or IPv4"
+    // Link-local and global IPv6 both belong here. Refusing the second cost the whole advertisement
+    // rather than one address: the constructor throws, the caller carries on without mDNS, and an
+    // address the interface really has ends up published nowhere — which on an interface that only
+    // holds a global IPv6 is the same as publishing nothing at all. What has to be excluded is the
+    // thing that is not a host on this interface: a multicast group, or the unspecified address.
+    require(!address.isMulticastAddress && !address.isAnyLocalAddress) {
+        "advertisedHost must be a unicast address of this interface"
     }
     return address
 }

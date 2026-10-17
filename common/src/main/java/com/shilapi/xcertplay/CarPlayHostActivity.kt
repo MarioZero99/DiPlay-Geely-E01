@@ -2850,6 +2850,8 @@ class CarPlayHostActivity : ComponentActivity() {
                 CarPlayFailureReason.HOST_ID_REJECTED -> R.string.failure_host_id_rejected
                 CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON -> R.string.failure_car_hotspot_stays_on
                 CarPlayFailureReason.FIRST_TCP_TIMEOUT -> R.string.failure_first_tcp_timeout
+                CarPlayFailureReason.WIRELESS_PHONE_NOT_ON_NETWORK ->
+                    R.string.failure_phone_not_on_network
                 CarPlayFailureReason.BRING_UP_FAILED -> R.string.failure_bring_up_failed
             },
         )

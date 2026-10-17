@@ -23,8 +23,10 @@ package com.shilapi.xcertplay.network
  * called once, as the session attaches, and every later count is made against that set — which is what
  * makes `lanPeersNew` mean somebody arrived rather than somebody was already there.
  *
- * Nothing here decides anything. The count goes into an exported report and nowhere else: it does not
- * time out a wait, change the address this receiver advertises, or end a session.
+ * The count itself decides nothing: it goes into an exported report and nothing else waits on it.
+ * What the same table does decide, through [arpPeersOn], is which of two different faults a session
+ * that never got a TCP connection is actually in — see the one caller, which asks once, at the moment
+ * the question already has to be answered, and only for an IPv4 session.
  */
 internal class WirelessLanPeers(
     private val interfaceName: String,
@@ -59,10 +61,31 @@ internal class WirelessLanPeers(
 
     private fun current(): Set<String> =
         parseArpPeers(read(NEIGHBOURS_PATH, MAX_PROC_BYTES), interfaceName, gateway)
+}
 
-    private companion object {
-        const val NEIGHBOURS_PATH = "/proc/net/arp"
-        const val MAX_PROC_BYTES = 16 * 1024
+// File-scoped rather than companion-scoped, because [arpPeersOn] reads the same table for the one
+// caller that asks at failure time, and a second copy of the path is a second place to get it wrong.
+private const val NEIGHBOURS_PATH = "/proc/net/arp"
+private const val MAX_PROC_BYTES = 16 * 1024
+
+/**
+ * The hosts [interfaceName] has resolved an address for right now, or null when that cannot be known.
+ *
+ * Null is the answer in three different situations and they are deliberately one answer: no interface
+ * name to ask about, a table that cannot be read on this firmware, and a table that could not be
+ * parsed. Every caller has to have a behaviour for "the evidence is missing" anyway — the only thing
+ * that would be gained by separating them is a caller that forgot one of the three.
+ *
+ * [gateway] is the router's address on a network somebody else owns, which is dropped for the reason
+ * [parseArpPeers] gives. An access point this receiver made has no gateway at all, so every entry is
+ * a device that came to it — which is exactly the question asked of it here.
+ */
+internal fun arpPeersOn(interfaceName: String?, gateway: String? = null): Set<String>? {
+    val device = interfaceName?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return try {
+        parseArpPeers(readBoundedDiagnosticFile(NEIGHBOURS_PATH, MAX_PROC_BYTES), device, gateway)
+    } catch (_: Exception) {
+        null
     }
 }
 

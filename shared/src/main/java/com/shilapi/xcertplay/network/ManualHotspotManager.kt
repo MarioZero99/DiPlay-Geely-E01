@@ -205,9 +205,12 @@ class ManualHotspotManager(
         } catch (_: SocketException) {
             null
         } ?: return null
-        val primaryInterface = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            connectivityManager?.activeNetwork?.let { connectivityManager.getLinkProperties(it)?.interfaceName }
-        } else null
+        // M+ names the active network's interface; below that nothing public does, and a null here
+        // excluded no interface at all. On a head unit with a virtual AP and a station up at once, the
+        // station interface then scored exactly like the access point's and could be chosen — which
+        // puts an address in 0x4301 that the phone cannot reach, and ends as a first-TCP timeout
+        // blamed on the address family.
+        val primaryInterface = activeNetworkInterfaceName() ?: stationInterfaceName()
         return Collections.list(interfaces)
             .asSequence()
             .filter { isUsableInterface(it, primaryInterface) }
@@ -230,6 +233,52 @@ class ManualHotspotManager(
                 )
             }
             .maxByOrNull(LocalHotspotInterface::score)
+    }
+
+    private fun activeNetworkInterfaceName(): String? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            connectivityManager?.activeNetwork?.let { connectivityManager.getLinkProperties(it)?.interfaceName }
+        } else {
+            null
+        }
+
+    /**
+     * The station interface's own name on platforms that cannot name their active network.
+     *
+     * API 22 publishes the associated station's IPv4 as one integer and says nothing about which
+     * interface carries it — but an address belongs to exactly one interface, so matching it against
+     * the interface list answers the same question [activeNetworkInterfaceName] answers on M+. Zero is
+     * "not associated", which is the ordinary state once the car's own access point has the radio, and
+     * then there is nothing to exclude.
+     */
+    @Suppress("DEPRECATION")
+    private fun stationInterfaceName(): String? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) return null
+        val ipv4 = try {
+            wifiManager.connectionInfo?.ipAddress ?: 0
+        } catch (_: SecurityException) {
+            return null
+        }
+        if (ipv4 == 0) return null
+        // `ipAddress` is the little-endian integer the platform has always handed out: lowest byte
+        // first, which is the order this reads it back in.
+        val station = InetAddress.getByAddress(
+            byteArrayOf(
+                (ipv4 and 0xff).toByte(),
+                ((ipv4 ushr 8) and 0xff).toByte(),
+                ((ipv4 ushr 16) and 0xff).toByte(),
+                ((ipv4 ushr 24) and 0xff).toByte(),
+            ),
+        )
+        return try {
+            Collections.list(NetworkInterface.getNetworkInterfaces())
+                .firstOrNull { candidate ->
+                    Collections.list(candidate.inetAddresses).any { it == station }
+                }
+                ?.name
+        } catch (_: SocketException) {
+            null
+        }
     }
 
     private fun isUsableInterface(
