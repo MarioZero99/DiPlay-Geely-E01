@@ -22,6 +22,12 @@ android {
         versionCode = 42
         versionName = "0.4.2-geely"
 
+        // Package only the two ABIs the E01 reports. This is what keeps the bundled
+        // conscrypt-android native libraries (2.15 + 2.39 MB for x86/x86_64) out of the APK; the
+        // filters in :shared only cover that module's own ndkBuild output.
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+        }
     }
 
 

@@ -135,7 +135,12 @@ android {
         multiDexEnabled true
 
         ndk {
-            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'
+            // The two ABIs the E01 reports (arm64-v8a, armeabi-v7a; ro.zygote=zygote64_32). The
+            // x86 pair was only ever for the emulator, and it is not free any more: the bundled
+            // conscrypt-android carries 2.15 + 2.39 MB of native libraries for those two ABIs, and
+            // this change exists to pay for the ARM ones. An x86 image can no longer install this
+            // package; the emulator was only ever used for platform questions, not playback.
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
 
         externalNativeBuild {
@@ -219,9 +224,24 @@ dependencies {
     coreLibraryDesugaring libs.desugar.jdk.libs
     implementation 'androidx.annotation:annotation:1.7.1'
     implementation libs.bouncycastle
+    // BoringSSL's ChaCha20-Poly1305 for the API 19-27 devices whose platform provider has no
+    // ChaCha20 at all. Only the Cipher is used; Conscrypt is not installed as a security provider,
+    // so nothing in the app's TLS behaviour changes.
+    implementation libs.conscrypt
     implementation libs.jmdns
     testImplementation libs.junit
     testImplementation 'org.robolectric:robolectric:4.17'
+}
+
+// Robolectric builds its own Conscrypt provider while setting up every sandbox, and this AAR ships
+// Android shared objects only: with it on the unit-test runtime classpath the provider's static
+// initialiser throws UnsatisfiedLinkError before the test's first line, which fails every
+// Robolectric test in this module. The host keeps exercising the JCE path through the platform
+// provider; the bundled one only exists on a device.
+configurations.configureEach { configuration ->
+    if (configuration.name.endsWith('UnitTestRuntimeClasspath')) {
+        configuration.exclude group: 'org.conscrypt', module: 'conscrypt-android'
+    }
 }
 
 // The adapter's native stack, built for the machine running the tests, so the host test can drive the real

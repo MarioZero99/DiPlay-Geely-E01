@@ -12,7 +12,18 @@ import org.bouncycastle.crypto.params.KeyParameter
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
+import android.os.Build
+import java.security.GeneralSecurityException
+import java.security.InvalidAlgorithmParameterException
+import java.security.InvalidKeyException
+import java.security.NoSuchAlgorithmException
+import java.security.Provider
 import java.security.SecureRandom
+import javax.crypto.AEADBadTagException
+import javax.crypto.Cipher
+import javax.crypto.NoSuchPaddingException
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * One ChaCha20-Poly1305 instance for a single thread.
@@ -20,9 +31,33 @@ import java.security.SecureRandom
  * Playback reuses this across packets and calls [process] again for each one.
  * The allocating [AirPlayCrypto.chachaSeal] and [AirPlayCrypto.chachaOpen] stay
  * for pairing and other paths that run rarely.
+ *
+ * Two implementations of the same RFC 8439 transform, tried in this order:
+ *
+ * 1. [JceAead] — a `javax.crypto.Cipher`. On API 28+ that is the platform's own provider. On the
+ *    E01's Android 5.1 the platform throws `NoSuchAlgorithmException`, so the bundled
+ *    `conscrypt-android` provider answers instead, and the library doing the work is BoringSSL's
+ *    `EVP_AEAD_chacha20_poly1305`: hand-written NEON assembly on arm64 and armv7, the same code
+ *    the platform's own TLS uses.
+ * 2. BouncyCastle — Java arithmetic. Never removed, so playback does not depend on the bundled
+ *    library loading at all: a device without it decodes the same frames, only slower.
+ *
+ * [path] says which one this instance resolved to; the streams print it on their first frame.
  */
-internal class AirPlayAead(private val forEncryption: Boolean) {
-    private val cipher = ChaCha20Poly1305()
+internal class AirPlayAead(
+    private val forEncryption: Boolean,
+    /** Called once, if the JCE path is retired for this instance; the streams log it. */
+    private val onFallback: ((GeneralSecurityException) -> Unit)? = null,
+) {
+    private val jce = JceAead.create(forEncryption)
+    private val bouncyCastle = ChaCha20Poly1305()
+
+    @Volatile
+    private var jceFailed = false
+
+    /** The implementation in use right now, for the first-frame log. */
+    val path: String
+        get() = if (jce != null && !jceFailed) jce.label else "bouncycastle"
 
     /**
      * Encrypts or decrypts into [output]. Returns the number of bytes written at
@@ -39,14 +74,138 @@ internal class AirPlayAead(private val forEncryption: Boolean) {
         output: ByteArray,
         outputOffset: Int = 0,
     ): Int {
-        cipher.init(forEncryption, AEADParameters(KeyParameter(key), MAC_BITS, nonce, aad))
-        val written = cipher.processBytes(input, inputOffset, inputLength, output, outputOffset)
-        val finished = cipher.doFinal(output, outputOffset + written)
+        val jce = jce
+        if (jce != null && !jceFailed) {
+            try {
+                return jce.process(
+                    key, nonce, input, inputOffset, inputLength, aad, output, outputOffset,
+                )
+            } catch (tag: AEADBadTagException) {
+                // A tag that does not verify is the answer, not a reason to try another
+                // implementation: the other path rejects the same packets.
+                throw tag
+            } catch (error: GeneralSecurityException) {
+                // Retire this provider only when it cannot do the cipher at all. A frame that
+                // does not fit — short buffer, wrong block size — is a data problem: the
+                // fallback would reject it the same way, and giving up the fast path over one
+                // malformed packet would slow every frame after it.
+                if (!error.isProviderUnavailable()) throw error
+                jceFailed = true
+                onFallback?.invoke(error)
+            }
+        }
+        bouncyCastle.init(forEncryption, AEADParameters(KeyParameter(key), MAC_BITS, nonce, aad))
+        val written = bouncyCastle.processBytes(input, inputOffset, inputLength, output, outputOffset)
+        val finished = bouncyCastle.doFinal(output, outputOffset + written)
         return written + finished
     }
 
+    private fun GeneralSecurityException.isProviderUnavailable(): Boolean =
+        this is NoSuchAlgorithmException ||
+            this is NoSuchPaddingException ||
+            this is InvalidKeyException ||
+            this is InvalidAlgorithmParameterException
+
     private companion object {
         const val MAC_BITS = 128
+    }
+}
+
+/**
+ * ChaCha20-Poly1305 as a JCE `Cipher`, writing into the caller's array.
+ *
+ * The platform provider is asked first so an API 28+ build uses the BoringSSL already in the
+ * system image and loads nothing extra. Where the platform has no ChaCha20 (API 19-27) the bundled
+ * provider answers: `conscrypt-android`, whose native library is packaged for both shipped ABIs.
+ *
+ * Conscrypt is only ever used through [Cipher.getInstance]; it is not inserted into `Security`, so
+ * the app's TLS stack and provider order stay exactly as the platform set them.
+ */
+internal class JceAead private constructor(
+    private val forEncryption: Boolean,
+    private val cipher: Cipher,
+    val label: String,
+) {
+    private var cachedKey: ByteArray? = null
+    private var cachedKeySpec: SecretKeySpec? = null
+
+    fun process(
+        key: ByteArray,
+        nonce: ByteArray,
+        input: ByteArray,
+        inputOffset: Int,
+        inputLength: Int,
+        aad: ByteArray,
+        output: ByteArray,
+        outputOffset: Int,
+    ): Int {
+        val mode = if (forEncryption) Cipher.ENCRYPT_MODE else Cipher.DECRYPT_MODE
+        // `IvParameterSpec` copies the nonce it is given, so reusing one instance would replay the
+        // first frame's nonce for every frame after it. Twelve bytes allocated per frame is the one
+        // part of this path JCE does not let us skip.
+        cipher.init(mode, keySpec(key), IvParameterSpec(nonce))
+        if (aad.isNotEmpty()) cipher.updateAAD(aad)
+        return cipher.doFinal(input, inputOffset, inputLength, output, outputOffset)
+    }
+
+    /**
+     * The `SecretKeySpec` for [key], rebuilt only when a different array arrives.
+     *
+     * `SecretKeySpec` copies the key, so building one per frame copies 32 bytes for every packet.
+     * The cache is keyed on array identity: the playback streams hold their key in a `val` that is
+     * never rewritten, which is what makes reuse safe here. A caller that does rewrite a key array
+     * in place has to pass a fresh array instead.
+     */
+    private fun keySpec(key: ByteArray): SecretKeySpec {
+        if (key === cachedKey) cachedKeySpec?.let { return it }
+        return SecretKeySpec(key, KEY_ALGORITHM).also {
+            cachedKey = key
+            cachedKeySpec = it
+        }
+    }
+
+    companion object {
+        /**
+         * The same cipher under both names it is registered with: Android's providers use the
+         * `algorithm/mode/padding` spelling, while the OpenJDK provider the host tests run on
+         * registers it as one hyphenated name. Trying both costs one failed `getInstance` per
+         * stream and lets the unit tests exercise this class instead of only BouncyCastle.
+         */
+        private val TRANSFORMATIONS = arrayOf("ChaCha20/Poly1305/NoPadding", "ChaCha20-Poly1305")
+        private const val KEY_ALGORITHM = "ChaCha20"
+
+        fun create(forEncryption: Boolean): JceAead? {
+            cipher(null)?.let { return JceAead(forEncryption, it, "jce:platform") }
+            cipher(bundledProvider)?.let { return JceAead(forEncryption, it, "jce:conscrypt") }
+            return null
+        }
+
+        private fun cipher(provider: Provider?): Cipher? {
+            for (transformation in TRANSFORMATIONS) {
+                try {
+                    return if (provider == null) Cipher.getInstance(transformation)
+                    else Cipher.getInstance(transformation, provider)
+                } catch (_: GeneralSecurityException) {
+                    // The next name, or the next provider.
+                }
+            }
+            return null
+        }
+
+        /**
+         * The bundled `conscrypt-android` provider. Not consulted on API 28+, where the platform
+         * provider already is that implementation and ours would only cost the native library.
+         */
+        private val bundledProvider: Provider? by lazy {
+            if (Build.VERSION.SDK_INT >= 28) return@lazy null
+            try {
+                org.conscrypt.Conscrypt.newProvider()
+            } catch (_: Throwable) {
+                // No library for this ABI, or an image that will not load it. Playback does not
+                // depend on this: BouncyCastle is still compiled in and opens the same frames.
+                null
+            }
+        }
     }
 }
 

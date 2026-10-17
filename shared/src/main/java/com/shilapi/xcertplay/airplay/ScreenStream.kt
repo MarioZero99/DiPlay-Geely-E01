@@ -34,7 +34,10 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
 
     /** Reused only up to [MAX_REUSED_BODY_BYTES]. Larger frames get a one-shot array. */
     @Volatile private var bodyBuffer = ByteArray(0)
-    private val frameCipher = AirPlayAead(forEncryption = false)
+    private val frameCipher = AirPlayAead(
+        forEncryption = false,
+        onFallback = { onDiagnostic("video aead fell back to BouncyCastle: ${it.javaClass.simpleName}") },
+    )
     private val frameNonce = ByteArray(12)
     private var server: ServerSocket? = null
     private var socket: Socket? = null
@@ -135,7 +138,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                     Log.i(
                         TAG,
                         "video first decrypted frame sealed=$bodyLength plain=${payload.size} " +
-                        "head=${payload.hexPrefix(16)}",
+                        "aead=${frameCipher.path} head=${payload.hexPrefix(16)}",
                     )
                 }
                 listener.onFrame(ScreenCodec.lengthPrefixedToAnnexB(payload))

@@ -15,6 +15,11 @@ android {
         versionCode = 1201
         versionName = "1.2.1"
 
+        // Same two ABIs as the phone/car package, for the same reason: the bundled
+        // conscrypt-android native libraries for x86/x86_64 are 4.5 MB that no shipped device uses.
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+        }
     }
 
     signingConfigs {

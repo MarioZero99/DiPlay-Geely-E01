@@ -95,7 +95,10 @@ class AudioStream(
         val aad = ByteArray(RTP_HEADER_LEN - 4)
         val nonce = ByteArray(12)
         val plaintext = ByteArray(DATAGRAM_BYTES)
-        val cipher = AirPlayAead(forEncryption = false)
+        val cipher = AirPlayAead(
+            forEncryption = false,
+            onFallback = { onDiagnostic("audio aead fell back to BouncyCastle: ${it.javaClass.simpleName}") },
+        )
         try {
             while (!closed.get()) {
                 // receive leaves length at the previous datagram. Without this reset
