@@ -150,7 +150,7 @@ class SettingsPagesUiTest {
         listOf("wireless", "wired").forEach { route ->
             val shown = texts(open(route))
             assertFalse("'$route' is no longer a page of its own", "Wireless settings" in shown)
-            assertTrue("'$route' falls through to the home page", "A familiar drive." in shown)
+            assertTrue("'$route' falls through to the home page", "Connect phone" in shown)
         }
     }
 
@@ -162,7 +162,7 @@ class SettingsPagesUiTest {
             activity.onBackPressedDispatcher.onBackPressed()
             assertTrue(
                 "'$page' goes back to the home page",
-                views<Button>(activity).any { it.text?.toString() == "Car home" },
+                views<Button>(activity).any { it.text?.toString() == "Connect phone" },
             )
             assertFalse("back from '$page' does not leave the app", activity.isFinishing)
         }
@@ -178,7 +178,7 @@ class SettingsPagesUiTest {
         activity.onBackPressedDispatcher.onBackPressed()
         assertTrue(
             "the home page is shown",
-            views<Button>(activity).any { it.text?.toString() == "Car home" },
+            views<Button>(activity).any { it.text?.toString() == "Connect phone" },
         )
         assertFalse("the settings page is behind us", "Wireless settings" in texts(activity))
         assertFalse("back from the settings page does not leave the app", activity.isFinishing)

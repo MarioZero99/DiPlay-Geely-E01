@@ -32,7 +32,7 @@ class SettingsScrollUiTest {
     @Test fun repaintingAPageComesBackToWhereTheDriverWas() {
         val controller = Robolectric.buildActivity(
             DiPlayActivity::class.java,
-            Intent().putExtra("page", "wireless"),
+            Intent().putExtra("page", "settings"),
         ).setup()
         val activity = controller.get()
         try {
@@ -63,7 +63,7 @@ class SettingsScrollUiTest {
     @Test fun anotherPageStillStartsAtTheTop() {
         val controller = Robolectric.buildActivity(
             DiPlayActivity::class.java,
-            Intent().putExtra("page", "wireless"),
+            Intent().putExtra("page", "settings"),
         ).setup()
         val activity = controller.get()
         try {
