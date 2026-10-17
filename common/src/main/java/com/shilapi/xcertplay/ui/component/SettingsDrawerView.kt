@@ -113,6 +113,10 @@ class SettingsDrawerView(
      */
     fun open(animate: Boolean = true) {
         visibility = VISIBLE
+        // Every open starts at the top: the panel keeps its scroll position between visits, and
+        // landing mid-page because that is where it was closed reads as the drawer opening on the
+        // wrong section. A caller that wants a section asks for it afterwards with [scrollToText].
+        scroll.scrollTo(0, 0)
         if (!animate) {
             panel.translationX = 0f
             alpha = 1f
