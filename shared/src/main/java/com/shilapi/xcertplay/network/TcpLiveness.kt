@@ -37,7 +37,12 @@ internal object TcpLiveness {
      * exactly what it was before this existed.
      */
     fun configure(socket: Socket, diagnostic: (String) -> Unit) {
-        socket.keepAlive = true
+        try {
+            socket.keepAlive = true
+        } catch (failure: Throwable) {
+            diagnostic("TCP peer health tuning unavailable: socket keepalive failed: ${failure.javaClass.simpleName}")
+            return
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
             diagnostic("TCP peer health tuning unavailable: socket options need API 21")
             return
@@ -47,18 +52,28 @@ internal object TcpLiveness {
             diagnostic("TCP peer health tuning unavailable: no socket descriptor on this release")
             return
         }
+        var keepaliveConfigured = false
         try {
             Os.setsockoptInt(descriptor, IPPROTO_TCP, TCP_KEEPIDLE, KEEPALIVE_IDLE_SECONDS)
             Os.setsockoptInt(descriptor, IPPROTO_TCP, TCP_KEEPINTVL, KEEPALIVE_INTERVAL_SECONDS)
             Os.setsockoptInt(descriptor, IPPROTO_TCP, TCP_KEEPCNT, KEEPALIVE_PROBES)
+            keepaliveConfigured = true
+        } catch (failure: Throwable) {
+            diagnostic("TCP keepalive sockopt tuning unavailable: ${failure.javaClass.simpleName}")
+        }
+        var userTimeoutConfigured = false
+        try {
             Os.setsockoptInt(descriptor, IPPROTO_TCP, TCP_USER_TIMEOUT, USER_TIMEOUT_MILLIS)
+            userTimeoutConfigured = true
+        } catch (failure: Throwable) {
+            diagnostic("TCP user timeout sockopt unavailable: ${failure.javaClass.simpleName}")
+        }
+        if (keepaliveConfigured || userTimeoutConfigured) {
             diagnostic(
                 "TCP peer health enabled idle=${KEEPALIVE_IDLE_SECONDS}s " +
                     "interval=${KEEPALIVE_INTERVAL_SECONDS}s count=$KEEPALIVE_PROBES " +
                     "deadline=${USER_TIMEOUT_MILLIS}ms; no video-idle timeout",
             )
-        } catch (failure: Throwable) {
-            diagnostic("TCP peer health tuning unavailable: ${failure.javaClass.simpleName}")
         }
     }
 
