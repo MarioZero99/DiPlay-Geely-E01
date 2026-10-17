@@ -77,6 +77,7 @@ import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.network.CarHotspotStatus
 import com.shilapi.xcertplay.network.CarPlayVpnService
 import com.shilapi.xcertplay.network.ExistingWifiDriverCredentials
+import com.shilapi.xcertplay.orchestration.AttemptTracker
 import com.shilapi.xcertplay.orchestration.CarPlayController
 import com.shilapi.xcertplay.orchestration.CarPlayRuntimeConfig
 import com.shilapi.xcertplay.orchestration.CarPlayFailureReason
@@ -161,6 +162,15 @@ class CarPlayHostActivity : ComponentActivity() {
      */
     private var lastStep: ConnectionStep? = null
     private var failedAt: ConnectionStep? = null
+
+    /**
+     * The attempt in flight, or null when this activity is drawing a session somebody else started.
+     *
+     * [lastStep] and [failedAt] stay for that adopted case: a session carried over from the background
+     * was not an attempt, so there is nothing to write down, and the ladder still has to render. When a
+     * tracker is here, its rung is the one the screen uses — one status, one place, no second answer.
+     */
+    private var attempt: AttemptTracker? = null
 
     /**
      * The wired-link fault the controller last reported, or null when it reported none. It drives the
@@ -1334,14 +1344,28 @@ class CarPlayHostActivity : ComponentActivity() {
      * and marks the rung it stopped on, because that rung is the answer to "where".
      */
     private fun updateConnectionProgress(status: CarPlayStatus) {
+        // The record and the ladder are fed here, from this one status, so the rung that gets written
+        // down is the rung that gets lit.
+        attempt?.step(status)
         if (status is CarPlayStatus.Failed) {
             // The status names no rung; the one the attempt was on when it failed is the answer.
-            failedAt = lastStep
+            failedAt = attempt?.at ?: lastStep
         } else {
             failedAt = null
             connectionStepOf(status, transport())?.let { lastStep = it }
         }
         renderConnectionProgress(connectionProgress(status, transport(), failedAt))
+    }
+
+    /**
+     * Writes the attempt's one line if it has just reached its outcome, and drops the tracker so a
+     * second outcome cannot write a second line for the same attempt.
+     */
+    private fun closeAttemptJournal() {
+        val tracker = attempt ?: return
+        val record = tracker.record ?: return
+        AttemptJournal.write(this, record)
+        attempt = null
     }
 
     private fun renderConnectionProgress(progress: ConnectionProgress) {
@@ -2133,6 +2157,17 @@ class CarPlayHostActivity : ComponentActivity() {
             updateConnectionProgress(status)
             when (status) {
                 is CarPlayStatus.Failed -> {
+                    attempt?.fail(
+                        status.reason,
+                        status.detail?.let(DiagnosticRedactor::redact),
+                        status.wifiResetRequired,
+                    )
+                    val closed = attempt?.record
+                    closeAttemptJournal()
+                    // The code goes on the page, under the sentence that explains the failure: a car
+                    // with no network has no other way to carry a report out, and one line somebody can
+                    // read aloud places the run without anyone opening a file.
+                    closed?.let { setConnectionStage("$description\n${it.code}") }
                     resumeAdapterDiscovery()
                     when {
                         status.wifiResetRequired -> wifiRecoveryButton?.visibility = View.VISIBLE
@@ -2159,7 +2194,8 @@ class CarPlayHostActivity : ComponentActivity() {
                         }
                     }
                 }
-                else -> Unit
+                // Reaching the session closes the attempt inside the tracker; this writes that line.
+                else -> closeAttemptJournal()
             }
         }
     }
@@ -2269,6 +2305,10 @@ class CarPlayHostActivity : ComponentActivity() {
         val pairings = AirPlayPersistence.loadPairings(this) { id, key ->
             AirPlayPersistence.savePairing(this, id, key)
         }
+        // Opened here, at the point the attempt actually commits to building a controller: the two
+        // returns above are not attempts, and an attempt that never gets a controller has no rung to
+        // report and would otherwise leave a record nothing can close.
+        attempt = AttemptJournal.trackerFor(this, controllerGeneration, reconnectAttempts)
         val next = CarPlayController(
             context = this,
             config = config,
@@ -2503,6 +2543,10 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private fun shutdown(terminateProcess: Boolean, reason: String, completion: () -> Unit = {}) {
         if (!shuttingDown.compareAndSet(false, true)) { completion(); return }
+        // Anything still open here started and never reached an outcome — a page that went away, or a
+        // start that threw before the controller existed. That is an outcome too, and the line says so.
+        attempt?.abandon(reason)
+        closeAttemptJournal()
         restartGeneration += 1
         mainHandler.removeCallbacks(applyDisplaySize)
         val oldController = controller

@@ -78,6 +78,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import org.json.JSONObject
 import kotlin.math.roundToInt
 
 /** DiAuto's visual language, with a connection flow for an independent CarPlay receiver. */
@@ -96,9 +97,9 @@ class DiPlayActivity : ComponentActivity() {
     private var cockpitHost: FrameLayout? = null
     private var drawer: SettingsDrawerView? = null
     private var drawerOpen = false
-    /** The palette this redraw resolved to; the cockpit's views are built from it. */
     /** The exit question, while it is up: one instance, so a second press cannot stack a second sheet. */
     private var exitSheet: ConfirmSheetView? = null
+    /** The palette this redraw resolved to; the cockpit's views are built from it. */
     private var palette: ThemePalette = CockpitThemeManager.ZEEKR_WHITE_PALETTE
     private var pendingCarHotspotSetup = false
 
@@ -241,10 +242,10 @@ class DiPlayActivity : ComponentActivity() {
         wakeCarHotspotInBackground()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                // The drawer is drawn over the page, so back closes it before it changes page: a key
                 // The exit question is drawn over everything else, so it is answered or dismissed
                 // before back is allowed to mean anything about pages.
                 exitSheet?.let { it.dismiss(); return }
+                // The drawer is drawn over the page, so back closes it before it changes page: a key
                 // that took the driver off the page behind an open panel would look like a jump.
                 if (drawer?.isOpen() == true) {
                     closeSettingsDrawer()
@@ -416,8 +417,8 @@ class DiPlayActivity : ComponentActivity() {
             onHomeClick = { if (page != "home") { page = "home"; render() } },
             onAudioClick = { openSettingsDrawer(getString(R.string.audio_routing)) },
             onSettingsClick = { if (drawer?.isOpen() == true) closeSettingsDrawer() else openSettingsDrawer() },
-            onExitClick = { confirmExit() },
             onLauncherClick = { leaveToLauncher() },
+            onExitClick = { confirmExit() },
         )
 
         val stage = LinearLayout(this).apply {
@@ -2103,28 +2104,37 @@ class DiPlayActivity : ComponentActivity() {
                 // The hop's own service is one of those gaps, and putting it in place runs off the main
                 // thread: ask for it now, and the page redraws when it is there.
                 startVendorHopInBackground()
-                refuseConnection(null)
+                refuseConnection(null, readiness.gaps.first())
                 return
             }
             wirelessBlocked = false
         }
         if (wireless && hotspotSetupBlocksConnect(AirPlayPersistence.loadWirelessHotspotMode(this), pendingCarHotspotSetup)) {
-            refuseConnection(getString(R.string.save_your_hotspot_details_in_connection_setup_first))
+            refuseConnection(
+                getString(R.string.save_your_hotspot_details_in_connection_setup_first),
+                WirelessGap.HOTSPOT_CREDENTIALS,
+            )
             return
         }
         if (setupError != null) { toast(setupError!!); return }
         if (wireless && AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL &&
             hotspotError(hotspotSsid(), hotspotPassword()) != null) {
             pendingCarHotspotSetup = true
-            refuseConnection(getString(R.string.save_the_name_and_password_from_the_car_s_hotspot_settings))
+            refuseConnection(
+                getString(R.string.save_the_name_and_password_from_the_car_s_hotspot_settings),
+                WirelessGap.HOTSPOT_CREDENTIALS,
+            )
             return
         }
         // The hotspot being off is one of the readiness gaps, so it is said on the page with the other
         // gaps rather than in a dialog of its own. That dialog could only ever have been reached with a
         // session already up, where the check above does not run — which is also why these two refusals
         // raise the card themselves rather than leaning on the check above to have raised it.
-        if (wireless && carHotspotOff()) { refuseConnection(null); return }
-        if (wireless && DiPlayPreferences.phoneAddress(this) == null) { refuseConnection(null); return }
+        if (wireless && carHotspotOff()) { refuseConnection(null, WirelessGap.HOTSPOT_OFF); return }
+        if (wireless && DiPlayPreferences.phoneAddress(this) == null) {
+            refuseConnection(null, WirelessGap.PHONE_NOT_CHOSEN)
+            return
+        }
         val preferences = getSharedPreferences("diplay", MODE_PRIVATE)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !preferences.getBoolean("notification_asked", false)) {
             preferences.edit().putBoolean("notification_asked", true).apply()
@@ -2231,8 +2241,11 @@ class DiPlayActivity : ComponentActivity() {
      * the "Open settings" button the raised card carries, which the driver presses knowing where it
      * goes; that is a different thing from being sent there.
      */
-    private fun refuseConnection(reason: String?) {
+    private fun refuseConnection(reason: String?, gap: WirelessGap) {
         reason?.let { toast(it) }
+        // A connect that never started is still something to count: without this line, a page that
+        // refused ten times reads the same as a day nobody tried.
+        AttemptJournal.writeRefusal(this, gap)
         wirelessBlocked = true
         render()
     }
@@ -2693,6 +2706,7 @@ class DiPlayActivity : ComponentActivity() {
             }
         }, "diplay-export").start()
     }
+
     /**
      * The part a reader needs to place the log: which build, which car, which settings. Kept separate
      * from the log text so a byte budget can never spend it — the upload path used to keep the tail of
@@ -2712,12 +2726,51 @@ class DiPlayActivity : ComponentActivity() {
         appendLine("Head-unit board: ${Build.BOARD}; hardware: ${Build.HARDWARE}; build: ${Build.DISPLAY}")
         appendLine(DiagnosticCounters.summary())
         appendLine()
+        appendLine("--- Connection attempts (newest last) ---")
+        appendLine(recentAttempts(appContext))
+        appendLine()
         appendLine("--- Last display negotiation (timestamps distinguish it from current settings) ---")
         appendLine(DisplayDiagnosticSnapshot.report(appContext))
     }
 
-    private fun buildDiagnosticSections(appContext: android.content.Context): List<DiagnosticSection> =
-        SessionLogFile.REPORT_NAMES.mapNotNull { name ->
+    /**
+     * The last five attempts, one line each — the block that answers "did it connect, and where did it
+     * stop" without reading a log.
+     *
+     * Rendered from the same records the appendix carries verbatim, so the summary and the evidence
+     * cannot tell different stories. Times are the head unit's wall clock, which may not be right:
+     * they place a run for a reader, and the ordering comes from the file.
+     */
+    private fun recentAttempts(appContext: android.content.Context): String {
+        val attempts = AttemptJournal.lines(appContext)
+            .mapNotNull { line -> runCatching { JSONObject(line) }.getOrNull() }
+            .takeLast(5)
+        if (attempts.isEmpty()) return "No connection attempt recorded yet."
+        val clock = SimpleDateFormat("HH:mm:ss", Locale.US)
+        return attempts.joinToString("\n") { attempt ->
+            buildString {
+                val started = attempt.optLong("t")
+                append(if (started > 0) clock.format(Date(started)) else "--:--:--")
+                append("  ")
+                append(attempt.optString("transport", "-"))
+                append(' ')
+                append(attempt.optString("mode", "-"))
+                append("  ")
+                append(attempt.optString("result", "-").lowercase(Locale.US))
+                append("  ")
+                append(attempt.optString("at", "-"))
+                append("  ")
+                append(attempt.optString("why", "-"))
+                append("  ")
+                append(attempt.optLong("ms"))
+                append("ms")
+                if (attempt.optBoolean("reset")) append("  wifi-reset")
+            }
+        }
+    }
+
+    private fun buildDiagnosticSections(appContext: android.content.Context): List<DiagnosticSection> {
+        val logs = SessionLogFile.REPORT_NAMES.mapNotNull { name ->
             val file = File(appContext.filesDir, "logs/$name")
             if (!file.isFile) return@mapNotNull null
             DiagnosticSection(
@@ -2726,6 +2779,16 @@ class DiPlayActivity : ComponentActivity() {
                 newest = name == "diplay.log",
             )
         }
+        // Appended without the generic redaction pass. A record is redacted when it is written, and that
+        // pass replaces a whole line that mentions a credential with a single token — for a JSON line
+        // that means the record stops being one, in the one place the record is supposed to be readable.
+        val attempts = AttemptJournal.lines(appContext)
+        return if (attempts.isEmpty()) {
+            logs
+        } else {
+            logs + DiagnosticSection(AttemptJournal.EVENTS, attempts, newest = true)
+        }
+    }
 
     private fun buildDiagnosticReport(appContext: android.content.Context): String =
         DiagnosticDigest.compose(
