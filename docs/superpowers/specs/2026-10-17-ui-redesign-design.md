@@ -1,6 +1,6 @@
 # DiPlay 车机互联 UI & 交互全局重构设计规范 (Design Spec)
 
-- **版本**: 1.1.0 (Strict Code-Aligned Edition · 零虚构功能纯实机对齐版)
+- **版本**: 1.2.0 (Full Architecture & Thread-Safety Edition · 零虚构实机纯净版)
 - **日期**: 2026-10-17
 - **目标平台**: 吉利 E01 车机（Android 4.4 / 5.1+，1920×720 @ 160dpi 超宽屏）
 - **默认皮肤**: **极氪白（ZEEKR_WHITE · 先锋纯白 + 极氪高能橙点缀）**
@@ -87,7 +87,6 @@
    ```kotlin
    fun isNightTime(calendar: Calendar = Calendar.getInstance()): Boolean {
        val hour = calendar.get(Calendar.HOUR_OF_DAY)
-       // 18:00 - 23:59 或 00:00 - 05:59 判为夜间
        return hour >= 18 || hour < 6
    }
    ```
@@ -239,3 +238,60 @@ enum class ThemeSchedule(val key: String) {
 1. **无虚构功能检查**：全篇逐一核对 `DiPlayActivity.kt`，所有暴露出的按钮和状态均有现存的真实底层实现，无任何占位伪功能；
 2. **无占位符（Placeholder Scan）**：文档中无任何 `TBD`、`TODO` 或未决项目；
 3. **范围可控（Scope Check）**：重构严格聚焦于表现层 UI 与交互组件重写，不破坏底层的 CarPlay 会话状态机（`CarPlayController`）与 GOC 蓝牙通讯协议。
+
+---
+
+## 八、 线程模型、互锁防护与后台进程管控机制 (Threading & Process Management)
+
+吉利 E01 车机硬件基于老旧 MTK 四核芯片，I/O 与进程切换开销相对敏感。为确保 UI 改造后绝对丝滑、零 ANR、零死锁，必须严格建立清晰的线程边界与互锁防范机制。
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│ 主线程 (UI / Main Looper)                                                              │
+│  - 纯净职责: 视图测量、渲染重绘、触控响应、按键微缩放动效                                │
+│  - 严禁行为: 严禁直接执行文件 I/O、禁止同步等待 Root 进程、禁止同步探测套接字              │
+└───────────────────────────▲────────────────────────────────┬───────────────────────────┘
+                            │ runOnUiThread / Handler.post   │ 异步提交 (非阻塞)
+                            │ 串行投递变更                    ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│ 后台协同层 (Managed Workers & Background Controllers)                                  │
+│  - 互斥防重入锁: AtomicBoolean(isConnecting) 彻底阻断快速连击引发的 SPP 端口竞争        │
+│  - 模式切换排他: 切换无线模式时，前一模式未完成释放前，后一模式串行排队                  │
+│  - 生命周期守卫: 任务完成回调前严格校验 if (isFinishing || isDestroyed) 杜绝泄漏与 NPE   │
+│  - 退出时资源释放: closeTheApp() 依次解除 mDNS 监听、归还车机蓝牙、再优雅退出           │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.1 主线程职责单一与绝对非阻塞
+1. **主线程纯净原则**：主线程仅负责组件状态刷新、动画调度、用户交互响应。
+2. **零同步 I/O**：
+   - 任何涉及 `AirPlayPersistence` 磁盘存储、`/system` 固件状态读取、网络接口探测、日志文件生成的逻辑，必须异步分发至后台工作线程；
+   - 主线程更新操作先在内存状态中完成即时 UI 反馈（如开关切换立即打钩），后台静默落盘。
+
+### 8.2 并发互锁防护与防重入机制 (Concurrency & Anti-Interlocking)
+1. **连接动作原子防重入 (`AtomicBoolean isConnecting`)**：
+   - 驾驶员点击「进入 CARPLAY 投屏」时，主线程**微秒级**将主按钮置为 Loading 禁用态，并在内存层锁定 `isConnecting` 标志；
+   - 彻底阻断快速连续猛击导致底层 GOC SPP 套接字或 AirPlay 端口（5353/7000/7100）出现多会话冲突死锁；
+   - 待底层 `CarPlayController` 抛错、取消或正式建立会话后，方可在主线程解除锁定。
+2. **无线拓扑切换排他锁 (`WirelessSwitchMutex`)**：
+   - 驾驶员在「车机热点」与「同一网络」之间来回拨动时，网络底层需要经历“注销原有广播 → 释放 AP/Wi-Fi 接口 → 绑定新接口 → 重新配置路由”；
+   - 严禁前一个模式正在释放时后一个模式强行并发启动。引入串行化队列：模式切换请求排队执行，切换期间界面拨块展示微转圈状态，直至底层彻底移交控制权。
+3. **会话运行中变更的互锁保护 (`applyConnectionSetting`)**：
+   - 严格继承既有的会话状态三态判据（`SessionPhase.Live`）：在投屏进行中修改涉及连接模式的底层设置时，强制先安全终止 CarPlay 会话，待套接字完全回收后安全保存，避免数据传输途中遭遇底层连接强制重建引发死锁。
+
+### 8.3 后台进程与异步任务生命周期管控
+1. **消除孤立野线程**：
+   - 原代码中存在的零散 `Thread { ... }.start()` 统一收敛为命名守护任务（如 `car-hop-worker`、`diag-export-worker`）；
+   - 在任务向主线程回传数据前，必须统一执行生命周期安全检查：
+     ```kotlin
+     runOnUiThread {
+         if (isFinishing || isDestroyed) return@runOnUiThread
+         // 安全刷新 UI
+     }
+     ```
+2. **退出时的确定性资源析构**：
+   - 当点击 Dock 的退出键执行 `closeTheApp()` 时：
+     1. 首先向正在运行的后台轮询（如 `maintenanceTick`、`tick`）发出中断信号；
+     2. 调用 `releaseProcessWirelessResources()` 归还车机系统蓝牙；
+     3. 释放 mDNS 占用的 5353 端口；
+     4. 安全终止 `CarPlayBackgroundSession`，最后才结束自身进程。绝对不留下占死蓝牙端口或无响应的僵尸进程。
