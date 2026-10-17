@@ -2,7 +2,7 @@
 
 Requirements: JDK 25, Android SDK 37, NDK 25.2.9519653 and the included Gradle wrapper. NDK r25c is intentional: it is the last selected toolchain in this project that can emit the Android 4.4/API 19 native target.
 
-The standard `mobile` application has `minSdk 19` and packages ARM64, ARMv7, x86_64 and x86 libraries. The separate Android Automotive application retains its newer platform requirement.
+The standard `mobile` application has `minSdk 19` and packages ARM64 and ARMv7 libraries only. The x86 pair is gone: `conscrypt-android` alone carries 4.5 MB of x86/x86_64 shared objects and no head unit uses them. The separate Android Automotive application retains its newer platform requirement.
 
 ## Source and CI builds
 
