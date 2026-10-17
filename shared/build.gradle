@@ -23,6 +23,16 @@ if (vendorHopDirectory != null && !vendorHopDirectory.isDirectory()) {
 def vendorHopPayload = vendorHopDirectory == null ? null : new File(vendorHopDirectory, 'payload')
 def vendorHopAssets = new File(layout.buildDirectory.get().asFile, 'generated/vendorHopAssets')
 
+// The payload the hop installs, by the name the hop's own code looks it up under. Its hash is what
+// every install is checked against, and the check is generated from the bytes below rather than
+// written into the source: a payload replaced without the source constant being updated used to be
+// ignored in silence, because the store on the device found the file already laid down hashing to the
+// old value and never decrypted the new one.
+def vendorHopCandidateName = 'gocsdk-spp-uuid128-v2'
+// The file the hash is published as. Plain text in the payload directory on the head unit (the
+// scripts read it with the shell's own `read`), encrypted like the rest on its way into the APK.
+def vendorHopCandidatePin = 'candidate-sha'
+
 // The USB-adapter stack, when this build was asked for one.
 //
 // Same shape as the hop above, and read the same way: `-PadapterDir=<path>` names a directory outside
@@ -62,22 +72,41 @@ def encryptVendorPayload = vendorHopPayload == null ? null : tasks.register('enc
         }
         def target = new File(destination, 'payload')
         target.mkdirs()
-        payloads.listFiles().sort { it.name }.each { payload ->
+        def sha256 = { byte[] bytes ->
+            java.security.MessageDigest.getInstance('SHA-256').digest(bytes)
+                .collect { String.format('%02x', it & 0xff) }
+                .join()
+        }
+        def encryptInto = { File out, byte[] plain ->
             // Derived from the payload rather than drawn at random: the same bytes have to encrypt to
             // the same file or this task re-runs on every build. Distinct payloads get distinct
             // nonces, which is the property GCM needs of them.
             def nonce = java.util.Arrays.copyOf(
-                java.security.MessageDigest.getInstance('SHA-256').digest(payload.bytes), 12)
+                java.security.MessageDigest.getInstance('SHA-256').digest(plain), 12)
             def cipher = javax.crypto.Cipher.getInstance('AES/GCM/NoPadding')
             cipher.init(
                 javax.crypto.Cipher.ENCRYPT_MODE,
                 new javax.crypto.spec.SecretKeySpec(key, 'AES'),
                 new javax.crypto.spec.GCMParameterSpec(128, nonce))
-            new File(target, "${payload.name}.enc").withOutputStream { out ->
-                out.write(nonce)
-                out.write(cipher.doFinal(payload.bytes))
+            out.withOutputStream { stream ->
+                stream.write(nonce)
+                stream.write(cipher.doFinal(plain))
             }
         }
+        payloads.listFiles()
+            .findAll { it.isFile() && it.name != vendorHopCandidatePin }
+            .sort { it.name }
+            .each { payload -> encryptInto(new File(target, "${payload.name}.enc"), payload.bytes) }
+        // The pin is computed here, from the bytes this task just encrypted, so the hash and the binary
+        // it describes are packaged in one step and cannot be out of step with each other.
+        def candidate = new File(payloads, vendorHopCandidateName)
+        if (!candidate.isFile()) {
+            throw new GradleException(
+                "${candidate} is missing; there is no candidate for ${vendorHopCandidatePin} to pin")
+        }
+        encryptInto(
+            new File(target, "${vendorHopCandidatePin}.enc"),
+            (sha256(candidate.bytes) + '\n').getBytes('UTF-8'))
     }
 }
 
