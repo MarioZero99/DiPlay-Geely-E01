@@ -73,6 +73,35 @@ class DiagnosticExportFallbackTest {
         assertEquals("report", downloads.readText())
     }
 
+    @Test fun exportsToUsbPackageDirWhenRootUnwritableWithFsSync() {
+        val fakeUsbRoot = File(context.cacheDir, "fake-usbotg-sda1")
+        val fakePkg = File(fakeUsbRoot, "Android/data/${context.packageName}/files").apply { mkdirs() }
+        // E01 mounts the stick read-only for this package's root. A file of the same name is what
+        // makes that true here, and the outcome must still name the package directory, not the root.
+        File(fakeUsbRoot, "DiPlay").apply { deleteRecursively(); writeText("blocks the root") }
+        val fakeContext = object : ContextWrapper(context) {
+            override fun getExternalFilesDirs(type: String?): Array<File?> {
+                return arrayOf(context.getExternalFilesDir(null), fakePkg)
+            }
+        }
+        val outcome = DiagnosticExportStore.export(fakeContext, "DiPlay-usb-sync.txt", "usb content with fsync")
+        assertEquals(ExportDestination.USB_PACKAGE_DIR, outcome.destination)
+        assertTrue(outcome.primaryPath.contains("fake-usbotg-sda1"))
+        assertEquals("usb content with fsync", File(outcome.primaryPath).readText())
+        // Shareable Uri must be from app-owned provider, never crash on usb path
+        assertEquals("${context.packageName}.diagnostic-reports", outcome.shareableUri!!.authority)
+        assertTrue(outcome.allSavedPaths.contains(outcome.primaryPath))
+    }
+
+    @Test fun fallsBackToDeviceDownloadsWhenNoUsbWritable() {
+        val outcome = DiagnosticExportStore.export(context, "DiPlay-fallback-device.txt", "device fallback content")
+        assertEquals(ExportDestination.DEVICE_DOWNLOADS, outcome.destination)
+        assertTrue(outcome.primaryPath.contains("DiPlay"))
+        assertTrue(outcome.probeSummary.contains("未发现外置存储卷"))
+        assertTrue(File(outcome.primaryPath).exists())
+        assertEquals("device fallback content", File(outcome.primaryPath).readText())
+    }
+
     @Test fun anEarlierShareUriCannotReadALaterExport() {
         val first = DiagnosticExportStore.saveWithoutPicker(context, "DiPlay-test.txt", "first")
         val second = DiagnosticExportStore.saveWithoutPicker(context, "DiPlay-test.txt", "second")
