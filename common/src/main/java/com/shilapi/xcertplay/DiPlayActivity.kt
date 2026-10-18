@@ -2610,6 +2610,10 @@ class DiPlayActivity : ComponentActivity() {
                 // mode whatever the hotspot is doing, so reading it here said the hotspot was running
                 // on a head unit that had never been asked — and refused the same-network route over it.
                 hotspotOn = com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this),
+                // Asked rather than assumed: where the firmware exposes the AP switch, the same-network
+                // route is allowed to start with the hotspot on and the connect path releases it. Where
+                // it does not, the gap is the driver's to close and is reported as such.
+                hotspotCanBeReleased = com.shilapi.xcertplay.network.CarHotspotController(this).canReleaseHotspot(),
                 hop = hop,
                 phoneChosen = phoneChosen,
                 carBluetoothOn = carBluetoothOn(),

@@ -86,6 +86,25 @@ class WirelessReadinessCheckTest {
         assertTrue(off.ready)
     }
 
+    /**
+     * And the other half of that answer: where the firmware lets DiPlay release the access point
+     * itself, the hotspot being on is not a gap — the connect path turns it off. Reporting it here
+     * would demand of the driver exactly what the code that follows was about to do.
+     */
+    @Test fun theSameNetworkModeIsAllowedWhileTheHotspotCanBeReleased() {
+        val report = WirelessReadinessCheck.assess(
+            input(
+                mode = WirelessHotspotMode.EXISTING_WIFI,
+                hotspotOn = true,
+                hotspotCanBeReleased = true,
+                hop = WirelessBluetoothHop.CAR,
+                phoneChosen = true,
+            ),
+        )
+
+        assertTrue("the release is the connect path's job, not a gap", report.ready)
+    }
+
     @Test fun theSameNetworkModeIsBlockedWhenCarWifiNotAssociated() {
         val disconnected = WirelessReadinessCheck.assess(
             input(
@@ -117,6 +136,11 @@ class WirelessReadinessCheckTest {
     private fun input(
         credentialsSaved: Boolean = true,
         hotspotOn: Boolean? = true,
+        /**
+         * Whether this build can switch the car's hotspot off by itself. False is the older answer —
+         * the driver has to do it — and is the default so the cases below keep testing the gap.
+         */
+        hotspotCanBeReleased: Boolean = false,
         hop: WirelessBluetoothHop?,
         phoneChosen: Boolean = false,
         carBluetoothOn: Boolean = true,
@@ -124,5 +148,16 @@ class WirelessReadinessCheckTest {
         adapter: WirelessAdapterStatus? = null,
         mode: WirelessHotspotMode = WirelessHotspotMode.MANUAL,
         carWifiAssociated: Boolean = true,
-    ) = WirelessReadinessInput(credentialsSaved, hotspotOn, hop, phoneChosen, carBluetoothOn, adapterPlugged, adapter, mode, carWifiAssociated)
+    ) = WirelessReadinessInput(
+        credentialsSaved = credentialsSaved,
+        hotspotOn = hotspotOn,
+        hotspotCanBeReleased = hotspotCanBeReleased,
+        hop = hop,
+        phoneChosen = phoneChosen,
+        carBluetoothOn = carBluetoothOn,
+        adapterPlugged = adapterPlugged,
+        adapter = adapter,
+        mode = mode,
+        carWifiAssociated = carWifiAssociated,
+    )
 }

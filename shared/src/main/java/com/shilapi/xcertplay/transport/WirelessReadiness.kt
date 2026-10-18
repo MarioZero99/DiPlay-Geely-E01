@@ -42,8 +42,13 @@ enum class WirelessGap {
     HOTSPOT_OFF,
 
     /**
-     * The car is running its own hotspot, and this mode needs it off: one radio cannot be an access
-     * point and a station at once.
+     * The car is running its own hotspot, this mode needs it off, and this build cannot switch it off
+     * itself: one radio cannot be an access point and a station at once, and turning it off is then
+     * the driver's job.
+     *
+     * Only reported when [WirelessReadinessInput.hotspotCanBeReleased] is false. Where DiPlay can
+     * release the access point — the usual case — the same fact is not a gap, because the connect
+     * path does it: see [WirelessReadinessInput.hotspotCanBeReleased].
      */
     HOTSPOT_ON,
     CAR_WIFI_DISCONNECTED,
@@ -65,6 +70,20 @@ data class WirelessReadinessInput(
      * can never connect on a head unit that keeps its access point to itself.
      */
     val hotspotOn: Boolean?,
+    /**
+     * Whether this build can switch the car's own hotspot off by itself.
+     *
+     * The same-network route needs the access point gone, and there are two ways it can go: the
+     * connect path releases it ([com.shilapi.xcertplay.network.CarHotspotController.releaseForStationMode])
+     * or the driver does it in the car settings. Which of the two applies is a fact about the
+     * firmware, not about the route, so it is asked here rather than assumed: a gap that demands the
+     * driver turn off a hotspot DiPlay was about to turn off is a gap that stops the very code which
+     * would have satisfied it, and a build without the AP API that says nothing leaves the driver
+     * waiting for a connection that cannot start.
+     *
+     * Deliberately has no default: a caller that has not asked the firmware cannot answer it.
+     */
+    val hotspotCanBeReleased: Boolean,
     val hop: WirelessBluetoothHop?,
     val phoneChosen: Boolean,
     val carBluetoothOn: Boolean,
@@ -113,8 +132,20 @@ object WirelessReadinessCheck {
                 if (input.hotspotOn == false) gaps += WirelessGap.HOTSPOT_OFF
             }
             WirelessHotspotMode.EXISTING_WIFI -> {
-                if (input.hotspotOn == true) gaps += WirelessGap.HOTSPOT_ON
-                if (!input.carWifiAssociated) gaps += WirelessGap.CAR_WIFI_DISCONNECTED
+                when {
+                    // The firmware will not let DiPlay release it, so the driver has to.
+                    input.hotspotOn == true && !input.hotspotCanBeReleased ->
+                        gaps += WirelessGap.HOTSPOT_ON
+                    // Being on the network and running an access point are the same radio, so a car
+                    // whose hotspot is on cannot be associated with anything — and the connect path
+                    // releases the hotspot before it looks for the network. Asking for the
+                    // association here as well was a deadlock: the only way to satisfy it was to
+                    // turn the hotspot off by hand, which is exactly what the release exists to
+                    // avoid. Read the other way round, when no hotspot is holding the radio, being
+                    // on a network is a genuine precondition and only the driver can meet it.
+                    input.hotspotOn == true -> Unit
+                    !input.carWifiAssociated -> gaps += WirelessGap.CAR_WIFI_DISCONNECTED
+                }
             }
             WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> Unit
         }
