@@ -493,8 +493,8 @@
     <string name="connection_diagnostics_hide">Hide</string>
     <string name="connection_settings_incomplete">The connection settings are incomplete · open Settings and fill in the car hotspot</string>
     <string name="appearance">Appearance</string>
-    <string name="skin_zeekr_white">Zeekr white</string>
-    <string name="skin_flyme_blue">Flyme blue</string>
+    <string name="skin_zeekr_white">Dawn white</string>
+    <string name="skin_flyme_blue">Sky blue</string>
     <string name="skin_night">Night</string>
     <string name="hud_day">Day</string>
     <string name="hud_night">Night</string>

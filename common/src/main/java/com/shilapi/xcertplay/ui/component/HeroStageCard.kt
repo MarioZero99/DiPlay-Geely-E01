@@ -256,9 +256,13 @@ class HeroStageCard(
      * subtitle — the card leads with the one thing standing in the way — and printing the same red
      * sentence twice on one card read as a rendering fault rather than as emphasis. What is left for
      * this list is the rest of them, and the way to the controls.
+     *
+     * A list that does not block is a different thing: those lines are facts worth knowing — the car's
+     * hotspot is on and connecting will release it — so all of them are shown, muted, and without the
+     * button, which would send the driver to do what the next tap does for them.
      */
     private fun paintGaps(readinessGaps: List<String>?, isBlocked: Boolean) {
-        val gaps = if (isBlocked) readinessGaps.orEmpty().drop(1) else emptyList()
+        val gaps = if (isBlocked) readinessGaps.orEmpty().drop(1) else readinessGaps.orEmpty()
         if (gaps == shownGaps && isBlocked == shownBlocked) return
         shownGaps = gaps
         shownBlocked = isBlocked
@@ -269,8 +273,12 @@ class HeroStageCard(
         }
         gapsBox.visibility = View.VISIBLE
         gaps.forEach { gap ->
-            gapsBox.addView(label("● $gap", 15, palette.accent), LayoutParams(-1, -2).apply { topMargin = dp(4) })
+            gapsBox.addView(
+                label("● $gap", 15, if (isBlocked) palette.accent else palette.textMuted),
+                LayoutParams(-1, -2).apply { topMargin = dp(4) },
+            )
         }
+        if (!isBlocked) return
         gapsBox.addView(
             Button(context).apply {
                 text = context.getString(R.string.open_settings)

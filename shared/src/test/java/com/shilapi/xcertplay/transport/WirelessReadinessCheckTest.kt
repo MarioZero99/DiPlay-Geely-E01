@@ -83,13 +83,15 @@ class WirelessReadinessCheckTest {
         )
 
         assertEquals(listOf(WirelessGap.HOTSPOT_ON), on.gaps)
+        assertEquals(listOf(WirelessGap.HOTSPOT_ON), on.blocking)
         assertTrue(off.ready)
     }
 
     /**
      * And the other half of that answer: where the firmware lets DiPlay release the access point
-     * itself, the hotspot being on is not a gap — the connect path turns it off. Reporting it here
-     * would demand of the driver exactly what the code that follows was about to do.
+     * itself, the hotspot being on is still worth *saying* — the driver's Wi-Fi is about to go down —
+     * but it is not a reason to refuse. Blocking on it here would demand of the driver exactly what
+     * the code that follows was about to do.
      */
     @Test fun theSameNetworkModeIsAllowedWhileTheHotspotCanBeReleased() {
         val report = WirelessReadinessCheck.assess(
@@ -102,7 +104,34 @@ class WirelessReadinessCheckTest {
             ),
         )
 
+        assertEquals(listOf(WirelessGap.HOTSPOT_ON), report.gaps)
         assertTrue("the release is the connect path's job, not a gap", report.ready)
+        assertTrue(report.blocking.isEmpty())
+    }
+
+    /**
+     * The deadlock this route used to have on a single-radio head unit: the hotspot holds the radio,
+     * so the car cannot be associated, so the association gap is present — and it is the one gap the
+     * driver could not close without first doing what DiPlay was refusing to do. It stays on the page
+     * as a fact and stops blocking the moment the hotspot is the thing holding the radio.
+     */
+    @Test fun theAssociationIsNotDemandedWhileTheHotspotHoldsTheRadio() {
+        val report = WirelessReadinessCheck.assess(
+            input(
+                mode = WirelessHotspotMode.EXISTING_WIFI,
+                hotspotOn = true,
+                hotspotCanBeReleased = true,
+                hop = WirelessBluetoothHop.CAR,
+                phoneChosen = true,
+                carWifiAssociated = false,
+            ),
+        )
+
+        assertEquals(
+            listOf(WirelessGap.HOTSPOT_ON, WirelessGap.CAR_WIFI_DISCONNECTED),
+            report.gaps,
+        )
+        assertTrue("neither is the driver's to fix before connecting", report.ready)
     }
 
     @Test fun theSameNetworkModeIsBlockedWhenCarWifiNotAssociated() {
@@ -116,6 +145,7 @@ class WirelessReadinessCheckTest {
             ),
         )
         assertEquals(listOf(WirelessGap.CAR_WIFI_DISCONNECTED), disconnected.gaps)
+        assertEquals(listOf(WirelessGap.CAR_WIFI_DISCONNECTED), disconnected.blocking)
         assertFalse(disconnected.ready)
     }
 

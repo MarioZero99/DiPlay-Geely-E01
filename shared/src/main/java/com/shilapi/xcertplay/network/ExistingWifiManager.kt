@@ -11,6 +11,7 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Looper
+import android.os.SystemClock
 import androidx.annotation.RequiresApi
 import com.shilapi.xcertplay.transport.Iap2WirelessSecurity
 import java.io.IOException
@@ -20,14 +21,50 @@ import java.net.NetworkInterface
 import java.util.BitSet
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** How long the station radio is given to come up before this route fails instead of waiting. */
+internal const val STATION_ENABLE_TIMEOUT_MILLIS = 5_000L
+
+/** How often the radio is asked, and read back, while it is coming up. */
+internal const val STATION_ENABLE_POLL_MILLIS = 250L
+
+/**
+ * Switches the station radio on, retrying until it is reported on or the deadline passes.
+ *
+ * The request is retried rather than made once because of the state this route starts from: the
+ * access point has just been released, and a firmware still tearing it down answers the first
+ * request with a refusal that means "not yet", not "never". The answer to the request is not what
+ * this returns — `setWifiEnabled` saying true means the request was accepted, not that the radio is
+ * up — so the state is read back from the platform each turn.
+ *
+ * @return true when the radio is on, false when it never came up inside [timeoutMillis].
+ */
+internal fun bringUpStation(
+    isEnabled: () -> Boolean,
+    requestEnable: () -> Boolean,
+    timeoutMillis: Long,
+    pollMillis: Long,
+    now: () -> Long,
+    sleep: (Long) -> Unit,
+): Boolean {
+    if (isEnabled()) return true
+    val deadline = now() + timeoutMillis
+    while (true) {
+        requestEnable()
+        if (isEnabled()) return true
+        if (now() >= deadline) return false
+        sleep(pollMillis)
+    }
+}
+
 /**
  * Attaches to a Wi-Fi network the head unit is already on.
  *
  * The other three backends make an access point and hand its credentials to the phone. This one makes
  * no network at all: the driver joins an existing one — an Android phone's hotspot, a router, or the
  * iPhone's own personal hotspot — in the car's own Wi-Fi settings, and the iPhone is put on that same
- * network. Nothing here switches Wi-Fi on, joins a network, or changes routing; it reads what the
- * platform already has and hands that to the session.
+ * network. Nothing here joins a network or changes routing: it reads what the platform already has
+ * and hands that to the session. It does switch the station radio on when it is off, because that is
+ * the state releasing the car's hotspot leaves behind and a radio that is off cannot be read at all.
  *
  * The driver types nothing in, here or anywhere else. The network's name comes from the live
  * connection and its security type and password come from the configuration the head unit saved when
@@ -121,6 +158,7 @@ class ExistingWifiManager(
         // attempt it measures today — clearing it here says so, and keeps it true if the manager is
         // ever reused for a second bring-up.
         multipleNetworksDetectedAt = null
+        ensureStationMode()
         val started = System.nanoTime()
         while (!closed) {
             val attached = readAttachment()
@@ -134,6 +172,46 @@ class ExistingWifiManager(
             Thread.sleep(POLL_MILLIS)
         }
         throw IOException("Joining the car's Wi-Fi network was cancelled")
+    }
+
+    /**
+     * Switches the station radio on when it is off, and fails this route when it will not come up.
+     *
+     * This route needs the car to be a station, and the state it usually starts from is the one the
+     * previous step left: on this head unit the access point and the station share a radio, and the
+     * AP switch is one-way — releasing the car's hotspot for this route leaves the station off. The
+     * switch belongs here rather than in the hotspot controller, which is deliberately one-way about
+     * hotspots: this is the component that needs a station, and the one that has to say what it is
+     * still waiting for when it does not get one.
+     *
+     * Failing here rather than waiting is the point. A radio that never comes up produces no network,
+     * so the wait below would spend a minute and then blame the driver's Wi-Fi for a radio that was
+     * never on — the same misattribution that made the hotspot release look like a network problem.
+     * The refusal is answered with the one action that can still help: switch Wi-Fi on in the car.
+     */
+    private fun ensureStationMode() {
+        if (wifi.isWifiEnabled) return
+        val ready = bringUpStation(
+            isEnabled = { wifi.isWifiEnabled },
+            requestEnable = {
+                @Suppress("DEPRECATION")
+                runCatching { wifi.setWifiEnabled(true) }.getOrDefault(false)
+            },
+            timeoutMillis = STATION_ENABLE_TIMEOUT_MILLIS,
+            pollMillis = STATION_ENABLE_POLL_MILLIS,
+            now = { SystemClock.elapsedRealtime() },
+            sleep = { SystemClock.sleep(it) },
+        )
+        onDiagnostic(
+            if (ready) "Existing Wi-Fi switched the car's Wi-Fi on"
+            else "Existing Wi-Fi could not switch the car's Wi-Fi on",
+        )
+        if (!ready) {
+            throw IOException(
+                "The car's Wi-Fi is switched off and DiPlay could not switch it on. " +
+                    "Turn Wi-Fi on in the car settings and connect again.",
+            )
+        }
     }
 
     /**
@@ -248,7 +326,12 @@ class ExistingWifiManager(
             }
         }
         multipleNetworksDetectedAt = null
-        val network = networks.singleOrNull() ?: return waitFor("a Wi-Fi connection")
+        val network = networks.singleOrNull() ?: return waitFor(
+            // Off and not joined are two different facts, and they ask the driver for two different
+            // things. Reading them as one is how "the car has no usable Wi-Fi network" came to be
+            // said about a radio that was simply switched off.
+            if (wifi.isWifiEnabled) "a Wi-Fi connection" else "the car's Wi-Fi to be switched on",
+        )
         val properties = connectivity.getLinkProperties(network) ?: return waitFor("the Wi-Fi interface")
         val name = properties.interfaceName ?: return waitFor("the Wi-Fi interface")
         val iface = runCatching { NetworkInterface.getByName(name) }.getOrNull()

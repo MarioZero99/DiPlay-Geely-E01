@@ -14,6 +14,7 @@
     <string name="gap_hotspot_credentials">热点名字和密码还没保存。打开连接设置，填车机热点的名字和密码，点保存。</string>
     <string name="gap_hotspot_off">车机热点是关的。打开车机热点设置，把热点打开。有 5 GHz 就选 5 GHz。名字和密码要和这里保存的一致。</string>
     <string name="gap_car_hotspot_on">车机自带热点还开着。请到车机热点设置里关掉——车机不能一边连你的 Wi-Fi 一边自己发热点。</string>
+    <string name="gap_car_hotspot_on_releasing">车机自带热点还开着。连接时会先自动关掉它——车机不能一边连你的 Wi-Fi 一边自己发热点。</string>
     <string name="gap_car_wifi_disconnected">车机未连接任何 Wi-Fi。请在车机网络设置中让车机连上与 iPhone 相同的 Wi-Fi 网络。</string>
     <string name="gap_radio">还没选蓝牙。在第 2 步里选外置蓝牙或内置蓝牙，再选手机。外置蓝牙配的是蓝牙棒的名字，内置蓝牙配的是车机蓝牙。</string>
     <string name="gap_phone">蓝牙选了，iPhone 还没选定。在第 2 步的列表里把要连的那台手机点上。</string>

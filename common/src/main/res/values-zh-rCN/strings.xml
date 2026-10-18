@@ -492,8 +492,8 @@
     <string name="connection_diagnostics_hide">收起</string>
     <string name="connection_settings_incomplete">连接配置不完整 · 请在设置里填写车机热点</string>
     <string name="appearance">外观</string>
-    <string name="skin_zeekr_white">极氪白</string>
-    <string name="skin_flyme_blue">魅族蓝</string>
+    <string name="skin_zeekr_white">晨曦白</string>
+    <string name="skin_flyme_blue">晴空蓝</string>
     <string name="skin_night">暗夜</string>
     <string name="hud_day">日间</string>
     <string name="hud_night">夜间</string>

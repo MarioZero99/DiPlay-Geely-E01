@@ -509,11 +509,10 @@ class DiPlayActivity : ComponentActivity() {
             hotspotSsid(),
             joinedWifiName(),
             audioChannelLabel(),
-            // Switching the segment is not entering setup. This page has no form to fill in, so the
-            // flag would only make connect() refuse a route whose details are already saved — with a
-            // sentence pointing at a form that is not on this page. Whether the details really are
-            // usable is asked separately, in connect(), from the values themselves.
-            onModeSwitch = { applyWirelessLink(it, setupPending = false) },
+            // Switching the segment writes the mode and nothing else. Whether the car-hotspot form
+            // has anything to ask for is decided by [applyWirelessLink] from the credentials, so this
+            // page — which has no form at all — does not have to say it.
+            onModeSwitch = { applyWirelessLink(it) },
             onOpenHotspotSettings = { openCarWifiSettings() },
             onEditHotspotPass = { editHotspotCredentials() },
             onOpenWifiSettings = { openCarClientWifiSettings() },
@@ -797,7 +796,10 @@ class DiPlayActivity : ComponentActivity() {
         }
         // One readiness for the whole page, read once so the cards and the connect step cannot disagree.
         val readiness = pageState().readiness
-        if (wirelessBlocked && readiness.gaps.isNotEmpty()) gapsCard(columns.raw(), readiness)
+        // A notice is not "not ready": this card exists for the attempt that was refused, so it
+        // appears only while something actually blocks. The lines a notice carries are on the
+        // connection card, with the controls they belong to.
+        if (wirelessBlocked && readiness.blocking.isNotEmpty()) gapsCard(columns.raw(), readiness)
 
         bucket(columns, R.string.wireless_settings, R.string.set_up_once_your_details_stay_saved_for_the_next_drive_cha)
         wirelessCards(columns, readiness)
@@ -1695,7 +1697,7 @@ class DiPlayActivity : ComponentActivity() {
      * first thing on the page rather than the last.
      */
     private fun readinessLines(card: LinearLayout, readiness: WirelessReadiness = currentWirelessReadiness()) {
-        val lines = readiness.gaps.map { gapText(it, readiness.adapter) }.toMutableList()
+        val lines = readiness.gaps.map { gapText(it, readiness.adapter, it in readiness.blocking) }.toMutableList()
         val adapter = readiness.adapter
         if (adapter != null && WirelessGap.DONGLE_NOT_READY !in readiness.gaps && !adapter.flowEffective) {
             adapter.sentence?.let { lines += it }
@@ -2134,9 +2136,19 @@ class DiPlayActivity : ComponentActivity() {
         if (CarPlayBackgroundSession.hasSession()) connect(AirPlayPersistence.loadWirelessEnabled(this))
     }
 
+    /**
+     * Writes the chosen route, and enters setup mode only when there is something to set up.
+     *
+     * The flag used to be "the driver chose the car hotspot", which made choosing a route the same
+     * act as entering a form — and on a page with no form (the cockpit) it could only ever refuse
+     * the next connection. It is derived from the credentials now: a car that already holds a usable
+     * name and password has nothing to ask for, and one that does not is exactly the case the form
+     * exists for. This is the same question the readiness check asks, from the same two values.
+     */
     private fun applyWirelessLink(
         mode: WirelessHotspotMode,
-        setupPending: Boolean = mode == WirelessHotspotMode.MANUAL,
+        setupPending: Boolean = mode == WirelessHotspotMode.MANUAL &&
+            hotspotError(hotspotSsid(), hotspotPassword()) != null,
         andThen: () -> Unit = {},
     ) {
         applyConnectionSetting {
@@ -2179,17 +2191,10 @@ class DiPlayActivity : ComponentActivity() {
                 // The hop's own service is one of those gaps, and putting it in place runs off the main
                 // thread: ask for it now, and the page redraws when it is there.
                 startVendorHopInBackground()
-                refuseConnection(null, readiness.gaps.first())
+                refuseConnection(null, readiness.blocking.first())
                 return
             }
             wirelessBlocked = false
-        }
-        if (wireless && hotspotSetupBlocksConnect(AirPlayPersistence.loadWirelessHotspotMode(this), pendingCarHotspotSetup)) {
-            refuseConnection(
-                getString(R.string.save_your_hotspot_details_in_connection_setup_first),
-                WirelessGap.HOTSPOT_CREDENTIALS,
-            )
-            return
         }
         if (setupError != null) { toast(setupError!!); return }
         if (wireless && AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL &&
@@ -2606,26 +2611,19 @@ class DiPlayActivity : ComponentActivity() {
     /**
      * What a connection would be missing right now.
      *
-     * [probeAdapter] is false for the once-a-second tick. Asking the adapter for its step brings its
-     * page up and reads the USB bus; a tick must not start one, so it reads the state the adapter
-     * last reported instead. That state is the one the page is already painting, so the tick and the
-     * adapter's own line cannot disagree.
+     * Read from the head unit on every call — the once-a-second tick calls it too, because a fact
+     * that changed without a redraw is exactly what the tick is for. What that costs here is a
+     * couple of preference reads, the AP state (one reflective call), the vendor radio's ready flag
+     * and the joined SSID; this build has no adapter route, so the USB enumeration below is never
+     * reached. A build that adds one would make this the wrong thing to call every second.
      */
-    private fun currentWirelessReadiness(probeAdapter: Boolean = true): WirelessReadiness {
+    private fun currentWirelessReadiness(): WirelessReadiness {
         val mode = AirPlayPersistence.loadWirelessHotspotMode(this)
         val hop = DiPlayPreferences.bluetoothHop(this)
-        val plugged = if (probeAdapter) {
-            AdapterRoutes.active?.present(this) == true
-        } else {
-            adapterPluggedSeen == true
-        }
+        val plugged = AdapterRoutes.active?.present(this) == true
         // The adapter radio is the only one whose gaps read the step line, and that line is the adapter's own
         // wording — so it is asked even with the radio out of the socket, where it says so.
-        val seen = when {
-            hop != WirelessBluetoothHop.USB_ADAPTER -> noAdapterSeen()
-            probeAdapter -> adapterStatusNow()
-            else -> adapterSeen ?: noAdapterSeen()
-        }
+        val seen = if (hop == WirelessBluetoothHop.USB_ADAPTER) adapterStatusNow() else noAdapterSeen()
         val pairedAddress = adapterPage?.host?.pairedTarget()?.address
         val saved = DiPlayPreferences.phoneAddress(this)
         val phoneChosen = when (hop) {
@@ -2659,10 +2657,17 @@ class DiPlayActivity : ComponentActivity() {
         )
     }
 
-    private fun gapText(gap: WirelessGap, adapter: WirelessAdapterStatus?): String = when (gap) {
+    /**
+     * The sentence for a gap. [blocks] is whether this gap refuses the connection or only says
+     * something worth knowing: the car's own hotspot being on is both, depending on whether DiPlay
+     * can release it, and the two readings ask the driver to do opposite things.
+     */
+    private fun gapText(gap: WirelessGap, adapter: WirelessAdapterStatus?, blocks: Boolean = true): String = when (gap) {
         WirelessGap.HOTSPOT_CREDENTIALS -> getString(R.string.gap_hotspot_credentials)
         WirelessGap.HOTSPOT_OFF -> getString(R.string.gap_hotspot_off)
-        WirelessGap.HOTSPOT_ON -> getString(R.string.gap_car_hotspot_on)
+        WirelessGap.HOTSPOT_ON -> getString(
+            if (blocks) R.string.gap_car_hotspot_on else R.string.gap_car_hotspot_on_releasing,
+        )
         WirelessGap.CAR_WIFI_DISCONNECTED -> getString(R.string.gap_car_wifi_disconnected)
         WirelessGap.RADIO_NOT_CHOSEN -> getString(R.string.gap_radio)
         WirelessGap.CAR_BLUETOOTH_OFF -> getString(carBluetoothOffText(AdapterRoutes.available))
@@ -2713,17 +2718,23 @@ class DiPlayActivity : ComponentActivity() {
         // rebuild a second would be the churn the in-place design exists to avoid. The gaps are the
         // same ones the settings page prints, from the same one readiness object.
         //
-        // The phase is asked for fresh instead of taken from that object: [pageState] holds its
-        // answer for the length of one redraw, and the tick is not a redraw — reading the session
-        // through it painted whatever was true when the page was built, so a connection that ended
-        // while the driver was looking at the page kept saying it was up.
+        // The phase and the gaps are both asked for fresh instead of taken from [pageState]: that
+        // object holds its answer for the length of one redraw, and the tick is not a redraw —
+        // reading it painted whatever was true when the page was built. The phase kept saying a
+        // connection that had ended was up; the gaps kept saying a hotspot that had since been
+        // turned off was still in the way, until some other tap rebuilt the page.
         hero?.let { card ->
-            val readiness = pageState().readiness
+            val readiness = currentWirelessReadiness()
+            val blocked = wirelessBlocked && readiness.blocking.isNotEmpty()
+            // A notice is what is left once nothing blocks. While something does, the card stays
+            // quiet until the driver tries — the refusal is what raises it, and that has not
+            // changed — and when it is raised the whole list goes up with it.
+            val shown = if (blocked || readiness.blocking.isEmpty()) readiness.gaps else emptyList()
             card.updateState(
                 sessionPhase(CarPlayBackgroundSession.hasSession(), CarPlayBackgroundSession.active),
                 DiPlayPreferences.phoneName(this),
-                readiness.gaps.map { gapText(it, readiness.adapter) },
-                wirelessBlocked && readiness.gaps.isNotEmpty(),
+                shown.map { gapText(it, readiness.adapter, it in readiness.blocking) },
+                blocked,
             )
         }
         // The quick column reads the same live values: the car can join or leave a network, and its

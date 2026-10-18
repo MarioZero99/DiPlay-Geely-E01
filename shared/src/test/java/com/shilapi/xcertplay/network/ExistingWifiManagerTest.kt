@@ -228,6 +228,26 @@ class ExistingWifiManagerTest {
         }
     }
 
+    /**
+     * A station that is switched off is not the same fact as a car that is not on a network, and the
+     * two ask the driver for different things. Off is also the state releasing the car's hotspot
+     * leaves behind on this head unit — the access point and the station share one radio — so the
+     * radio is switched on here rather than waited out.
+     */
+    @Test
+    fun aStationThatIsOffIsSwitchedOnBeforeTheWait() {
+        wifi.isWifiEnabled = false
+        shadowOf(connectivity).removeNetwork(network)
+
+        manager().use { manager ->
+            val failure = assertThrows(IOException::class.java) { start(manager, timeout = 300) }
+            // Switched on, so what is still missing is the network, not the radio.
+            assertTrue(failure.message!!, failure.message!!.contains("a Wi-Fi connection"))
+        }
+        assertTrue("the radio is switched on rather than waited out", wifi.isWifiEnabled)
+        assertTrue(diagnostics.any { it.contains("switched the car's Wi-Fi on") })
+    }
+
     @Test
     fun losingTheNetworkReportsTheChangeOnceAndNotAgainAfterClose() {
         val manager = manager()

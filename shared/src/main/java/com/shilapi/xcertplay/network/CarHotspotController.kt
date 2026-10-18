@@ -179,11 +179,11 @@ class CarHotspotController(context: Context) {
      * attach that follows is about to find out about. That case is logged and answered with null, so
      * the caller carries on and the attempt that follows is what says whether the radio was free.
      *
-     * Station mode is switched back on here, after the access point is gone. The two share one radio
-     * and this firmware's switch is one-way: turning the AP off leaves the station off as well, so a
-     * join that followed would wait for a network nothing was looking for and end in a timeout that
-     * blames the driver's Wi-Fi. Putting the station back is part of releasing the hotspot, not a
-     * separate favour to the caller.
+     * The station side of that shared radio is not handled here. Turning the access point off leaves
+     * it off on this firmware, and the component that needs it —
+     * [ExistingWifiManager.ensureStationMode] — is the one that switches it back on and can name it
+     * in its wait. A controller that is one-way about hotspots should not also be the one that
+     * decides the driver's Wi-Fi is on.
      *
      * @return why the request was refused, or null when it was not — the hotspot was already off, the
      *   firmware accepted the call, or it accepted it without the new state having been confirmed yet.
@@ -200,7 +200,6 @@ class CarHotspotController(context: Context) {
                 if (!awaitDisabled(timeoutMillis)) {
                     DiagLog.w(TAG, "Hotspot disable requested but not confirmed within ${timeoutMillis}ms; continuing")
                 }
-                restoreStationMode(wifi)
                 null
             }
         } catch (error: ReflectiveOperationException) {
@@ -210,22 +209,6 @@ class CarHotspotController(context: Context) {
         } catch (error: RuntimeException) {
             refusalReason(error)
         }
-    }
-
-    /**
-     * Turns the station radio back on once the access point has let go of it.
-     *
-     * Left off, the join that follows finds no Wi-Fi at all and times out; left to a firmware that
-     * puts it back by itself, this is one redundant call. Nothing here switches a hotspot on, which
-     * is the direction this class is deliberately one-way about.
-     */
-    private fun restoreStationMode(wifi: WifiManager) {
-        if (wifi.isWifiEnabled) return
-        // `getOrDefault(false)` on a `Result<Unit>` infers `Any` — Unit on success, Boolean on
-        // failure — so the check below could not be negated. The question here is only whether the
-        // write went through.
-        val enabled = runCatching { wifi.isWifiEnabled = true }.isSuccess
-        if (!enabled) DiagLog.w(TAG, "hotspot released but station mode could not be switched back on")
     }
 
     /** A SecurityException, direct or inside the InvocationTargetException, is the firmware gating us. */

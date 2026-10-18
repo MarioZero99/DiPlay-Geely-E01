@@ -111,54 +111,78 @@ data class WirelessReadinessInput(
     val carWifiAssociated: Boolean,
 )
 
+/**
+ * What the page says about a route, in two lists rather than one.
+ *
+ * [gaps] is everything worth showing: a fact the driver should know about the route as it stands.
+ * [blocking] is the subset that stops a connection from starting. They are separate because a fact
+ * can be worth saying without being the driver's to fix — the car's own hotspot being on is the case
+ * that forced this: the connect path releases it, so refusing over it stopped the very code that
+ * would have cleared it, while saying nothing at all lost the only line that told the driver why
+ * their Wi-Fi was about to go down.
+ *
+ * A caller that starts a connection reads [blocking] (or [ready]); a caller that draws reads [gaps].
+ */
 data class WirelessReadiness(
     val gaps: List<WirelessGap>,
+    val blocking: List<WirelessGap>,
     val adapter: WirelessAdapterStatus?,
 ) {
-    val ready: Boolean get() = gaps.isEmpty()
+    val ready: Boolean get() = blocking.isEmpty()
 }
 
 object WirelessReadinessCheck {
     fun assess(input: WirelessReadinessInput): WirelessReadiness {
         val gaps = mutableListOf<WirelessGap>()
+        val blocking = mutableListOf<WirelessGap>()
+        // Every gap is shown; the second argument decides whether it also refuses a connection.
+        // Defaulting to "yes" keeps the ordinary preconditions — a missing radio, a phone that was
+        // never chosen — reading as one thing rather than two.
+        fun report(gap: WirelessGap, blocks: Boolean = true) {
+            gaps += gap
+            if (blocks) blocking += gap
+        }
         // The car's own hotspot, read one way per route: the hotspot mode needs it up and configured,
         // the same-network mode needs it down. The local-only hotspot builds an access point of its own
         // and asks nothing of the car's — deliberately left alone here.
         when (input.mode) {
             WirelessHotspotMode.MANUAL -> {
-                if (!input.credentialsSaved) gaps += WirelessGap.HOTSPOT_CREDENTIALS
+                if (!input.credentialsSaved) report(WirelessGap.HOTSPOT_CREDENTIALS)
                 // Only when it is known to be off: a head unit that will not report its access point
                 // must not be told to turn on a hotspot that may well already be running.
-                if (input.hotspotOn == false) gaps += WirelessGap.HOTSPOT_OFF
+                if (input.hotspotOn == false) report(WirelessGap.HOTSPOT_OFF)
             }
             WirelessHotspotMode.EXISTING_WIFI -> {
-                when {
-                    // The firmware will not let DiPlay release it, so the driver has to.
-                    input.hotspotOn == true && !input.hotspotCanBeReleased ->
-                        gaps += WirelessGap.HOTSPOT_ON
-                    // Being on the network and running an access point are the same radio, so a car
-                    // whose hotspot is on cannot be associated with anything — and the connect path
-                    // releases the hotspot before it looks for the network. Asking for the
-                    // association here as well was a deadlock: the only way to satisfy it was to
-                    // turn the hotspot off by hand, which is exactly what the release exists to
-                    // avoid. Read the other way round, when no hotspot is holding the radio, being
-                    // on a network is a genuine precondition and only the driver can meet it.
-                    input.hotspotOn == true -> Unit
-                    !input.carWifiAssociated -> gaps += WirelessGap.CAR_WIFI_DISCONNECTED
+                // Shown whenever it is known: this route needs the access point gone, and the driver
+                // is entitled to see that before their Wi-Fi disappears. It refuses the connection
+                // only where DiPlay cannot release it — otherwise the release is the connect path's
+                // job, and refusing here would demand of the driver exactly what the code that
+                // follows was about to do.
+                if (input.hotspotOn == true) {
+                    report(WirelessGap.HOTSPOT_ON, blocks = !input.hotspotCanBeReleased)
+                }
+                // The access point and the station are one radio, so a car whose hotspot is on cannot
+                // be associated with anything — and the connect path releases the hotspot before it
+                // looks for the network. Blocking on the association as well was a deadlock: the only
+                // way to satisfy it was to turn the hotspot off by hand, which is what the release
+                // exists to avoid. With no hotspot holding the radio it is a genuine precondition,
+                // and only the driver can meet it.
+                if (!input.carWifiAssociated) {
+                    report(WirelessGap.CAR_WIFI_DISCONNECTED, blocks = input.hotspotOn != true)
                 }
             }
             WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> Unit
         }
         when (input.hop) {
-            null -> gaps += WirelessGap.RADIO_NOT_CHOSEN
+            null -> report(WirelessGap.RADIO_NOT_CHOSEN)
             WirelessBluetoothHop.CAR -> {
-                if (!input.carBluetoothOn) gaps += WirelessGap.CAR_BLUETOOTH_OFF
-                if (!input.phoneChosen) gaps += WirelessGap.PHONE_NOT_CHOSEN
+                if (!input.carBluetoothOn) report(WirelessGap.CAR_BLUETOOTH_OFF)
+                if (!input.phoneChosen) report(WirelessGap.PHONE_NOT_CHOSEN)
             }
             WirelessBluetoothHop.USB_ADAPTER -> {
                 val status = input.adapter
-                if (status == null || !status.flowEffective) gaps += WirelessGap.DONGLE_NOT_READY
-                else if (!input.phoneChosen) gaps += WirelessGap.PHONE_NOT_CHOSEN
+                if (status == null || !status.flowEffective) report(WirelessGap.DONGLE_NOT_READY)
+                else if (!input.phoneChosen) report(WirelessGap.PHONE_NOT_CHOSEN)
             }
         }
         val adapter = when {
@@ -166,6 +190,6 @@ object WirelessReadinessCheck {
             input.adapterPlugged -> input.adapter
             else -> null
         }
-        return WirelessReadiness(gaps, adapter)
+        return WirelessReadiness(gaps, blocking, adapter)
     }
 }
