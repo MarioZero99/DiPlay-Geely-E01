@@ -9,31 +9,65 @@ against. The base never moves — it is what makes this fork installable on old 
 alignment line, not the base line, is what says how current a release is.
 **Target:** Geely Xingrui E01 (ECARX E01 / MediaTek MT6735, GKUI 19, **Android 5.1 / API 22**).
 
+> 4.1 之后的改动按「新增 / 改进 / 优化 / 修复」汇总在
+> [CHANGELOG-4.1-to-HEAD.md](CHANGELOG-4.1-to-HEAD.md)；这份文件保留逐版本的发版记录。
+
 ---
 
-## 0.4.2-geely — 2026-10-15
+## 0.4.2-geely — 2026-10-18
 
 **Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
 
-**Wireless can join the driver's own network instead of making one.** A third mode beside the car's
-hotspot and Wi-Fi Direct: the head unit joins a network that already exists — an Android phone's
-hotspot, a router, or an iPhone's Personal Hotspot — with the iPhone on the same one. Nothing is
-typed in: the network's name comes from the connection the head unit is on, and its security type
-and key from the configuration the head unit saved when the driver joined it. One radio cannot be a
-station and an access point at once, so the car's own hotspot is switched off for this mode — only
-off, never on — and an attempt that fails leaves it off until the driver turns it back on or
-connects another way.
+**The cockpit is one screen again, drawn for 1920×720.** The home page was a single column that
+scrolled on a 24:9 panel and left the driver hunting for the one control they wanted. It is three
+zones now: a slim dock down the left (home, audio, settings, back to the head unit's own desktop,
+exit), the connection itself in the middle — status, paired phone, the one button, the reason an
+attempt was refused — and the wireless and audio switches on the right. Leaving for the head unit's
+desktop is not quitting: the session and reconnects keep running. Settings open as a half-screen
+drawer from the right instead of replacing the page, and Back closes the drawer first. Exit asks
+once, on every page. The instrument map card now stays up when no second display is detected, and
+says what it is waiting for. Three skins (Dawn white, Sky blue, Night) and a day/night switch that
+follows the head unit, a clock (18:00–06:00), or the driver.
+
+**The projection has a quick bar in it.** Three fingers sliding down over the CarPlay picture drop a
+bar without leaving it: disconnect, the navigation audio channel (0–20, applied to the next
+connection), day/night, and exit behind a second tap within three seconds. It folds after six
+seconds idle, or twenty with the channel strip open, and a tap outside closes it without passing the
+touch to the phone.
+
+**Wireless can join the driver's own network instead of making one.** The Wi-Fi Direct route this
+fork could not use is gone; what replaced it is the mode the driver actually has: the head unit joins
+a network that already exists — an Android phone's hotspot, a router, or an iPhone's Personal Hotspot
+— with the iPhone on the same one. Nothing is typed in: the network's name comes from the connection
+the head unit is on, and its security type and key from the configuration the head unit saved when
+the driver joined it. One radio cannot be a station and an access point at once, so the car's own
+hotspot is switched off for this mode — only off, never on — and an attempt that fails leaves it off
+until the driver turns it back on or connects another way.
 
 **Wireless.** The car's hotspot can be switched on when DiPlay starts, behind a setting that is off
-by default. A failure to read the head unit's saved networks no longer reads the same whether the
-app was refused permission or the network was never saved there — the two want opposite things done
-about them. The wait for a usable network now reports what it is still missing as it goes, so a
-report says where it stopped instead of only that it ran out of time. Failure reasons on this route
-reach the diagnostic report again.
+by default. Releasing that hotspot now hands the radio back: the station side is switched on and
+waited for, instead of the join that followed waiting for a network nothing was looking for. A
+failure to read the head unit's saved networks no longer reads the same whether the app was refused
+permission or the network was never saved there — the two want opposite things done about them. The
+wait for a usable network now reports what it is still missing as it goes, so a report says where it
+stopped instead of only that it ran out of time. A hotspot DiPlay is about to release is no longer
+drawn as a refusal that sends the driver to turn it off by hand. Failure reasons on this route reach
+the diagnostic report again.
+
+**Diagnostics can be written to a USB stick in one tap.** The system file picker would not open on
+some head units, so the report goes to the stick first, then the head unit's Downloads directory,
+then the app's own files, and says which one it used. The head unit's own storage is no longer
+mistaken for a stick. The report carries the last few connection attempts, so a report shows where
+an attempt stopped rather than only that it failed.
 
 **Wheel keys.** Previous/next no longer take the head unit's own keys with them. DiPlay was asking
 for a wider set than it handled, so play/pause stopped working in the car, and the voice key was
 consumed at the window layer for nothing. Only the keys the driver actually reports are taken now.
+
+**Size and cost.** The package is about half the size of 0.4.1 — R8 and resource shrinking, where
+before the dex alone was 13.6 MB. The home page and the drawer update in place instead of being
+rebuilt, the animations stop when they cannot be seen, and video playback puts less on a CPU that
+has 26–33 MB of free memory to work with.
 
 **⚠️ Wireless changes the head unit's own Bluetooth.** Unchanged from 0.4.1, and still true: to
 carry CarPlay's data path, DiPlay takes over the Bluetooth process the head unit is running, **at

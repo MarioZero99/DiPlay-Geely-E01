@@ -1,86 +1,187 @@
-# DiPlay — Geely Xingrui E01
+# DiPlay — 吉利星瑞 E01
 
-[中文](README.zh-CN.md)
+[English](README.en.md) · **中文（主）**
 
-CarPlay for the **2021 Geely Xingrui (星瑞)** head unit. The box is an ECARX E01, MediaTek MT6735, GKUI 19, **Android 5.1 (API 22)**. Install it on the car. No jailbreak, no dongle.
+给 **2021 款吉利星瑞（星瑞）** 车机用的 CarPlay 接收端。车机是亿咖通 E01，联发科 MT6735，GKUI 19，系统 **Android 5.1（API 22）**。装在车机上，不用越狱，不用 Mac，也不用转接盒。
 
-Current build: `0.4.1-geely` (versionCode 41). App id: `com.shihab.diplay`.
+当前版本 **`0.4.2-geely`**，包名 `com.shihab.diplay`。日常安装用 `DiPlay-Legacy-Geely-V042.apk`。
 
-There is no Apple certification, and no relation to Geely or ECARX. The CarPlay name and icon belong to Apple.
+没有 Apple 认证，和吉利、亿咖通也没有关系。CarPlay 的名字和图标属于 Apple。
 
-The reference car is software **5068** (factory batch 5066), build `SWFS11G0706H5181.00600`. Check **Settings → About the smart platform → Version** on the head unit. A different version number can still be installed. On another car the risk below may differ, so read it before installing.
+---
 
-## Read this before installing
+## 界面
 
-Wireless uses the Bluetooth already running on the head unit. To carry CarPlay's data path, DiPlay replaces that Bluetooth process.
+座舱按 1920×720 超宽屏分成三块：左侧 **Slim Dock**，中间 **连接主舞台**，右侧 **无线 / 音频快捷区**。设置收进半屏抽屉，行车中常用的四件事放在三指快捷条里。
 
-- It does not write `/system`. **Reboot the head unit and the original process comes back.**
-- The app has no restore action. Reboot to put the original process back immediately.
-- **Opening DiPlay replaces the process**, whether or not wireless is used, and the replacement stays until the next reboot.
+| 白天 · 晨曦白 | 夜间 · 暗夜 |
+|---|---|
+| ![座舱白天](docs/screenshots/ui-cockpit-day.png) | ![座舱夜间](docs/screenshots/ui-cockpit-night.png) |
 
-Whether the car's own calls and Bluetooth music still work after the swap **has not been tried on this car**. If something breaks, reboot the head unit. This is an unofficial change. It sits outside warranty and can interfere with a later official update.
+| 半屏设置抽屉 | 仪表地图与诊断 |
+|---|---|
+| ![设置抽屉](docs/screenshots/ui-settings-drawer.png) | ![仪表地图与诊断](docs/screenshots/ui-drawer-display-cluster.png) |
 
-To avoid that, use a cable. USB leaves Bluetooth alone.
+**退出确认**
 
-The full risk note and disclaimer are in the [v0.4.1 notes](docs/release-notes/v0.4.1-geely.md). Read them before deciding to install.
+![退出确认](docs/screenshots/ui-exit-sheet.png)
 
-## Tried on this car
+> 截图来自 AVD 开发构建。开发构建不带配件身份，所以主舞台会显示「无法加载 CarPlay 认证」；正式包带有身份，正常不会出现这一行。截图摄于皮肤改名之前，设置抽屉里的按钮仍显示旧称；实际界面以「晨曦白 / 晴空蓝 / 暗夜」为准。
 
-**Previous / next** on the steering wheel changes tracks. The head unit turns those two keys into ordinary media keys, and DiPlay receives them. Log from the car: `DiPlay-MediaKeys: media key -> CarPlay 4/5 sent=true`.
+---
 
-The wheel has no play/pause key. That position is the **screen-mirroring button** (飞屏). It stays inside the head unit's own UI, so no app receives it.
+## 现在能做什么
 
-Wired USB has shown a picture on this car. An iPhone 17 Pro Max draws more current than this USB port supplies, so the session drops and reconnects. A powered hub in between avoids that.
+- **有线 CarPlay**：USB 数据线插车机数据口，可以在参考车上出画面。
+- **无线 · 车载热点**：车机开热点，iPhone 连车机热点，蓝牙配对后连接。DiPlay 会读取车机保存的热点名和密码，能用 5 GHz 就用 5 GHz。
+- **无线 · 同一 Wi-Fi**：车机不开热点，改为加入一张已经存在的网（安卓手机热点、路由器、iPhone 个人热点），iPhone 连同一张网。网名和密码由 DiPlay 从车机读取；读不到密码时可以手填一次。
+- **方向盘切歌**：上一首 / 下一首可用。方向盘那个位置没有播放/暂停，它是车机的飞屏键，应用收不到。
+- **投屏内快捷条**：在 CarPlay 画面里三指向下滑，直接断开、选导航音频流、切日夜、退出应用，不离开投屏。
+- **诊断报告**：设置里保存，优先写 U 盘，其次车机 Downloads / 应用私有目录；公开发布的包不会自动上传。
 
-Wireless, and the settings page changed later, are only partly tried on the car. The changelog records code changes. Anything that does not say it was checked on the car still needs a car.
+### 无线怎么选
 
-## Install
+| | 车载热点 | 同一 Wi-Fi |
+|---|---|---|
+| 谁开网 | 车机开热点 | 车机加入已有的网 |
+| iPhone | 连车机热点 | 连同一张网 |
+| 车机热点 | 使用 | **会被关掉**，不使用 |
+| 适合 | 车里没有别的网 | 手机热点 / 家里路由器 / iPhone 个人热点 |
+| 注意 | 车机热点和 Wi-Fi 调试可能冲突 | 一块无线网卡不能同时当 AP 和 station |
 
-The head unit must allow APK installation.
+同一 Wi-Fi 模式失败时，先看车机自己有没有连上那张网；车机没连上，DiPlay 没有可读的网名和密码。切回车载热点模式后，再打开车机热点即可。
 
-Moving from upstream DiPlay, the signing key is different, so this build cannot replace that install. Uninstall first. Uninstalling clears resolution, the audio buffer, steering-wheel key settings and saved Wi-Fi.
+---
 
-A later build of this fork can install over the previous one. Those settings remain.
+## 装之前先看完
+
+无线 CarPlay 借的是车机自己那套厂商蓝牙。为了接上 CarPlay 的数据通道，DiPlay 会**替换车机正在运行的蓝牙底层进程**。
+
+- **不写 `/system`**。系统分区不动，**重启车机后原进程自己回来**。
+- **应用里没有“还原”按钮**。要马上恢复，重启车机。
+- **打开 DiPlay 就会替换**，这次用不用无线都一样；替换会一直留到下次重启。
+- 车机原来的**电话、蓝牙音乐**在进程换过之后是否还正常，**这台车没有试过**。出问题先重启车机。
+- 这是非官方改动，不在保修范围内，也可能影响以后的官方 OTA。
+
+不想接受这件事，就用有线。**有线不碰蓝牙。**
+
+风险和免责的完整段落见 [0.4.2 发版说明](docs/release-notes/v0.4.2-geely.md)。
+
+---
+
+## 安装
+
+车机要允许安装 APK。
+
+从**上游 DiPlay** 换到这一支，签名不同，不能覆盖安装，需要先卸载。卸载会清掉分辨率、音频缓冲、方向盘按键和保存的 Wi-Fi。
+
+以后还用这一支的新版本，可以直接覆盖，设置会留下。
 
 ```sh
 adb uninstall com.shihab.diplay
-adb install -r DiPlay-Legacy-Geely-V041.apk
+adb install -r DiPlay-Legacy-Geely-V042.apk
 ```
 
-Without ADB, copy the APK to a USB stick and install it from the head unit's file manager. Allow unknown sources.
+没有 ADB 时，把 APK 拷到 U 盘，用车机文件管理器安装，并允许「未知来源」。
 
-## After it opens
+### 下哪个包
 
-Wireless uses the **built-in car hotspot**. The name and password are already on the head unit. If none were entered by hand, DiPlay reads them. It uses 5 GHz when the radio allows it. Turn on Bluetooth and Wi-Fi on the phone, pair it with the car, then tap **Connect phone**.
+日常安装用 `DiPlay-Legacy-Geely-V042.apk`。仓库里带 `-local` 的是内部试验包，功能可能不稳定，不建议日常使用。
 
-For a cable, tap **Connect with USB**. Use a data cable in a data port. A charge-only cable does nothing.
+---
 
-**Swipe down with three fingers** on the CarPlay screen to drop down the quick bar: disconnect, the navigation audio stream, day/night, and exit — all without leaving the picture. Everything else is on DiPlay's home page, where the gear opens the settings drawer. Resolution, frame rate and icon size take effect only after **Apply and reconnect** during a session. Selecting a value alone leaves the previous one in place.
+## 连上之后
 
-If the connection stalls, open settings and **Save diagnostic report**. The published package has no upload key, so logs are not sent out on their own. Remove passwords and pairing records before posting a report to a public issue.
+### 无线 · 车载热点
 
-## Memory on this head unit
+1. 手机打开蓝牙和 Wi-Fi，和车机配对。
+2. 车机热点开着。没有另外填写时，DiPlay 直接读车机保存的热点名和密码。
+3. 点 **连接手机**。第一次连接时 iPhone 可能弹一次允许提示。
 
-Free memory is often only **26–33 MB**. Spending a large block of it on smoother audio is a poor trade here, so that approach is not included. GKUI has no split screen, so DiPlay stays full screen.
+### 无线 · 同一 Wi-Fi
 
-The build still keeps an **Android 4.4 (API 19)** floor, so older head units can be built for. The car actually used is this 5.1 unit. Other cars have not been checked.
+1. 在车机自己的 Wi-Fi 设置里，把车机连到和 iPhone 同一张网。
+2. 回到 DiPlay，无线模式选 **同一 Wi-Fi 网络**。
+3. 如果车机不肯交出这张网的密码，在「填写 Wi-Fi 密码」里填一次；密码只用于这张网。
+4. 点 **连接手机**。
 
-## Origin
+### 有线
 
-This line is the Geely fork of [programmerguohuajing/DiPlay-Legacy-Android](https://github.com/programmerguohuajing/DiPlay-Legacy-Android), which forks [shihabal3amri/DiPlay](https://github.com/shihabal3amri/DiPlay). The base is upstream **v0.2.7**. BYD's cluster, HUD and battery have no matching hardware here, and that code has been removed.
+点 **通过 USB 连接**。要用数据线，插在能传数据的口上；只充电的线没有反应。
 
-The receiver is based on [xcertplay](https://github.com/shilapi/xcertplay), GPL-3.0. The home and settings UI adapt [DiAuto](https://github.com/shihabal3amri/DiAuto), AGPL-3.0. The licenses are in `docs/licenses`. Keep those notices when distributing a modified build.
+参考车上的 iPhone 17 Pro Max 需要的电流超过这个 USB 口的供电，连接会断开再重连。中间加一个带供电的 Hub 可以避开。
 
-The repository is a clean public source snapshot. Accessory keys and the Android signing key are not in it. The release APK carries an experimental accessory identity taken from public Carlinkit firmware. It is not an MFi identity issued for DiPlay. The private key can be extracted from the package. Whether a future iOS still accepts it, and whether it is fit for wide distribution, is still unsettled. A local source build omits that identity unless asked for. Details are in the [build notes](docs/BUILD.md) and the [credits](docs/THIRD_PARTY_NOTICES.md).
+### 三指快捷条
 
-## Further reading
+在 CarPlay 画面里**三指向下滑**：
 
-- [This release](docs/release-notes/v0.4.1-geely.md)
-- [Changelog](CHANGELOG.md)
-- [Build from source](docs/BUILD.md)
-- [Install and connect](docs/INSTALL.md)
-- [Connection setup](docs/CONNECTION_SETUP.md)
-- [Compatibility](docs/COMPATIBILITY.md)
-- [Privacy and diagnostic reports](docs/PRIVACY.md)
-- [Validation](docs/VALIDATION.md)
-- [Credits and licenses](docs/THIRD_PARTY_NOTICES.md)
+- **断开连接**：结束会话，回 DiPlay 首页。
+- **导航音频流**：展开 0–20 频道条，选中即保存，**下次连接生效**，当前会话不会立刻换。
+- **日 / 夜**：翻转当前日夜；车机灯光信号仍是最终权威，下一次配置变化会覆盖。
+- **退出应用**：两段确认，3 秒内再点一次才退出。
+
+6 秒无操作自动收起；频道条展开时给 20 秒。点条外空白处也会关闭，显示期间触摸不会漏给 CarPlay。
+
+### 设置
+
+首页点齿轮，或 Dock 上的设置键，打开右侧半屏抽屉。所有设置都在这一页，分三组：
+
+- **无线 / 有线**
+- **显示与音频**：CarPlay 尺寸、分辨率（100% / 80% / 60%）、音乐缓冲（300 / 500 / 1000 ms）、帧率（30 / 60）、编码（H.264 / H.265）、直接渲染、右舵、全屏、物理尺寸、导航音频通道、仪表地图。
+- **系统**：开机自启、向 iPhone 上报位置、调试日志、权限、语言、诊断报告。
+
+分辨率、帧率、图标大小、音乐缓冲这几项，连接中要按 **应用并重连** 才生效；只选中，用的还是原来的值。改连接类设置会结束当前会话并回首页，不会替你自动重连。
+
+### 外观
+
+- **晨曦白**（默认）：纯白 + 暖橙。
+- **晴空蓝**：纯白 + 清透蓝。
+- **暗夜**：防眩光深色。
+
+日夜切换有三种：**跟随车机**、**按时间**（18:00–06:00）、**手动**。默认跟随车机大灯/系统暗色信号。
+
+---
+
+## 这台车上的实测与边界
+
+| 项目 | 状态 |
+|---|---|
+| 方向盘上一首 / 下一首 | ✅ 参考车实车验证 |
+| 有线 USB 出画面 | ✅ 参考车出过画面；供电不足会掉线重连 |
+| 内置蓝牙无线 | 🟡 2026-10-14 在车上通过一次；最新座舱改动未复测 |
+| 同一 Wi-Fi 模式 | 🟡 桌面/AVD 验证，车上尚未走通 |
+| 座舱 UI / 抽屉 / 三指快捷条 | 🟡 AVD 1920×720 实测；没有实车长时间驾驶验证 |
+| U 盘诊断导出 | 🟡 代码与单测完成；车机真实 U 盘写入待验证 |
+| 车机电话 / 蓝牙音乐在无线接管后 | ❌ 未在车上验证 |
+| 来电、Siri、长时间导航、未来 iOS | ❌ 需要更大范围测试 |
+
+参考车的软件版本是 **5068**（出厂批次 5066），内部版本 `SWFS11G0706H5181.00600`。在车机 **设置 → 关于智能平台 → 版本信息** 里核对。版本号不同也能装，但风险可能不一样。
+
+**内存是这台车的硬约束**：空闲内存常常只有 **26–33 MB**。所以没有做“用大块内存换更顺的声音”，座舱也尽量少重建，避免每秒刷新整页。GKUI 没有分屏，DiPlay 一直全屏。
+
+也能编给 **Android 4.4** 的老车机；实际验证的是这台 5.1。其他车型没有验证过。无线只保留“车机热点”和“同一 Wi-Fi”两种方式，不再提供用不了的直连模式。
+
+---
+
+## 从哪来
+
+这一支是 [programmerguohuajing/DiPlay-Legacy-Android](https://github.com/programmerguohuajing/DiPlay-Legacy-Android) 的吉利版本，再往上是 [shihabal3amri/DiPlay](https://github.com/shihabal3amri/DiPlay)。底子是上游 **v0.2.7**。比亚迪的仪表、HUD 和电池在这台上没有对应硬件，相关代码已经去掉。
+
+协议基于 [xcertplay](https://github.com/shilapi/xcertplay)，GPL-3.0。主页和设置界面改编自 [DiAuto](https://github.com/shihabal3amri/DiAuto)，AGPL-3.0，许可证在 `docs/licenses`。再分发修改版时，请把这些声明留下。
+
+仓库不包含签名密钥。正式包带有一份实验性配件身份，取自公开的 Carlinkit 固件，不是 DiPlay 的 MFi 身份；以后的 iOS 是否还接受，目前没有保证。细节见[构建说明](docs/BUILD.md)和[致谢](docs/THIRD_PARTY_NOTICES.md)。
+
+---
+
+## 更多说明
+
+- [4.1 之后改了什么（新增 / 改进 / 优化 / 修复）](CHANGELOG-4.1-to-HEAD.md)
+- [完整更新日志](CHANGELOG.md)
+- [0.4.2 发版说明](docs/release-notes/v0.4.2-geely.md)
+- [从源码构建（开发者）](docs/BUILD.md)
+- [安装与连接](docs/INSTALL.md)
+- [连接设置](docs/CONNECTION_SETUP.md)
+- [兼容性](docs/COMPATIBILITY.md)
+- [隐私与诊断报告](docs/PRIVACY.md)
+- [验证](docs/VALIDATION.md)
+- [致谢与许可证](docs/THIRD_PARTY_NOTICES.md)
