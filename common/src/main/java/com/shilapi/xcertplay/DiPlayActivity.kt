@@ -212,11 +212,26 @@ class DiPlayActivity : ComponentActivity() {
     private val usbTopology = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) = onUsbTopologyChanged()
     }
+
+    /**
+     * The mount paths the system has announced. A stick plugged in while the app is open does not
+     * appear in getExternalFilesDirs until something asks again, and asking means creating directories
+     * and writing a file to see — disk I/O the drawing thread is not allowed to do. So the broadcast
+     * is recorded here and read once, on the export's own thread.
+     */
+    private val mountedUsbPaths = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val mediaMount = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val path = intent.data?.path ?: return
+            when (intent.action) {
+                Intent.ACTION_MEDIA_MOUNTED -> mountedUsbPaths.add(path)
+                Intent.ACTION_MEDIA_UNMOUNTED, Intent.ACTION_MEDIA_REMOVED, Intent.ACTION_MEDIA_BAD_REMOVAL ->
+                    mountedUsbPaths.remove(path)
+            }
+        }
+    }
     private val bluetoothPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) render() else permissionHelp(getString(R.string.nearby_devices), getString(R.string.allow_nearby_devices_so_diplay_can_connect_to_your_paired))
-    }
-    private val export = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
-        if (uri != null) exportDiagnostics(uri)
     }
 
     private var languagePreferenceAtCreate = AppLocale.SYSTEM
@@ -253,6 +268,18 @@ class DiPlayActivity : ComponentActivity() {
         openOntoRunningFirmwareOperation()
         startVendorHopInBackground()
         wakeCarHotspotInBackground()
+        // Listened to for the activity's whole life rather than only while the page is visible: the
+        // stick is usually plugged in before the driver opens settings, and the export happens on
+        // whichever page they were already on.
+        runCatching {
+            registerReceiver(mediaMount, IntentFilter().apply {
+                addAction(Intent.ACTION_MEDIA_MOUNTED)
+                addAction(Intent.ACTION_MEDIA_UNMOUNTED)
+                addAction(Intent.ACTION_MEDIA_REMOVED)
+                addAction(Intent.ACTION_MEDIA_BAD_REMOVAL)
+                addDataScheme("file")
+            })
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 // The exit question is drawn over everything else, so it is answered or dismissed
@@ -319,6 +346,8 @@ class DiPlayActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         handler.removeCallbacks(maintenanceTick)
+        // Registered in onCreate, so its counterpart is here and not in onPause.
+        runCatching { unregisterReceiver(mediaMount) }
         releaseAdapterPage()
         super.onDestroy()
     }
@@ -797,13 +826,10 @@ class DiPlayActivity : ComponentActivity() {
         // at their built-in values.
         columns.card(R.string.diagnostics, R.drawable.ic_dp_diagnostics) { card ->
             exportButton = button(if (exportInProgress) getString(R.string.saving_report) else getString(R.string.save_diagnostic_report), false) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) exportDiagnostics()
-                else chooseReportDestination()
+                exportDiagnostics()
             }.apply { isEnabled = !exportInProgress }
             card.addView(exportButton, matchButton(10, 60))
-            card.addView(button(getString(R.string.choose_save_location), false) { chooseReportDestination() }, matchButton(10, 60))
-            val destination = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) getString(R.string.reports_save_to_downloads_diplay) else getString(R.string.choose_where_to_save_your_report)
-            card.addView(label(destination + getString(R.string.nothing_is_sent_automatically_protocol_payloads_and_creden), 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
+            card.addView(label(getString(R.string.reports_save_to_usb_or_downloads) + getString(R.string.nothing_is_sent_automatically_protocol_payloads_and_creden), 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
         }
         columns.card(R.string.automatic_connection, R.drawable.ic_dp_automation) { card ->
             toggle(card, getString(R.string.open_after_the_car_starts), getString(R.string.availability_depends_on_your_head_unit_s_startup_settings), AirPlayPersistence.loadAutoStartOnBoot(this)) { AirPlayPersistence.saveAutoStartOnBoot(this, it) }
@@ -2645,63 +2671,96 @@ class DiPlayActivity : ComponentActivity() {
                 wirelessBlocked && readiness.gaps.isNotEmpty(),
             )
         }
+        // The quick column reads the same live values: the car can join or leave a network, and its
+        // saved hotspot name can change in the car's settings, while this page is up — no tap
+        // rebuilds it. Equal values are a no-op inside updateState, so a quiet tick touches nothing.
+        widgets?.updateState(
+            currentHotspotMode(),
+            hotspotSsid(),
+            joinedWifiName(),
+            audioChannelLabel(),
+        )
     }
     private fun reportFileName() = "DiPlay-${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())}.txt"
 
-    private fun chooseReportDestination() {
-        // Some head units omit or disable DocumentsUI. Launch itself can throw, before
-        // the result callback and the background writer's exception handler ever run.
-        if (exportInProgress) return
-        runCatching { export.launch(reportFileName()) }.onFailure { exportDiagnostics() }
-    }
-
-    private fun exportDiagnostics(uri: Uri? = null) {
+    /**
+     * One button, one exit. The store decides which layer can take the bytes; this only reports what
+     * it decided, in the words that decision deserves.
+     *
+     * Nothing is probed here. Proving a volume writable means creating a directory and writing a file
+     * to it, and doing that while the page is laid out is disk I/O on the drawing thread — the one
+     * pause a driver notices as a frozen screen.
+     */
+    private fun exportDiagnostics() {
         if (exportInProgress) return
         exportInProgress = true
         exportButton?.apply { isEnabled = false; text = getString(R.string.saving_report) }
         val appContext = applicationContext
         val fileName = reportFileName()
+        val mounted = mountedUsbPaths.toSet()
         Thread({
             val result = runCatching {
                 val report = buildDiagnosticReport(appContext)
-                val savedReport = if (uri != null) {
-                    DiagnosticExportStore.write(appContext.contentResolver, uri, report)
-                    DiagnosticExportStore.SavedReport(uri)
-                } else DiagnosticExportStore.saveWithoutPicker(appContext, fileName, report)
-                savedReport to report
+                DiagnosticExportStore.export(appContext, fileName, report, mounted) to report
             }
             runOnUiThread {
                 exportInProgress = false
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 exportButton?.apply { isEnabled = true; text = getString(R.string.save_diagnostic_report) }
-                if (result.isSuccess) {
-                    val (savedReport, report) = result.getOrThrow()
-                    AlertDialog.Builder(this).setTitle(getString(R.string.diagnostic_report_saved))
-                        .setMessage(when {
-                            savedReport.savedInApp -> getString(R.string.diagnostic_report_saved_in_app)
-                            savedReport.savedPath != null -> getString(R.string.diagnostic_report_saved_to_path, savedReport.savedPath)
-                            uri == null -> "Downloads/DiPlay/$fileName"
-                            else -> getString(R.string.your_report_was_saved_to_the_selected_location)
-                        })
-                        .setPositiveButton(getString(R.string.view_diagnostic_report)) { _, _ -> showDiagnosticReport(report) }
-                        .setNegativeButton(getString(R.string.done), null)
-                        .setNeutralButton(getString(R.string.share)) { _, _ ->
-                            runCatching {
-                                startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"; putExtra(Intent.EXTRA_STREAM, savedReport.uri)
-                                    clipData = android.content.ClipData.newRawUri(getString(R.string.report_clip_label), savedReport.uri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }, getString(R.string.share_diagnostic_report)))
-                            }.onFailure { showDiagnosticReport(report) }
-                        }.show()
-                } else {
-                    AlertDialog.Builder(this).setTitle(getString(R.string.could_not_save_the_report))
-                        .setMessage(getString(R.string.check_that_storage_is_available_or_choose_another_save_loc))
-                        .setPositiveButton(getString(R.string.choose_location)) { _, _ -> chooseReportDestination() }
-                        .setNegativeButton(getString(R.string.close), null).show()
-                }
+                result.fold(
+                    onSuccess = { (outcome, report) -> showExportOutcome(outcome, report) },
+                    onFailure = {
+                        AlertDialog.Builder(this).setTitle(getString(R.string.could_not_save_the_report))
+                            .setMessage(getString(R.string.check_that_storage_is_available_or_choose_another_save_loc))
+                            .setPositiveButton(getString(R.string.close), null).show()
+                    },
+                )
             }
         }, "diplay-export").start()
+    }
+
+    /**
+     * What happened, not what was attempted. A report on the stick and a report on the head unit are
+     * different titles and different sentences, and the probe's own line sits under both: it names the
+     * mount point and the kernel's reason, which is the only evidence a driver can carry away from a
+     * head unit with no adb and no log view.
+     */
+    private fun showExportOutcome(outcome: ExportOutcome, report: String) {
+        val onUsb = outcome.destination == ExportDestination.USB_ROOT ||
+            outcome.destination == ExportDestination.USB_PACKAGE_DIR
+        val body = column().apply { setPadding(dp(24), dp(4), dp(24), 0) }
+        val message = if (onUsb) R.string.diagnostic_report_saved_to_usb else R.string.diagnostic_report_saved_to_device_no_usb
+        body.addView(label(getString(message, outcome.primaryPath), 16, TEXT).apply {
+            layoutParams = LinearLayout.LayoutParams(-1, -2)
+        })
+        if (outcome.probeSummary.isNotBlank()) {
+            body.addView(label(outcome.probeSummary, 12, MUTED).apply {
+                layoutParams = LinearLayout.LayoutParams(-1, -2)
+                setPadding(0, dp(12), 0, 0)
+            })
+        }
+        val builder = AlertDialog.Builder(this)
+            .setTitle(getString(if (onUsb) R.string.diagnostic_report_saved else R.string.no_writable_usb_detected))
+            .setView(body)
+            .setPositiveButton(getString(R.string.view_diagnostic_report)) { _, _ -> showDiagnosticReport(report) }
+            .setNegativeButton(getString(R.string.done), null)
+        // No managed copy means no URI the provider may sign, so there is nothing a share sheet could
+        // open. A button that could only fail is worse than no button.
+        outcome.shareableUri?.let { uri ->
+            builder.setNeutralButton(getString(R.string.share)) { _, _ -> shareReport(uri, report) }
+        }
+        builder.show()
+    }
+
+    private fun shareReport(uri: Uri, report: String) {
+        runCatching {
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = android.content.ClipData.newRawUri(getString(R.string.report_clip_label), uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }, getString(R.string.share_diagnostic_report)))
+        }.onFailure { showDiagnosticReport(report) }
     }
 
     /**

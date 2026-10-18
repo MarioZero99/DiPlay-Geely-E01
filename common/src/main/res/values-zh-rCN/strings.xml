@@ -158,11 +158,8 @@
     <string name="channel_is_not_valid_for_the_selected_band">所选频段不支持此信道</string>
     <string name="channel_must_be_0_or_1_196">信道必须为 0 或 1–196</string>
     <string name="check_and_enable">检查并启用</string>
-    <string name="check_that_storage_is_available_or_choose_another_save_loc">请检查存储空间，或选择其他保存位置。</string>
+    <string name="check_that_storage_is_available_or_choose_another_save_loc">请检查存储是否可用，然后重试。</string>
     <string name="choose_iphone">选择 iPhone</string>
-    <string name="choose_location">选择位置</string>
-    <string name="choose_save_location">选择保存位置</string>
-    <string name="choose_where_to_save_your_report">选择报告的保存位置。如果文件选择器不可用，DiPlay 会在应用内保存报告。\u0020</string>
     <string name="choose_your_iphone">选择 iPhone</string>
     <string name="close">关闭</string>
     <string name="cluster_map_size">仪表盘地图大小</string>
@@ -316,7 +313,7 @@
     <string name="report_android_location_to_the_iphone">向 iPhone 报告 Android 位置</string>
     <string name="report_location_to_iphone">向 iPhone 报告位置</string>
     <string name="report_saved_open_it_from_your_file_manager_to_share_it">报告已保存。在文件管理器中打开即可分享。</string>
-    <string name="reports_save_to_downloads_diplay">报告将保存到 Downloads/DiPlay。</string>
+    <string name="reports_save_to_usb_or_downloads">U 盘可写时保存到 U 盘，否则保存到 Downloads/DiPlay。</string>
     <string name="requesting_iphone_usb_permission">正在请求 iPhone USB 权限</string>
     <string name="requesting_mfi_usb_permission">正在请求 MFi USB 权限</string>
     <string name="reset">重置</string>
@@ -425,7 +422,6 @@
     <string name="your_iphone_isn_t_available_unlock_it_and_check_bluetooth">暂时找不到 iPhone。请解锁手机并检查蓝牙。</string>
     <string name="your_maps_music_and_conversations_carplay_right_here_on_yo">地图、音乐与通话，\n在车机屏幕上畅享 CarPlay。</string>
     <string name="your_phone_your_drive">你的手机，畅享旅程。</string>
-    <string name="your_report_was_saved_to_the_selected_location">报告已保存到所选位置。</string>
     <string name="cluster_waiting_for_map">DiPlay · 等待 CarPlay 地图</string>
     <string name="option_size_large">大</string>
     <string name="option_size_medium">中</string>
@@ -449,8 +445,9 @@
     <string name="turn_card_vertical">转向提示卡 · 垂直位置</string>
     <string name="reset_turn_card_to_centre">将转向提示卡重置到中央</string>
     <string name="usb_auto_confirm_desc">自动勾选「始终允许」并确认 Android 的 USB 配件授权弹窗，用于 CarPlay</string>
-    <string name="diagnostic_report_saved_in_app">由于公共保存位置不可用，报告已私密保存到 DiPlay。您可以在此分享或查看报告。不会自动发送任何内容。</string>
-    <string name="diagnostic_report_saved_to_path">报告已保存到：\n%1$s\n\n您也可以在此分享或查看报告。不会自动发送任何内容。</string>
+    <string name="diagnostic_report_saved_to_usb">报告已存入 U 盘：\n%1$s\n\n您也可以在此分享或查看报告。不会自动发送任何内容。</string>
+    <string name="diagnostic_report_saved_to_device_no_usb">未检测到可写 U 盘（或 U 盘无写入权限），报告已保存至车机：\n%1$s\n\n您可以在此分享或查看报告。不会自动发送任何内容。</string>
+    <string name="no_writable_usb_detected">未检测到可写 U 盘</string>
     <string name="view_diagnostic_report">查看报告</string>
     <string name="diagnostic_report_copy_hint">长按报告文本即可选择并复制。如果没有可用的分享应用，可以使用此方式。</string>
     <string name="adapter_pair_hint">在 iPhone 上打开「设置 → 蓝牙 → 其他设备」，点上面显示的这个名字。不要点车机原有的蓝牙条目。</string>

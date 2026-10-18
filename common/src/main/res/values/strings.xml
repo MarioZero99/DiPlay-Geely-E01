@@ -165,11 +165,8 @@
     <string name="channel_is_not_valid_for_the_selected_band">Channel is not valid for the selected band</string>
     <string name="channel_must_be_0_or_1_196">Channel must be 0 or 1-196</string>
     <string name="check_and_enable">Check and enable</string>
-    <string name="check_that_storage_is_available_or_choose_another_save_loc">Check that storage is available, or choose another save location.</string>
+    <string name="check_that_storage_is_available_or_choose_another_save_loc">Check that storage is available, then try again.</string>
     <string name="choose_iphone">Choose iPhone</string>
-    <string name="choose_location">Choose location</string>
-    <string name="choose_save_location">Choose save location</string>
-    <string name="choose_where_to_save_your_report">Choose where to save your report. If the file picker is unavailable, DiPlay saves it in the app.\u0020</string>
     <string name="choose_your_iphone">Choose your iPhone</string>
     <string name="close">Close</string>
     <string name="cluster_map_size">Dashboard map size</string>
@@ -317,7 +314,7 @@
     <string name="report_android_location_to_the_iphone">Report Android location to the iPhone</string>
     <string name="report_location_to_iphone">Report location to iPhone</string>
     <string name="report_saved_open_it_from_your_file_manager_to_share_it">Report saved. Open it from your file manager to share it.</string>
-    <string name="reports_save_to_downloads_diplay">Reports save to Downloads/DiPlay.\u0020</string>
+    <string name="reports_save_to_usb_or_downloads">Saves to a USB drive when one is writable, otherwise to Downloads/DiPlay.\u0020</string>
     <string name="requesting_iphone_usb_permission">Requesting iPhone USB permission</string>
     <string name="requesting_mfi_usb_permission">Requesting MFi USB permission</string>
     <string name="reset">Reset</string>
@@ -426,7 +423,6 @@
     <string name="your_iphone_isn_t_available_unlock_it_and_check_bluetooth">Your iPhone isn’t available. Unlock it and check Bluetooth.</string>
     <string name="your_maps_music_and_conversations_carplay_right_here_on_yo">Your maps, music and conversations.\nCarPlay, right here on your car display.</string>
     <string name="your_phone_your_drive">YOUR PHONE. YOUR DRIVE.</string>
-    <string name="your_report_was_saved_to_the_selected_location">Your report was saved to the selected location.</string>
     <string name="cluster_waiting_for_map">DiPlay · waiting for the CarPlay map</string>
     <string name="option_size_large">Large</string>
     <string name="option_size_medium">Medium</string>
@@ -450,8 +446,9 @@
     <string name="turn_card_vertical">Turn card · vertical</string>
     <string name="reset_turn_card_to_centre">Reset turn card to centre</string>
     <string name="usb_auto_confirm_desc">Automatically ticks Always allow and confirms the Android USB accessory prompt for CarPlay</string>
-    <string name="diagnostic_report_saved_in_app">Your report was saved privately in DiPlay because a public save location was unavailable. Share it or view it here. Nothing is sent automatically.</string>
-    <string name="diagnostic_report_saved_to_path">Your report was saved to:\n%1$s\n\nYou can also share it or view it here. Nothing is sent automatically.</string>
+    <string name="diagnostic_report_saved_to_usb">Report was saved to USB drive:\n%1$s\n\nYou can also share or view it here. Nothing is sent automatically.</string>
+    <string name="diagnostic_report_saved_to_device_no_usb">No writable USB drive detected (or no write permission). Report was saved to head unit:\n%1$s\n\nYou can also share or view it here. Nothing is sent automatically.</string>
+    <string name="no_writable_usb_detected">No writable USB drive detected</string>
     <string name="view_diagnostic_report">View report</string>
     <string name="diagnostic_report_copy_hint">Touch and hold the report text to select and copy it. You can use this if no sharing app is available.</string>
     <string name="adapter_pair_hint">On your iPhone open Settings → Bluetooth → Other Devices, then tap the name above. Do not tap the car\'s existing Bluetooth entry.</string>

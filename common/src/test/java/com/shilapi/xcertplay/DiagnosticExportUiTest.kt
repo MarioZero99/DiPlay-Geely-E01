@@ -1,14 +1,12 @@
 package com.shilapi.xcertplay
 
-import android.content.ActivityNotFoundException
+import android.app.AlertDialog
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
-import androidx.activity.result.ActivityResultLauncher
-import androidx.core.app.ActivityOptionsCompat
 import com.shilapi.xcertplay.host.R
 import org.junit.Assert.*
 import org.junit.Test
@@ -25,42 +23,57 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "en", shadows = [FileProviderPathTestShadow::class])
 class DiagnosticExportUiTest {
-    @Test fun missingPickerSavesAReportAndProvidesSelectableTextInsideDiPlay() {
+    /**
+     * No stick on this head unit, so the dialog must not claim one: it names the device copy, and
+     * the probe line underneath is the evidence a driver can photograph for a bug report.
+     */
+    @Test fun aReportWithNoStickSaysSoAndShowsTheProbeLine() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
         val activity = controller.get()
         val context = activity.applicationContext
-        val authority = "${context.packageName}.diagnostic-reports"
-        val info = context.packageManager.resolveContentProvider(authority, PackageManager.GET_META_DATA)!!
-        ShadowContentResolver.registerProviderInternal(authority, DiagnosticReportProvider().apply { attachInfo(context, info) })
-        val missingPicker = object : ActivityResultLauncher<String>() {
-            override fun launch(input: String, options: ActivityOptionsCompat?) {
-                throw ActivityNotFoundException("No DocumentsUI")
-            }
-            override fun unregister() = Unit
-            override fun getContract() = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/plain")
-        }
-        ReflectionHelpers.setField(activity, "export", missingPicker)
+        registerReportProvider(context)
         try {
-            ReflectionHelpers.callInstanceMethod<Unit>(activity, "chooseReportDestination")
-            val deadline = System.nanoTime() + 5_000_000_000L
-            while (ShadowAlertDialog.getLatestAlertDialog() == null && System.nanoTime() < deadline) {
-                Thread.sleep(20)
-                shadowOf(Looper.getMainLooper()).idle()
-            }
-            val saved = requireNotNull(ShadowAlertDialog.getLatestAlertDialog())
-            val reports = File(context.getExternalFilesDir(null)!!, "diagnostic-reports")
-            val file = reports.listFiles()!!.single()
-            assertTrue(file.name.endsWith(".txt"))
-            assertTrue(descendants(saved.window!!.decorView).filterIsInstance<TextView>()
-                .any { it.text.contains(file.absolutePath) })
-            assertTrue(file.readText().contains("Android 9 / API 28"))
-            saved.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "exportDiagnostics")
+            val saved = awaitDialog()
+            assertEquals("No writable USB drive detected", shadowOf(saved).title.toString())
+            val texts = descendants(saved.window!!.decorView).filterIsInstance<TextView>()
+            val body = texts.first { it.text.contains("Report was saved to head unit") }
+            assertTrue("the message must carry the real path", body.text.contains("DiPlay-"))
+            val probe = texts.first { it.text.contains("未发现外置存储卷") || it.text.contains("No external volume") }
+            // The evidence is small print under the message, not the message itself.
+            assertTrue(probe.textSize < body.textSize)
+
+            saved.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
             shadowOf(Looper.getMainLooper()).idle()
             val viewer = ShadowAlertDialog.getLatestAlertDialog()
             assertTrue(descendants(viewer.window!!.decorView).filterIsInstance<TextView>()
                 .any { it.isTextSelectable && it.text.contains("Android 9 / API 28") })
             viewer.dismiss()
         } finally {
+            controller.pause().stop().destroy()
+        }
+    }
+
+    /** The other branch: a stick that took the bytes must be reported as the place they went. */
+    @Test fun aReportOnAStickSaysItWentToTheStickAndNamesTheFile() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        val context = activity.applicationContext
+        registerReportProvider(context)
+        val stick = File(context.cacheDir, "usb-otg-sda1").apply { deleteRecursively(); mkdirs() }
+        ReflectionHelpers.getField<MutableSet<String>>(activity, "mountedUsbPaths").add(stick.absolutePath)
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "exportDiagnostics")
+            val saved = awaitDialog()
+            assertEquals("Diagnostic report saved", shadowOf(saved).title.toString())
+            val body = descendants(saved.window!!.decorView).filterIsInstance<TextView>()
+                .first { it.text.contains("Report was saved to USB drive") }
+            val path = body.text.lines().first { it.contains("usb-otg-sda1") }
+            assertTrue("the file must exist where the dialog says it is", File(path).isFile)
+            assertTrue(File(path).readText().contains("Android 9 / API 28"))
+            saved.dismiss()
+        } finally {
+            stick.deleteRecursively()
             controller.pause().stop().destroy()
         }
     }
@@ -102,6 +115,22 @@ class DiagnosticExportUiTest {
         val detail = ReflectionHelpers.getField<String>(activity, "setupErrorDetail")
         assertNotNull("setupError alone cannot say which failure it was", detail)
         assertTrue("the detail must name a class and a message", detail!!.contains(":"))
+    }
+
+    private fun registerReportProvider(context: Context) {
+        val authority = "${context.packageName}.diagnostic-reports"
+        if (context.packageManager.resolveContentProvider(authority, PackageManager.GET_META_DATA) == null) return
+        val info = context.packageManager.resolveContentProvider(authority, PackageManager.GET_META_DATA)!!
+        ShadowContentResolver.registerProviderInternal(authority, DiagnosticReportProvider().apply { attachInfo(context, info) })
+    }
+
+    private fun awaitDialog(): AlertDialog {
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (ShadowAlertDialog.getLatestAlertDialog() == null && System.nanoTime() < deadline) {
+            Thread.sleep(20)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+        return requireNotNull(ShadowAlertDialog.getLatestAlertDialog())
     }
 
     private fun descendants(view: View): Sequence<View> = sequence {
