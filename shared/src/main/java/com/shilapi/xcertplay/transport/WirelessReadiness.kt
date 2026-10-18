@@ -20,7 +20,6 @@ enum class WirelessBluetoothHop(val key: String) {
  * apply. The check is in this module and may not reach into `orchestration`.
  */
 enum class WirelessHotspotMode {
-    WIFI_P2P,
     LOCAL_ONLY_HOTSPOT,
     MANUAL,
 
@@ -103,9 +102,9 @@ data class WirelessReadiness(
 object WirelessReadinessCheck {
     fun assess(input: WirelessReadinessInput): WirelessReadiness {
         val gaps = mutableListOf<WirelessGap>()
-        // The car's own hotspot, read one way per route: the hotspot modes need it up and configured,
-        // the same-network mode needs it down. Wi-Fi Direct and the local-only hotspot build an access
-        // point of their own and ask nothing of the car's — deliberately left alone here.
+        // The car's own hotspot, read one way per route: the hotspot mode needs it up and configured,
+        // the same-network mode needs it down. The local-only hotspot builds an access point of its own
+        // and asks nothing of the car's — deliberately left alone here.
         when (input.mode) {
             WirelessHotspotMode.MANUAL -> {
                 if (!input.credentialsSaved) gaps += WirelessGap.HOTSPOT_CREDENTIALS
@@ -117,7 +116,7 @@ object WirelessReadinessCheck {
                 if (input.hotspotOn == true) gaps += WirelessGap.HOTSPOT_ON
                 if (!input.carWifiAssociated) gaps += WirelessGap.CAR_WIFI_DISCONNECTED
             }
-            WirelessHotspotMode.WIFI_P2P, WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> Unit
+            WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> Unit
         }
         when (input.hop) {
             null -> gaps += WirelessGap.RADIO_NOT_CHOSEN

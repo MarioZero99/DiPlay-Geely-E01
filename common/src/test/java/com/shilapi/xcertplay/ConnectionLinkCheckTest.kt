@@ -35,13 +35,10 @@ class DeviceConnectionSupportTest {
         assertTrue(report.carHotspotNotes.isEmpty())
     }
 
-    @Test fun android10AddsWifiDirect() {
+    @Test fun android10OffersNoMoreThanAndroid9() {
         val report = DeviceConnectionSupport.assess(ready(Build.VERSION_CODES.Q))
-        assertEquals(
-            listOf(UsableConnection.USB, UsableConnection.CAR_HOTSPOT, UsableConnection.WIFI_DIRECT),
-            report.usable,
-        )
-        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.EXISTING_WIFI, WirelessHotspotMode.WIFI_P2P), report.wirelessModes)
+        assertEquals(listOf(UsableConnection.USB, UsableConnection.CAR_HOTSPOT), report.usable)
+        assertEquals(listOf(WirelessHotspotMode.MANUAL, WirelessHotspotMode.EXISTING_WIFI), report.wirelessModes)
         assertTrue(report.wirelessCapable)
     }
 

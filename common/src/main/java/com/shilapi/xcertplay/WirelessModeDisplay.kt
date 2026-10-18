@@ -15,9 +15,9 @@ import com.shilapi.xcertplay.transport.WirelessHotspotMode
  * Storage is written at the same moment the choice is made, so this only decides the shape of the
  * page, never which route a connection takes behind the driver's back.
  *
- * A mode saved where it was offered can outlive being offered — storage keeps Wi-Fi Direct on
- * Android 10 and later, where the probe may still say the hotspot calls do not answer — so a saved
- * mode that is no longer on offer falls back to the first one that is, keeping a way back.
+ * A mode saved where it was offered can outlive being offered — storage keeps the local-only hotspot
+ * on, and the probe may not offer it — so a saved mode that is no longer on offer falls back to the
+ * first one that is, keeping a way back.
  */
 internal fun displayedHotspotMode(
     pendingSetup: Boolean,

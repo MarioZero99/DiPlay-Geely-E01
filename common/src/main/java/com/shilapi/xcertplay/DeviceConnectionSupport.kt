@@ -20,15 +20,14 @@ import java.util.UUID
  *
  * USB needs a USB host. Driving the car hotspot ourselves needs the calls the wireless path makes:
  * the hotspot switch and a Bluetooth radio that can reach the iPhone over RFCOMM. A radio that is
- * merely off still counts as callable. Wi-Fi Direct is only offered from Android 10. Local-only
- * hotspot is not a saved choice.
+ * merely off still counts as callable. Local-only hotspot is not a saved choice.
  *
  * What the probe answers is what this head unit can be *driven* to do. Setting the wireless route up
  * by hand is a different question: the driver can turn the car's hotspot on in the car's own settings
  * and type the name and password, which needs no capability of ours at all, so the manual route is
  * offered wherever there is Wi-Fi.
  */
-internal enum class UsableConnection { USB, CAR_HOTSPOT, WIFI_DIRECT }
+internal enum class UsableConnection { USB, CAR_HOTSPOT }
 
 internal enum class CarHotspotBlocker {
     NO_WIFI,
@@ -123,10 +122,7 @@ internal object DeviceConnectionSupport {
             (probe.bluetooth == BluetoothRead.ON || probe.adapterRfcomm || probe.vendorHopRfcomm)
         val usable = buildList {
             if (probe.usbHost) add(UsableConnection.USB)
-            if (radioReady) {
-                add(UsableConnection.CAR_HOTSPOT)
-                if (probe.sdkInt >= Build.VERSION_CODES.Q) add(UsableConnection.WIFI_DIRECT)
-            }
+            if (radioReady) add(UsableConnection.CAR_HOTSPOT)
         }
         val modes = buildList {
             // The car's own hotspot is set up by the driver, not driven by us: DiPlay records the name
@@ -142,7 +138,6 @@ internal object DeviceConnectionSupport {
             if (probe.wifiManager && probe.sdkInt >= Build.VERSION_CODES.LOLLIPOP) {
                 add(WirelessHotspotMode.EXISTING_WIFI)
             }
-            if (callsAnswer && probe.sdkInt >= Build.VERSION_CODES.Q) add(WirelessHotspotMode.WIFI_P2P)
         }
         val radios = buildList {
             if (probe.adapterRfcomm) add(WirelessBluetoothHop.USB_ADAPTER)

@@ -141,7 +141,6 @@ private const val ADAPTER_BLUETOOTH_NAME = "DiPlay"
  */
 class CarPlayHostActivity : ComponentActivity() {
     private var connectionPanel: View? = null
-    private var wifiRecoveryButton: View? = null
     private var statusLamp: View? = null
     private var stepListContainer: LinearLayout? = null
     private var stepGlyphs: List<TextView> = emptyList()
@@ -368,7 +367,7 @@ class CarPlayHostActivity : ComponentActivity() {
     private var remoteMfiServer = ""
     private var remoteMfiToken = ""
     private var wirelessPermissionsReady = false
-    private var wirelessHotspotMode = WirelessHotspotMode.WIFI_P2P
+    private var wirelessHotspotMode = WirelessHotspotMode.MANUAL
     private var manualHotspotSsid = ""
     private var manualHotspotPassphrase = ""
     private var manualHotspotBand = ManualHotspotBand.AUTO
@@ -1129,20 +1128,6 @@ class CarPlayHostActivity : ComponentActivity() {
         }
         primaryAction = primary
         column.addView(primary, LinearLayout.LayoutParams(-1, dp(72)))
-        val recovery = Button(this).apply {
-            text = getString(R.string.reset_carplay_wi_fi)
-            isAllCaps = false
-            textSize = 18f
-            setTextColor(CONNECTION_PRIMARY)
-            background = GradientDrawable().apply {
-                setColor(CONNECTION_CHIP)
-                cornerRadius = dp(20).toFloat()
-            }
-            visibility = View.GONE
-            setOnClickListener { showDiPlayHome("wireless-recovery") }
-        }
-        wifiRecoveryButton = recovery
-        column.addView(recovery, LinearLayout.LayoutParams(-1, dp(60)).apply { topMargin = dp(12) })
         column.addView(TextView(this).apply {
             text = getString(R.string.in_carplay_swipe_down_with_three_fingers_to_open_diplay_se)
             textSize = 13f
@@ -2160,7 +2145,6 @@ class CarPlayHostActivity : ComponentActivity() {
                     attempt?.fail(
                         status.reason,
                         status.detail?.let(DiagnosticRedactor::redact),
-                        status.wifiResetRequired,
                     )
                     val closed = attempt?.record
                     closeAttemptJournal()
@@ -2170,28 +2154,19 @@ class CarPlayHostActivity : ComponentActivity() {
                     closed?.let { setConnectionStage("$description\n${it.code}") }
                     resumeAdapterDiscovery()
                     when {
-                        status.wifiResetRequired -> wifiRecoveryButton?.visibility = View.VISIBLE
-
                         // A refused host identity is state on the phone, not a fault on the wire, so no number
                         // of retries changes it — and each one writes the same failure into the log the car was
                         // brought out to read. The line on the page says what to do on the iPhone instead.
-                        status.reason == CarPlayFailureReason.HOST_ID_REJECTED -> {
-                            wifiRecoveryButton?.visibility = View.GONE
+                        status.reason == CarPlayFailureReason.HOST_ID_REJECTED ->
                             appendLog("Not retrying: the iPhone refused this accessory's host identity")
-                        }
 
                         // Same shape: the hotspot belongs to the car and DiPlay has no permission to switch
                         // it off, so a retry cannot come out differently. The line on the page already says
                         // what to do about it, and the retry button is left there for afterwards.
-                        status.reason == CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON -> {
-                            wifiRecoveryButton?.visibility = View.GONE
+                        status.reason == CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON ->
                             appendLog("Not retrying: the car's own hotspot is on and DiPlay cannot switch it off")
-                        }
 
-                        else -> {
-                            wifiRecoveryButton?.visibility = View.GONE
-                            reconnectAfterLoss(description)
-                        }
+                        else -> reconnectAfterLoss(description)
                     }
                 }
                 // Reaching the session closes the attempt inside the tracker; this writes that line.

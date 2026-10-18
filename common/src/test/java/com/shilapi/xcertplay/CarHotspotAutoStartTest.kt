@@ -50,14 +50,8 @@ class CarHotspotAutoStartTest {
 
     @Test
     fun leavesTheModesThatBringUpTheirOwnAccessPointAlone() {
-        // Wi-Fi Direct and the local-only hotspot are started when a session starts, so waking one at
-        // app start would either do nothing or start an access point the driver is not using yet.
-        assertFalse(
-            shouldWakeCarHotspotOnStartup(
-                autoEnabled = true,
-                mode = WirelessHotspotMode.WIFI_P2P,
-            ),
-        )
+        // The local-only hotspot is started when a session starts, so waking one at app start would
+        // either do nothing or start an access point the driver is not using yet.
         assertFalse(
             shouldWakeCarHotspotOnStartup(
                 autoEnabled = true,

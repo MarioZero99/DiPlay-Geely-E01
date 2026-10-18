@@ -81,7 +81,7 @@ class MfiTargetConfigTest {
         remoteMfiServer: String? = null,
         remoteMfiToken: String? = null,
         transport: CarPlayTransport = CarPlayTransport.WIRED,
-        wirelessHotspotMode: WirelessHotspotMode = WirelessHotspotMode.WIFI_P2P,
+        wirelessHotspotMode: WirelessHotspotMode = WirelessHotspotMode.MANUAL,
     ): CarPlayRuntimeConfig = CarPlayRuntimeConfig(
         mfiTarget = mfiTarget,
         ch341Devices = ch341Devices,

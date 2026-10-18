@@ -90,7 +90,7 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
             )
             val liveRadio = awaitRadioInfo(radioInfo, apInterface, configuration, attempt, deadlineNanos)
             if (liveRadio?.frequencyMHz?.let { it !in 5160..5895 } ?: (configuration.bandLabel != "5 GHz")) {
-                throw IOException("This firmware did not provide the requested 5 GHz local hotspot; choose Wi-Fi Direct or Car hotspot")
+                throw IOException("This firmware did not provide the requested 5 GHz local hotspot; choose Car hotspot")
             }
 
             synchronized(stateLock) {
@@ -269,7 +269,7 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
                                 // Android 10 BYD firmware pins the local hotspot to 2.4 GHz
                                 // regardless of the Wi-Fi switch (extracted-firmware fact);
                                 // switching Wi-Fi off cannot help, so do not suggest it.
-                                throw IOException("LocalOnlyHotspot: this Android 10 firmware always places the local hotspot on 2.4 GHz; use the Car hotspot or Wi-Fi Direct")
+                                throw IOException("LocalOnlyHotspot: this Android 10 firmware always places the local hotspot on 2.4 GHz; use the Car hotspot")
                             }
                             // Observed on DiLink 5.0 / Android 12: while the car's Wi-Fi
                             // client stays associated to a 2.4 GHz network, the Qualcomm
@@ -278,7 +278,7 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
                             // unreadable driver channel.
                             throw IOException("LocalOnlyHotspot: this firmware placed the hotspot on 2.4 GHz while the car's Wi-Fi client was using a 2.4 GHz network; turn the car's Wi-Fi client off and try again, or choose the Car hotspot")
                         }
-                        throw IOException("LocalOnlyHotspot: Android ${Build.VERSION.SDK_INT} cannot read the AP channel (${reading.error ?: "radio did not settle"}); choose a 5 GHz Car hotspot or Wi-Fi Direct")
+                        throw IOException("LocalOnlyHotspot: Android ${Build.VERSION.SDK_INT} cannot read the AP channel (${reading.error ?: "radio did not settle"}); choose a 5 GHz Car hotspot")
                     }
                 } else {
                     throw IOException("LocalOnlyHotspot: $it; cannot advertise automatic channel 0 to CarPlay")

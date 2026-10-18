@@ -69,9 +69,9 @@ class QuickWidgetsView(
             setTextColor(palette.textMain)
         })
 
-        // The two quick routes, as a two-segment拨块. A saved Wi-Fi Direct or local-only mode is
-        // neither of these, so neither segment lights — the card then offers the way to the other
-        // two rather than claiming one of them is in use.
+        // The two quick routes, as a two-segment拨块. A saved local-only mode is neither of these,
+        // so neither segment lights — the card then offers the way to the other two rather than
+        // claiming one of them is in use.
         val isHotspot = mode == WirelessHotspotMode.MANUAL
         val segment = LinearLayout(context).apply {
             orientation = HORIZONTAL

@@ -30,13 +30,22 @@ class HotspotModeMigrationTest {
         assertEquals(WirelessHotspotMode.MANUAL, AirPlayPersistence.loadWirelessHotspotMode(context))
     }
 
-    @Test fun existingWifiDirectSelectionIsPreserved() {
-        AirPlayPersistence.saveWirelessHotspotMode(context, WirelessHotspotMode.WIFI_P2P)
-        assertEquals(WirelessHotspotMode.WIFI_P2P, AirPlayPersistence.loadWirelessHotspotMode(context))
+    /**
+     * An install that offered Wi-Fi Direct leaves `WIFI_P2P` in storage. The mode is gone from the
+     * enum, so the read has to answer with one that exists and write that back — otherwise every
+     * read is the migration again, and the connection page is deciding from a mode no code answers to.
+     *
+     * Pinned at API 33, where this build used to keep the stored value: the fallback is the mode being
+     * gone, not the platform being old, so a head unit new enough to have offered it migrates too.
+     */
+    @Test fun aStoredWifiDirectSelectionReadsBackAsTheCarHotspot() {
+        prefs.edit().putString("wireless_hotspot_mode", "WIFI_P2P").apply()
+        assertEquals(WirelessHotspotMode.MANUAL, AirPlayPersistence.loadWirelessHotspotMode(context))
+        assertEquals("MANUAL", prefs.getString("wireless_hotspot_mode", null))
     }
 
     @Test @Config(sdk = [28]) fun olderAndroidDoesNotFallBackToRemovedLocalMode() {
-        prefs.edit().putString("wireless_hotspot_mode", "WIFI_P2P").apply()
+        prefs.edit().putString("wireless_hotspot_mode", "LOCAL_ONLY_HOTSPOT").apply()
         assertEquals(WirelessHotspotMode.MANUAL, AirPlayPersistence.loadWirelessHotspotMode(context))
     }
 }

@@ -9,10 +9,8 @@
     <string name="experimental_features_hint">Only in the local build. These are still being tried on the car.</string>
     <string name="experimental_report_upload">Report upload</string>
     <string name="experimental_report_upload_hint">Sends the diagnostic report to the project’s own log bucket, so a run on the car can be read afterwards. Nothing is sent until the button is pressed.</string>
-    <string name="wifi_direct" tools:ignore="MissingTranslation">Wi-Fi Direct</string>
     <string name="hotspot_hint_manual">Built-in car hotspot · Keep the car hotspot, Bluetooth and your iPhone’s Wi-Fi on.</string>
     <string name="hotspot_hint_local">Open Connection setup to save your built-in car hotspot details.</string>
-    <string name="hotspot_hint_p2p">Wi-Fi Direct · Keep the car’s Wi-Fi switch, Bluetooth and your iPhone’s Wi-Fi on.</string>
     <string name="hotspot_hint_existing">Same Wi-Fi network · Connect the car and the iPhone to one Wi-Fi network in the car’s settings, and keep Bluetooth on.</string>
     <string name="cluster_size_standard">Standard · sharpest</string>
     <string name="cluster_size_larger">Larger · default</string>
@@ -23,7 +21,6 @@
     <string name="marker_down">Down</string>
     <string name="marker_centre_default">Centre · default</string>
     <string name="hotspot_mode_manual_desc">Use the car’s own hotspot. Select 5 GHz in car settings if available.</string>
-    <string name="hotspot_mode_p2p_desc">Alternative setup. Requires the car’s Wi-Fi switch on; a 2.4 GHz connection may stutter.</string>
     <string name="same_wifi_network">Same Wi-Fi network</string>
     <string name="hotspot_mode_existing_wifi_desc">Join a Wi-Fi network that already exists — a phone hotspot or a router. The iPhone joins the same one. The car’s own hotspot is switched off and not used.</string>
     <string name="existing_wifi_hint">Connect the car to the same Wi-Fi as your iPhone, in the car’s own Wi-Fi settings: an Android phone’s hotspot, a router, or the iPhone’s personal hotspot. DiPlay reads the network’s name and details from the car; the password is the one part it may not be able to.</string>
@@ -114,14 +111,12 @@
     <string name="language_apply">Apply</string>
     <string name="common_cancel">Cancel</string>
     <string name="a_familiar_drive">A familiar drive.</string>
-    <string name="a_previous_wi_fi_direct_connection_is_still_running_reset">A previous Wi-Fi Direct connection is still running. Reset it to connect.</string>
     <string name="about">About</string>
     <string name="about_diplay">About DiPlay</string>
     <string name="active">Active</string>
     <string name="advanced_audio_channel_mapping">Advanced audio channel mapping</string>
     <string name="airplay_icon">AirPlay icon</string>
     <string name="allow_carplay_ui_outside_the_safe_area">Allow CarPlay UI outside the safe area</string>
-    <string name="allow_nearby_devices_and_on_older_android_versions_locatio">Allow Nearby devices and, on older Android versions, Location before resetting CarPlay Wi-Fi.</string>
     <string name="allow_nearby_devices_for_diplay_in_the_head_unit_s_app_per">Allow Nearby devices for DiPlay in the head unit’s app permissions.</string>
     <string name="allow_nearby_devices_so_diplay_can_connect_to_your_paired">Allow Nearby devices so DiPlay can connect to your paired iPhone.</string>
     <string name="allow_precise_location_for_diplay_in_the_head_unit_s_app_p">Allow precise Location for DiPlay in the head unit’s app permissions.</string>
@@ -194,7 +189,6 @@
     <string name="copy_these_from_the_car_s_hotspot_settings_use_5_ghz_if_av">Copy these from the car’s hotspot settings. Use 5 GHz if available. Saving here does not change the car’s hotspot.</string>
     <string name="could_not_decode_image">Could not decode image</string>
     <string name="could_not_encode_image">Could not encode image</string>
-    <string name="could_not_reset_wi_fi_direct_close_the_other_projection_ap">Could not reset Wi-Fi Direct. Close the other projection app and try again.</string>
     <string name="could_not_save_image">Could not save image</string>
     <string name="could_not_save_the_report">Could not save the report</string>
     <string name="could_not_upload_the_report">Could not upload the report</string>
@@ -325,10 +319,7 @@
     <string name="requesting_iphone_usb_permission">Requesting iPhone USB permission</string>
     <string name="requesting_mfi_usb_permission">Requesting MFi USB permission</string>
     <string name="reset">Reset</string>
-    <string name="reset_and_connect">Reset and connect</string>
     <string name="reset_car_marker_to_centre">Reset car marker to centre</string>
-    <string name="reset_carplay_wi_fi">Reset CarPlay Wi-Fi</string>
-    <string name="reset_carplay_wi_fi_2">Reset CarPlay Wi-Fi?</string>
     <string name="resolution">Resolution</string>
     <string name="return_from_car_settings_to_diplay_then_connect_accept_the">Return from car settings to DiPlay, then connect. Accept the CarPlay prompt on your iPhone. A car internet plan is not required; mobile data availability depends on your phone’s network settings.</string>
     <string name="right_hand_drive">Right-hand drive</string>
@@ -390,10 +381,8 @@
     <string name="still_waiting_for_usage_access_check_that_the_command_ran">Still waiting for Usage Access. Check that the command ran successfully for this car, then try again.</string>
     <string name="tap_a_number_to_test_14_driver_speaker_on_byd">Tap a number to test. 14 = driver speaker on BYD.</string>
     <string name="the_head_unit_couldn_t_start_carplay_wi_fi_check_wi_fi_and">The head unit couldn’t start CarPlay Wi-Fi. Check Wi-Fi and close other projection apps. Retrying…</string>
-    <string name="this_ends_the_existing_wi_fi_direct_connection_including_o">This ends the existing Wi-Fi Direct connection, including one left behind after reinstalling. Close other projection apps first. Your car’s internet Wi-Fi stays on.</string>
     <string name="this_head_unit_cannot_use_the_smaller_size_at_this_resolut">This head unit cannot use the smaller size at this resolution. Using Default.</string>
     <string name="this_head_unit_could_not_open_a_save_location_please_try_s">This head unit could not open a save location. Please try saving to Downloads again.</string>
-    <string name="this_head_unit_does_not_support_wi_fi_direct">This head unit does not support Wi-Fi Direct.</string>
     <string name="this_head_unit_has_no_available_file_picker_to_save_the_re">This head unit has no available file picker to save the report.</string>
     <string name="this_head_unit_may_not_support_wireless_carplay_try_a_usb">This head unit may not support wireless CarPlay. Try a USB connection.</string>
     <string name="transport_error_reconnecting">Transport error; reconnecting</string>
@@ -413,8 +402,6 @@
     <string name="waiting_for_iphone_over_usb">Waiting for iPhone over USB</string>
     <string name="waiting_for_mfi_coprocessor">Waiting for MFi coprocessor</string>
     <string name="waiting_for_paired_iphone">Waiting for paired iPhone</string>
-    <string name="wi_fi_direct_is_still_busy_close_the_other_projection_app">Wi-Fi Direct is still busy. Close the other projection app and try again.</string>
-    <string name="wi_fi_p2p_5_ghz">Wi-Fi P2P (5 GHz)</string>
     <string name="wi_fi_session">Wi-Fi session</string>
     <string name="widest_width">Widest width</string>
     <string name="window">Window</string>
@@ -428,7 +415,6 @@
     <string name="wireless_carplay_unavailable_no_bluetooth_data_channel" tools:ignore="MissingTranslation">Wireless CarPlay cannot work on this head unit: its Bluetooth stack offers apps no data channel. Use the USB cable.</string>
     <string name="wireless_connection_help">Wireless connection help</string>
     <string name="wireless_hotspot_off">Wireless hotspot: off</string>
-    <string name="wireless_permissions">Wireless permissions</string>
     <string name="wireless_settings">Wireless settings</string>
     <string name="wpa2" tools:ignore="MissingTranslation">WPA2</string>
     <string name="wpa2_wpa3_password_must_be_8_63_characters">WPA2/WPA3 password must be 8-63 characters</string>

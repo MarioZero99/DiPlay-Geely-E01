@@ -232,14 +232,23 @@ object AirPlayPersistence {
             .apply()
     }
 
+    /**
+     * The saved hotspot mode, rewritten to one this build can run.
+     *
+     * A string the enum no longer has — `WIFI_P2P`, written by an install that offered it — reads as
+     * the car hotspot, and the write below puts that back into storage so the next read is not the
+     * migration again.
+     */
     fun loadWirelessHotspotMode(context: Context): WirelessHotspotMode {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val stored = prefs.getString(KEY_WIRELESS_HOTSPOT_MODE, null)
         val mode = WirelessHotspotMode.entries.firstOrNull { it.name == stored }
             ?: WirelessHotspotMode.MANUAL
-        val supported = if (mode == WirelessHotspotMode.LOCAL_ONLY_HOTSPOT ||
-            (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && mode == WirelessHotspotMode.WIFI_P2P)
-        ) WirelessHotspotMode.MANUAL else mode
+        val supported = if (mode == WirelessHotspotMode.LOCAL_ONLY_HOTSPOT) {
+            WirelessHotspotMode.MANUAL
+        } else {
+            mode
+        }
         if (stored != supported.name) saveWirelessHotspotMode(context, supported)
         return supported
     }

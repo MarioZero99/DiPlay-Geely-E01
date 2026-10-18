@@ -53,7 +53,7 @@ class CarPlayRuntimeConfig(
     val label: String = "xcertplay",
     val hostName: String = "xcertplay",
     val transport: CarPlayTransport = CarPlayTransport.WIRED,
-    val wirelessHotspotMode: WirelessHotspotMode = WirelessHotspotMode.WIFI_P2P,
+    val wirelessHotspotMode: WirelessHotspotMode = WirelessHotspotMode.MANUAL,
     val manualHotspotSsid: String? = null,
     val manualHotspotPassphrase: String? = null,
     val manualHotspotBand: ManualHotspotBand = ManualHotspotBand.AUTO,

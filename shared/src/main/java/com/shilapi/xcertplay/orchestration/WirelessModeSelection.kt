@@ -8,8 +8,8 @@ import android.os.Build
  *
  * Every mode that needs a newer platform than this project's floor falls back to one that works
  * there, and each floor is real: joining a network already in progress needs `ConnectivityManager`'s
- * per-network view (Android 5), LocalOnlyHotspot arrived in Android 8, and a Wi-Fi Direct group in
- * Android 10 — which on Android 8 and 9 is served by the LocalOnlyHotspot that does exist.
+ * per-network view (Android 5), and LocalOnlyHotspot arrived in Android 8 — which below it is served
+ * by the car hotspot that does exist.
  *
  * This is a function rather than an inline `when` because of how the downgrade used to be written:
  * it covered every mode that was not MANUAL, so on the head unit this fork targets a newly added
@@ -23,10 +23,5 @@ internal fun effectiveHotspotMode(configured: WirelessHotspotMode, sdkInt: Int):
             WirelessHotspotMode.MANUAL
         configured == WirelessHotspotMode.LOCAL_ONLY_HOTSPOT && sdkInt < Build.VERSION_CODES.O ->
             WirelessHotspotMode.MANUAL
-        configured == WirelessHotspotMode.WIFI_P2P -> when {
-            sdkInt >= Build.VERSION_CODES.Q -> WirelessHotspotMode.WIFI_P2P
-            sdkInt >= Build.VERSION_CODES.O -> WirelessHotspotMode.LOCAL_ONLY_HOTSPOT
-            else -> WirelessHotspotMode.MANUAL
-        }
         else -> configured
     }

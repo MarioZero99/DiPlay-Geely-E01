@@ -5,7 +5,6 @@ import java.io.Closeable
 import java.net.InetAddress
 
 enum class WirelessHotspotBackend(val label: String) {
-    WIFI_P2P("Wi-Fi P2P"),
     LOCAL_ONLY_HOTSPOT("LocalOnlyHotspot"),
     MANUAL_HOTSPOT("Manual hotspot"),
     EXISTING_WIFI("Existing Wi-Fi / Same LAN"),
@@ -17,7 +16,7 @@ class WirelessHotspotInfo(
     /**
      * The network's password, or null when this backend cannot supply one.
      *
-     * The three hotspot backends create their own access point and so always know it. Joining a
+     * The two hotspot backends create their own access point and so always know it. Joining a
      * network somebody else owns is the case this exists for: the password is not readable, and a
      * silent empty string would announce a secured network as an open one. Null says "not
      * available", which the iAP2 side turns into an omitted field rather than a wrong value.
@@ -56,7 +55,7 @@ class WirelessHotspotInfo(
             "hostAddress=$hostAddress, bandLabel='$bandLabel')"
 }
 
-/** Owns one Android Wi-Fi group and all resources needed to keep it alive. */
+/** Owns one Android Wi-Fi access point and all resources needed to keep it alive. */
 interface WirelessHotspotManager : Closeable {
     /**
      * Starts a hotspot and waits up to [timeoutMillis] for its live configuration and AP
@@ -74,8 +73,9 @@ interface WirelessHotspotManager : Closeable {
 /**
  * Converts IEEE 802.11 frequency in MHz to its channel number.
  *
- * Android's [android.net.wifi.p2p.WifiP2pGroup.getFrequency] reports MHz, while the iAP2
- * wireless CarPlay payload expects a channel number.
+ * Android reports a radio's frequency in MHz — from a station's connection info, from a scan, from
+ * the local hotspot's own configuration — while the iAP2 wireless CarPlay payload expects a channel
+ * number.
  */
 internal fun wifiFrequencyMhzToChannel(frequencyMHz: Int): Int? = when {
     frequencyMHz in 2412..2472 && (frequencyMHz - 2407) % 5 == 0 ->

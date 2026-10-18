@@ -39,7 +39,6 @@ import com.shilapi.xcertplay.network.LocalOnlyHotspotManager
 import com.shilapi.xcertplay.network.ManualHotspotManager
 import com.shilapi.xcertplay.network.PortHolders
 import com.shilapi.xcertplay.network.packageNameResolver
-import com.shilapi.xcertplay.network.WifiP2pGroupManager
 import com.shilapi.xcertplay.carhop.CarBluetoothHops
 import com.shilapi.xcertplay.network.WirelessHotspotInfo
 import com.shilapi.xcertplay.network.WirelessHotspotBackend
@@ -147,7 +146,6 @@ sealed class CarPlayStatus {
     data class Failed(
         val reason: CarPlayFailureReason,
         val detail: String? = null,
-        val wifiResetRequired: Boolean = false,
     ) : CarPlayStatus()
 }
 
@@ -2261,10 +2259,6 @@ class CarPlayController(
             )
         }
         val manager: WirelessHotspotManager = when (hotspotMode) {
-            WirelessHotspotMode.WIFI_P2P -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) createWifiP2pManager()
-                else throw IOException("Wi-Fi Direct group mode requires Android 10 or newer")
-            }
             WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) createLocalOnlyHotspotManager()
                 else throw IOException("Local-only hotspot mode requires Android 8 or newer")
@@ -2299,13 +2293,8 @@ class CarPlayController(
             }
         }
         hotspot = manager
-        val timeoutMillis = if (hotspotMode == WirelessHotspotMode.WIFI_P2P) {
-            WIFI_P2P_START_TIMEOUT_MILLIS
-        } else {
-            HOTSPOT_START_TIMEOUT_MILLIS
-        }
         return try {
-            manager.start(timeoutMillis)
+            manager.start(HOTSPOT_START_TIMEOUT_MILLIS)
         } catch (failure: Exception) {
             if (hotspot === manager) hotspot = null
             closeBestEffort(hotspotMode.name) { manager.close() }
@@ -2317,9 +2306,6 @@ class CarPlayController(
             )
         }
     }
-
-    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
-    private fun createWifiP2pManager(): WirelessHotspotManager = WifiP2pGroupManager(appContext, ::debugLog)
 
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
     private fun createLocalOnlyHotspotManager(): WirelessHotspotManager = LocalOnlyHotspotManager(appContext, ::debugLog)
@@ -2679,11 +2665,12 @@ class CarPlayController(
 
     private fun fail(error: Throwable) {
         if (closed) return
-        onStatus(CarPlayStatus.Failed(
-            failureReasonFor(error),
-            error.message ?: error.javaClass.simpleName,
-            generateSequence(error) { it.cause }.any { it is com.shilapi.xcertplay.network.P2pResetRequiredException },
-        ))
+        onStatus(
+            CarPlayStatus.Failed(
+                failureReasonFor(error),
+                error.message ?: error.javaClass.simpleName,
+            ),
+        )
     }
 
     private fun debugLog(message: String) {
@@ -2768,7 +2755,6 @@ class CarPlayController(
     companion object {
         private const val HOTSPOT_START_TIMEOUT_MILLIS = 60_000L
         private const val CAR_HOTSPOT_ENABLE_TIMEOUT_MILLIS = 15_000L
-        private const val WIFI_P2P_START_TIMEOUT_MILLIS = 20_000L
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
         private const val VPN_CONNECT_TIMEOUT_MILLIS = 10_000L
         private const val CONTROL_LOOP_TIMEOUT_MILLIS = 5 * 60_000L

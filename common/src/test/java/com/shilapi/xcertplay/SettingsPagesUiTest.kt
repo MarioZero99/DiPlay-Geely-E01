@@ -325,20 +325,23 @@ class SettingsPagesUiTest {
     }
 
     /**
-     * A mode saved where it was offered can outlive the mode being offered. Storage keeps WIFI_P2P on Android
-     * 10 and later, and the probe can still say the hotspot calls do not answer there, which leaves the manual
-     * mode as the only one on offer. Drawing the saved mode anyway put the step on the Wi-Fi Direct controls:
-     * the hotspot could not be opened, and the one mode on offer was drawn as a button that never showed as
-     * chosen.
+     * A mode saved where it was offered can outlive the mode being offered. Storage can hold the
+     * local-only hotspot while the probe says the hotspot calls do not answer, which leaves the manual
+     * mode as the only one on offer. Drawing the saved mode anyway put the step on that mode's controls:
+     * the hotspot could not be opened, and the one mode on offer was drawn as a button that never
+     * showed as chosen.
      */
     @Test
     @Config(sdk = [33], qualifiers = "en")
     fun aSavedHotspotModeThatIsNoLongerOfferedFallsBackToTheOneThatIs() {
-        AirPlayPersistence.saveWirelessHotspotMode(RuntimeEnvironment.getApplication(), WirelessHotspotMode.WIFI_P2P)
+        AirPlayPersistence.saveWirelessHotspotMode(
+            RuntimeEnvironment.getApplication(),
+            WirelessHotspotMode.LOCAL_ONLY_HOTSPOT,
+        )
         val activity = open("settings")
         val shown = texts(activity)
         assertTrue("the manual mode's own controls are drawn", "Open car hotspot settings" in shown)
-        assertFalse("the Wi-Fi Direct controls are not drawn", "Open car Wi-Fi settings" in shown)
+        assertFalse("the same-network controls are not drawn", "Open car Wi-Fi settings" in shown)
         assertFalse(
             "the lone mode is stated as the one in use, not left as an unchosen button",
             views<Button>(activity).any { it.text?.toString() == "Built-in car hotspot" },

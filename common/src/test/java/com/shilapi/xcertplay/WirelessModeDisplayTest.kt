@@ -34,7 +34,7 @@ class WirelessModeDisplayTest {
     fun aSavedModeThatIsNoLongerOfferedFallsBackToTheFirstOneOffered() {
         assertEquals(
             WirelessHotspotMode.MANUAL,
-            displayedHotspotMode(pendingSetup = false, saved = WirelessHotspotMode.WIFI_P2P, offered = offered),
+            displayedHotspotMode(pendingSetup = false, saved = WirelessHotspotMode.LOCAL_ONLY_HOTSPOT, offered = offered),
         )
     }
 }

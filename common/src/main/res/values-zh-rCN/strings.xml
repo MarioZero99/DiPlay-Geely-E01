@@ -9,10 +9,8 @@
     <string name="experimental_features_hint">只在本地版里有。这些功能还在车上试。</string>
     <string name="experimental_report_upload">报告上传</string>
     <string name="experimental_report_upload_hint">把诊断报告传到项目自己的日志仓，方便事后看车上那一次跑出了什么。不按按钮就不会发送。</string>
-    <string name="wifi_direct">Wi-Fi Direct</string>
     <string name="hotspot_hint_manual">车载热点 · 保持车载热点、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
     <string name="hotspot_hint_local">打开“连接设置”以保存车载热点信息。</string>
-    <string name="hotspot_hint_p2p">Wi-Fi Direct · 保持车机 Wi-Fi 开关、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
     <string name="hotspot_hint_existing">同一网络 · 在车机设置里把车机和 iPhone 连到同一张 Wi-Fi，并保持蓝牙开启。</string>
     <string name="cluster_size_standard">标准 · 最清晰</string>
     <string name="cluster_size_larger">更大 · 默认</string>
@@ -23,7 +21,6 @@
     <string name="marker_down">下</string>
     <string name="marker_centre_default">居中 · 默认</string>
     <string name="hotspot_mode_manual_desc">使用车机自带热点。若车机支持，请在车机设置中选择 5 GHz。</string>
-    <string name="hotspot_mode_p2p_desc">备选方案。需要打开车机 Wi-Fi 开关；2.4 GHz 连接可能会卡顿。</string>
     <string name="same_wifi_network">同一 Wi-Fi 网络</string>
     <string name="hotspot_mode_existing_wifi_desc">车机加入一张已经存在的 Wi-Fi（手机热点或路由器），iPhone 连同一张网。车机自带热点会被关掉，不使用。</string>
     <string name="existing_wifi_hint">在车机自己的 Wi-Fi 设置里，把车机连到和 iPhone 同一张 Wi-Fi：安卓手机的热点、路由器，或 iPhone 的个人热点。网名和网络信息由 DiPlay 自己从车机读取；密码是唯一可能读不到的那一项。</string>
@@ -107,14 +104,12 @@
     <string name="safe_area_prefix">安全区域：</string>
     <string name="settings_android9_compat">以下设置在 Android 9（API 28）上不可用且已隐藏：\n• Wi-Fi P2P（5 GHz）— 将改用 LocalOnlyHotspot。\n• HEVC 软解码器 — 将改用硬件解码。</string>
     <string name="a_familiar_drive">熟悉的驾乘体验。</string>
-    <string name="a_previous_wi_fi_direct_connection_is_still_running_reset">之前的 Wi-Fi Direct 连接仍在运行。请重置后再连接。</string>
     <string name="about">关于</string>
     <string name="about_diplay">关于 DiPlay</string>
     <string name="active">已启用</string>
     <string name="advanced_audio_channel_mapping">高级音频通道映射</string>
     <string name="airplay_icon">AirPlay 图标</string>
     <string name="allow_carplay_ui_outside_the_safe_area">允许 CarPlay 界面超出安全区域</string>
-    <string name="allow_nearby_devices_and_on_older_android_versions_locatio">重置 CarPlay Wi-Fi 前，请授予“附近的设备”权限；较旧的 Android 版本还需要位置权限。</string>
     <string name="allow_nearby_devices_for_diplay_in_the_head_unit_s_app_per">请在车机应用权限中允许 DiPlay 访问附近的设备。</string>
     <string name="allow_nearby_devices_so_diplay_can_connect_to_your_paired">请允许 DiPlay 访问附近的设备，以连接已配对的 iPhone。</string>
     <string name="allow_precise_location_for_diplay_in_the_head_unit_s_app_p">请在车机应用权限中允许 DiPlay 使用精确位置信息。</string>
@@ -189,7 +184,6 @@
     <string name="copy_these_from_the_car_s_hotspot_settings_use_5_ghz_if_av">从车机热点设置中复制以下内容。如有 5 GHz 请选择。在此保存不会更改车机的热点。</string>
     <string name="could_not_decode_image">无法读取图片</string>
     <string name="could_not_encode_image">无法编码图片</string>
-    <string name="could_not_reset_wi_fi_direct_close_the_other_projection_ap">无法重置 Wi-Fi Direct。请关闭其他投屏应用后重试。</string>
     <string name="could_not_save_image">无法保存图片</string>
     <string name="could_not_save_the_report">无法保存报告</string>
     <string name="could_not_upload_the_report">上传失败</string>
@@ -325,10 +319,7 @@
     <string name="requesting_iphone_usb_permission">正在请求 iPhone USB 权限</string>
     <string name="requesting_mfi_usb_permission">正在请求 MFi USB 权限</string>
     <string name="reset">重置</string>
-    <string name="reset_and_connect">重置并连接</string>
     <string name="reset_car_marker_to_centre">将车辆标记重置到居中</string>
-    <string name="reset_carplay_wi_fi">重置 CarPlay Wi-Fi</string>
-    <string name="reset_carplay_wi_fi_2">重置 CarPlay Wi-Fi？</string>
     <string name="resolution">分辨率</string>
     <string name="return_from_car_settings_to_diplay_then_connect_accept_the">从车机设置返回 DiPlay，然后连接。在 iPhone 上接受 CarPlay 提示。无需车机流量套餐；移动数据可用性取决于手机的网络设置。</string>
     <string name="right_hand_drive">右舵</string>
@@ -390,10 +381,8 @@
     <string name="still_waiting_for_usage_access_check_that_the_command_ran">仍在等待使用访问权限。请确认命令已在本车机上成功运行，然后重试。</string>
     <string name="tap_a_number_to_test_14_driver_speaker_on_byd">点按数字测试。14 = 比亚迪主驾扬声器。</string>
     <string name="the_head_unit_couldn_t_start_carplay_wi_fi_check_wi_fi_and">车机无法启动 CarPlay Wi-Fi。请检查 Wi-Fi 并关闭其他投屏应用，正在重试…</string>
-    <string name="this_ends_the_existing_wi_fi_direct_connection_including_o">这会结束现有的 Wi-Fi Direct 连接，包括重新安装后遗留的连接。请先关闭其他投屏应用。车机的互联网 Wi-Fi 不受影响。</string>
     <string name="this_head_unit_cannot_use_the_smaller_size_at_this_resolut">此车机在当前分辨率下无法使用更小的尺寸，将使用默认尺寸。</string>
     <string name="this_head_unit_could_not_open_a_save_location_please_try_s">车机无法打开保存位置，请重试保存到 Downloads。</string>
-    <string name="this_head_unit_does_not_support_wi_fi_direct">此车机不支持 Wi-Fi Direct。</string>
     <string name="this_head_unit_has_no_available_file_picker_to_save_the_re">此车机没有可用于保存报告的文件选择器。</string>
     <string name="this_head_unit_may_not_support_wireless_carplay_try_a_usb">此车机可能不支持无线 CarPlay，请尝试 USB 连接。</string>
     <string name="transport_error_reconnecting">传输错误；正在重新连接</string>
@@ -413,8 +402,6 @@
     <string name="waiting_for_iphone_over_usb">正在等待 USB 连接的 iPhone</string>
     <string name="waiting_for_mfi_coprocessor">正在等待 MFi 协处理器</string>
     <string name="waiting_for_paired_iphone">正在等待已配对的 iPhone</string>
-    <string name="wi_fi_direct_is_still_busy_close_the_other_projection_app">Wi-Fi Direct 仍被占用。请关闭其他投屏应用后重试。</string>
-    <string name="wi_fi_p2p_5_ghz">Wi-Fi P2P（5 GHz）</string>
     <string name="wi_fi_session">Wi-Fi 会话</string>
     <string name="widest_width">较宽边</string>
     <string name="window">窗口</string>
@@ -428,7 +415,6 @@
     <string name="wireless_carplay_unavailable_no_bluetooth_data_channel">无线 CarPlay 在本车无法工作：车机蓝牙栈不向应用开放数据通道。请使用 USB 数据线。</string>
     <string name="wireless_connection_help">无线连接帮助</string>
     <string name="wireless_hotspot_off">无线热点：关闭</string>
-    <string name="wireless_permissions">无线连接权限</string>
     <string name="wireless_settings">无线设置</string>
     <string name="wpa2">WPA2</string>
     <string name="wpa2_wpa3_password_must_be_8_63_characters">WPA2/WPA3 密码长度必须为 8–63 个字符</string>

@@ -237,7 +237,6 @@ class DiPlayActivity : ComponentActivity() {
         loadConnectionSettings()
         render()
         openOntoRunningFirmwareOperation()
-        handleWirelessRecovery()
         startVendorHopInBackground()
         wakeCarHotspotInBackground()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -269,7 +268,6 @@ class DiPlayActivity : ComponentActivity() {
         if (!firmwareRunning()) {
             page = intent.getStringExtra("page") ?: "home"; render()
         }
-        handleWirelessRecovery()
     }
     override fun onSaveInstanceState(outState: Bundle) { outState.putString("page", page); outState.putBoolean("pending_car_hotspot", pendingCarHotspotSetup); super.onSaveInstanceState(outState) }
     override fun onConfigurationChanged(newConfig: Configuration) { super.onConfigurationChanged(newConfig); render() }
@@ -288,7 +286,7 @@ class DiPlayActivity : ComponentActivity() {
         // Back from the car settings: refresh the car hotspot reminder on the home page.
         // Opening the app never starts a connection. Wireless or USB is chosen on the connect button.
         if (initialLaunch) initialLaunch = false
-        else if (page != "wireless-recovery") render()
+        else render()
     }
     override fun onPause() {
         unregisterUsbTopology()
@@ -1633,10 +1631,10 @@ class DiPlayActivity : ComponentActivity() {
 
     /**
      * One leg of the wireless route. One option that is already in use is a statement, because a picker that
-     * has picked for you is a heading with a button under it — and Wi-Fi Direct only appears from Android 10,
-     * so on this project's head unit the hotspot leg is always the one-option case. One option that is *not*
-     * in use stays a button: a leg with nothing chosen and nothing to tap would be asking for a choice it
-     * gives no way to make.
+     * has picked for you is a heading with a button under it — and on this project's head unit the hotspot
+     * leg is usually the one-option case, the car hotspot being the route that has always been offered.
+     * One option that is *not* in use stays a button: a leg with nothing chosen and nothing to tap would
+     * be asking for a choice it gives no way to make.
      */
     private fun legChoices(parent: LinearLayout, options: List<WirelessLegOption>, onChoose: (Int) -> Unit) {
         if (options.isEmpty()) return
@@ -1675,10 +1673,10 @@ class DiPlayActivity : ComponentActivity() {
             blockerLines(card, bluetoothLeg = false)
             return
         }
-        // A mode saved where it was offered can outlive the mode being offered: storage keeps WIFI_P2P on
-        // Android 10 and later, where the probe may still say the hotspot calls do not answer. Deciding by the
-        // offered set keeps the mode drawn and the mode in use the same one, and leaves a way back to the mode
-        // that does not need those calls.
+        // A mode saved where it was offered can outlive the mode being offered: storage keeps the
+        // local-only hotspot, which the probe may not offer. Deciding by the offered set keeps the mode
+        // drawn and the mode in use the same one, and leaves a way back to the mode that does not need
+        // those calls.
         val saved = AirPlayPersistence.loadWirelessHotspotMode(this)
         val mode = displayedHotspotMode(pendingCarHotspotSetup, saved, modes)
         // Left tappable while a session runs: choosing a mode is one of the settings
@@ -2310,20 +2308,17 @@ class DiPlayActivity : ComponentActivity() {
     private fun connectionMethodName(connection: UsableConnection): String = when (connection) {
         UsableConnection.USB -> getString(R.string.connect_with_usb)
         UsableConnection.CAR_HOTSPOT -> getString(R.string.built_in_car_hotspot)
-        UsableConnection.WIFI_DIRECT -> getString(R.string.wifi_direct)
     }
 
     private fun wirelessModeTitle(mode: WirelessHotspotMode): String = when (mode) {
         WirelessHotspotMode.MANUAL -> getString(R.string.built_in_car_hotspot)
         WirelessHotspotMode.EXISTING_WIFI -> getString(R.string.same_wifi_network)
-        WirelessHotspotMode.WIFI_P2P -> getString(R.string.wifi_direct)
         WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> getString(R.string.localonlyhotspot)
     }
 
     private fun wirelessModeDescription(mode: WirelessHotspotMode): String = when (mode) {
         WirelessHotspotMode.MANUAL -> getString(R.string.hotspot_mode_manual_desc)
         WirelessHotspotMode.EXISTING_WIFI -> getString(R.string.hotspot_mode_existing_wifi_desc)
-        WirelessHotspotMode.WIFI_P2P -> getString(R.string.hotspot_mode_p2p_desc)
         WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> getString(R.string.hotspot_hint_local)
     }
 
@@ -2382,7 +2377,6 @@ class DiPlayActivity : ComponentActivity() {
         WirelessHotspotMode.MANUAL -> getString(R.string.hotspot_hint_manual)
         WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> getString(R.string.hotspot_hint_local)
         WirelessHotspotMode.EXISTING_WIFI -> getString(R.string.hotspot_hint_existing)
-        else -> getString(R.string.hotspot_hint_p2p)
     }
 
 
@@ -2563,60 +2557,7 @@ class DiPlayActivity : ComponentActivity() {
         AlertDialog.Builder(this).setTitle(getString(R.string.wireless_connection_help))
             .setMessage(getString(R.string.pair_your_iphone_with_the_car_s_bluetooth_keep_wi_fi_on_an))
             .setPositiveButton(getString(R.string.got_it), null)
-            .setNeutralButton(getString(R.string.reset_carplay_wi_fi)) { _, _ ->
-                confirmWirelessReset()
-            }.show()
-    }
-
-    private fun handleWirelessRecovery() {
-        if (page != "wireless-recovery") return
-        // Home, because "wireless" is not a page any more: setting it left the header saying "Back" on
-        // a screen that was already the home page, and the back key redrew the same thing.
-        page = "home"; render()
-        confirmWirelessReset()
-    }
-
-    private fun confirmWirelessReset() {
-        AlertDialog.Builder(this).setTitle(getString(R.string.reset_carplay_wi_fi_2))
-            .setMessage(getString(R.string.this_ends_the_existing_wi_fi_direct_connection_including_o))
-            .setPositiveButton(getString(R.string.reset_and_connect)) { _, _ ->
-                CarPlayBackgroundSession.stop { runOnUiThread { resetWirelessGroup() } }
-            }.setNegativeButton(getString(R.string.cancel), null).show()
-    }
-
-    private fun resetWirelessGroup() {
-        val manager = getSystemService(Context.WIFI_P2P_SERVICE) as? android.net.wifi.p2p.WifiP2pManager
-        if (manager == null) { toast(getString(R.string.this_head_unit_does_not_support_wi_fi_direct)); return }
-        val channel = manager.initialize(this, mainLooper, null)
-        try {
-            manager.requestGroupInfo(channel) { group ->
-                if (group == null) { closeP2pChannel(channel); connect(true); return@requestGroupInfo }
-                manager.removeGroup(channel, object : android.net.wifi.p2p.WifiP2pManager.ActionListener {
-                    override fun onSuccess() {
-                        val deadline = android.os.SystemClock.elapsedRealtime() + 4000
-                        fun waitUntilRemoved() {
-                            manager.requestGroupInfo(channel) { remaining ->
-                                when {
-                                    remaining == null -> { closeP2pChannel(channel); if (!isFinishing && (Build.VERSION.SDK_INT < 17 || !isDestroyed)) connect(true) }
-                                    android.os.SystemClock.elapsedRealtime() >= deadline -> {
-                                        closeP2pChannel(channel); toast(getString(R.string.wi_fi_direct_is_still_busy_close_the_other_projection_app))
-                                    }
-                                    else -> handler.postDelayed({ waitUntilRemoved() }, 200)
-                                }
-                            }
-                        }
-                        waitUntilRemoved()
-                    }
-                    override fun onFailure(reason: Int) { closeP2pChannel(channel); toast(getString(R.string.could_not_reset_wi_fi_direct_close_the_other_projection_ap)) }
-                })
-            }
-        } catch (_: SecurityException) {
-            closeP2pChannel(channel); permissionHelp(getString(R.string.wireless_permissions), getString(R.string.allow_nearby_devices_and_on_older_android_versions_locatio))
-        }
-    }
-
-    private fun closeP2pChannel(channel: android.net.wifi.p2p.WifiP2pManager.Channel) {
-        if (Build.VERSION.SDK_INT >= 27) channel.close()
+            .show()
     }
 
     private fun refreshStatus() {

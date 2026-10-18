@@ -58,15 +58,6 @@ class WirelessModeSelectionTest {
     }
 
     @Test
-    fun wifiDirectFallsBackToTheLocalOnlyHotspotAndThenToTheCarHotspot() {
-        assertEquals(WirelessHotspotMode.MANUAL, effectiveHotspotMode(WirelessHotspotMode.WIFI_P2P, 19))
-        assertEquals(WirelessHotspotMode.MANUAL, effectiveHotspotMode(WirelessHotspotMode.WIFI_P2P, api22))
-        assertEquals(WirelessHotspotMode.LOCAL_ONLY_HOTSPOT, effectiveHotspotMode(WirelessHotspotMode.WIFI_P2P, 26))
-        assertEquals(WirelessHotspotMode.LOCAL_ONLY_HOTSPOT, effectiveHotspotMode(WirelessHotspotMode.WIFI_P2P, 28))
-        assertEquals(WirelessHotspotMode.WIFI_P2P, effectiveHotspotMode(WirelessHotspotMode.WIFI_P2P, 29))
-    }
-
-    @Test
     fun theLocalOnlyHotspotFallsBackToTheCarHotspotBelowAndroid8() {
         assertEquals(WirelessHotspotMode.MANUAL, effectiveHotspotMode(WirelessHotspotMode.LOCAL_ONLY_HOTSPOT, api22))
         assertEquals(

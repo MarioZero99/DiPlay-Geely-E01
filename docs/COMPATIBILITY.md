@@ -19,12 +19,15 @@ around 1.05 GB. A feature that is merely *possible* is not necessarily worth por
 
 ## Legacy Android transport matrix
 
-| Android version | Wired USB | Manual car hotspot | LocalOnlyHotspot | Wi-Fi Direct group |
-| --- | --- | --- | --- | --- |
-| 4.4 (API 19) | Compatibility USB control/request backend | Yes | Platform unavailable | Platform configuration unavailable |
-| 5–7 (API 21–25) | Framework USB backend | Yes | Platform unavailable | Falls back to manual hotspot |
-| 8–9 (API 26–28) | Framework USB backend | Yes | Yes | Falls back to LocalOnlyHotspot |
-| 10+ (API 29+) | Framework USB backend | Yes | Yes | Yes |
+| Android version | Wired USB | Manual car hotspot | LocalOnlyHotspot |
+| --- | --- | --- | --- |
+| 4.4 (API 19) | Compatibility USB control/request backend | Yes | Platform unavailable |
+| 5–7 (API 21–25) | Framework USB backend | Yes | Platform unavailable |
+| 8–9 (API 26–28) | Framework USB backend | Yes | Yes |
+| 10+ (API 29+) | Framework USB backend | Yes | Yes |
+
+Wi-Fi Direct is not a mode in this fork: a group needs Android 10, and the head unit this package
+serves is API 22. A stored `"WIFI_P2P"` from an install that offered it reads as the car hotspot.
 
 The feature choice remains visible across versions, but a mode that the operating system cannot
 provide is mapped to the closest supported backend. The classic View UI, legacy media-button

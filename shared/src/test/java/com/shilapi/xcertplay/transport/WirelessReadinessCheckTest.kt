@@ -104,7 +104,6 @@ class WirelessReadinessCheckTest {
     @Test fun onlyTheSameNetworkModeCaresAboutTheCarsOwnHotspot() {
         for (mode in listOf(
             WirelessHotspotMode.MANUAL,
-            WirelessHotspotMode.WIFI_P2P,
             WirelessHotspotMode.LOCAL_ONLY_HOTSPOT,
         )) {
             val report = WirelessReadinessCheck.assess(
