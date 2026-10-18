@@ -64,15 +64,10 @@ internal object DiagnosticExportStore {
     ): ExportOutcome {
         val probe = DiagnosticVolumeProbe.probe(context, extraMountPaths)
         val savedPaths = mutableListOf<String>()
-
-        // First and unconditionally: the only file the FileProvider is allowed to sign, so the share
-        // sheet has something to hand over whatever the stick turns out to be.
-        val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrNull()
-        backup?.let { savedPaths += it.file.absolutePath }
+        val scanned = mutableListOf<String>()
 
         var usbPackagePath: String? = null
         var usbRootPath: String? = null
-        val scanned = mutableListOf<String>()
 
         // b. The contract-guaranteed directory on the stick.
         for (volume in probe.volumes) {
@@ -96,13 +91,17 @@ internal object DiagnosticExportStore {
             scanned += file.absolutePath
         }
 
-        // c. Nothing on the stick took it, so the device's own Downloads is the fallback — not an
-        // extra copy. A second copy the dialog does not mention would make "where is my report?" a
-        // question with two answers.
-        val downloadPath = if (usbPackagePath == null && usbRootPath == null) {
-            saveToDeviceDownloads(context, fileName, report)?.also { scanned += it }
-        } else null
-        downloadPath?.let { savedPaths += it }
+        // c. The head unit's own public Downloads. On Android 5 this is granted at install by the
+        // manifest's WRITE_EXTERNAL_STORAGE (maxSdkVersion 28), so it is the fallback that almost
+        // always works — and the only sentence a driver can act on when no stick took the report.
+        val downloadPath = saveToDeviceDownloads(context, fileName, report)
+        downloadPath?.let { savedPaths += it; scanned += it }
+
+        // d. The managed copy the app owns, written last and only for the share sheet: it is the one
+        // file the FileProvider is allowed to sign, and a driver with a full /data must still get the
+        // stick copy. Its failure is not the export's failure.
+        val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrNull()
+        backup?.let { savedPaths += it.file.absolutePath }
 
         announce(context, scanned)
 
@@ -196,19 +195,12 @@ internal object DiagnosticExportStore {
     private data class Backup(val uri: Uri?, val file: File)
 
     /**
-     * The copy the app owns: written even when the stick takes the report, because it is what the
-     * share sheet can be handed without the provider ever seeing a second volume. When the external
-     * package directory is gone or unwritable this falls back to the app's own files directory.
+     * The copy the app owns. Private storage, not the external package directory: this file exists
+     * only so the share sheet has something the FileProvider may sign, and private storage is the
+     * one place that survives a stick being pulled out or an SD card being removed.
      */
-    private fun saveInternalBackup(context: Context, fileName: String, report: String): Backup {
-        val external = runCatching { context.getExternalFilesDir(null) }.getOrNull()
-        if (external != null) {
-            runCatching {
-                return saveBackupIn(context, File(external, "diagnostic-reports"), fileName, report)
-            }
-        }
-        return saveBackupIn(context, File(context.filesDir, "diagnostic-reports"), fileName, report)
-    }
+    private fun saveInternalBackup(context: Context, fileName: String, report: String): Backup =
+        saveBackupIn(context, File(context.filesDir, "diagnostic-reports"), fileName, report)
 
     private fun saveBackupIn(context: Context, directory: File, fileName: String, report: String): Backup {
         if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Report storage is unavailable")
@@ -249,8 +241,10 @@ internal object DiagnosticExportStore {
         return try {
             val parent = file.parentFile
             if (parent != null && !parent.exists() && !parent.mkdirs()) return false
+            if (parent != null && !parent.canWrite()) return false
             FileOutputStream(file).use { stream ->
                 stream.write(content.toByteArray(Charsets.UTF_8))
+                stream.flush()
                 stream.fd.sync()
             }
             true

@@ -24,10 +24,10 @@ import java.io.File
 @Config(sdk = [28], qualifiers = "en", shadows = [FileProviderPathTestShadow::class])
 class DiagnosticExportUiTest {
     /**
-     * No stick on this head unit, so the dialog must not claim one: it names the device copy, and
-     * the probe line underneath is the evidence a driver can photograph for a bug report.
+     * One exit, and the dialog says what actually happened: no stick here, so it must not claim one,
+     * and the probe's own evidence line has to appear underneath the sentence.
      */
-    @Test fun aReportWithNoStickSaysSoAndShowsTheProbeLine() {
+    @Test fun oneButtonExportReportsTheRealDestinationAndTheProbeLine() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
         val activity = controller.get()
         val context = activity.applicationContext
@@ -35,14 +35,12 @@ class DiagnosticExportUiTest {
         try {
             ReflectionHelpers.callInstanceMethod<Unit>(activity, "exportDiagnostics")
             val saved = awaitDialog()
-            assertEquals("No writable USB drive detected", shadowOf(saved).title.toString())
-            val texts = descendants(saved.window!!.decorView).filterIsInstance<TextView>()
-            val body = texts.first { it.text.contains("Report was saved to head unit") }
-            assertTrue("the message must carry the real path", body.text.contains("DiPlay-"))
-            val probe = texts.first { it.text.contains("未发现外置存储卷") || it.text.contains("No external volume") }
-            // The evidence is small print under the message, not the message itself.
-            assertTrue(probe.textSize < body.textSize)
-
+            val texts = descendants(saved.window!!.decorView).filterIsInstance<TextView>().map { it.text.toString() }
+            // Robolectric has no USB volume: the title and the body must both refuse to claim one.
+            assertTrue(texts.any { it.contains("No writable USB drive detected") })
+            assertTrue(texts.any { it.contains("Download/DiPlay/DiPlay-") })
+            // The evidence line comes from the probe, not from the copy.
+            assertTrue(texts.any { it.contains("未发现外置存储卷") || it.contains("No external volume") })
             saved.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
             shadowOf(Looper.getMainLooper()).idle()
             val viewer = ShadowAlertDialog.getLatestAlertDialog()

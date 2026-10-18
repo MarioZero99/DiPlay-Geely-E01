@@ -165,7 +165,6 @@
     <string name="channel_is_not_valid_for_the_selected_band">Channel is not valid for the selected band</string>
     <string name="channel_must_be_0_or_1_196">Channel must be 0 or 1-196</string>
     <string name="check_and_enable">Check and enable</string>
-    <string name="check_that_storage_is_available_or_choose_another_save_loc">Check that storage is available, then try again.</string>
     <string name="choose_iphone">Choose iPhone</string>
     <string name="choose_your_iphone">Choose your iPhone</string>
     <string name="close">Close</string>
@@ -314,7 +313,7 @@
     <string name="report_android_location_to_the_iphone">Report Android location to the iPhone</string>
     <string name="report_location_to_iphone">Report location to iPhone</string>
     <string name="report_saved_open_it_from_your_file_manager_to_share_it">Report saved. Open it from your file manager to share it.</string>
-    <string name="reports_save_to_usb_or_downloads">Saves to a USB drive when one is writable, otherwise to Downloads/DiPlay.\u0020</string>
+    <string name="reports_save_to_usb_then_downloads">Saves to the USB drive when one is writable; otherwise to Download/DiPlay on the head unit.\u0020</string>
     <string name="requesting_iphone_usb_permission">Requesting iPhone USB permission</string>
     <string name="requesting_mfi_usb_permission">Requesting MFi USB permission</string>
     <string name="reset">Reset</string>
@@ -449,6 +448,7 @@
     <string name="diagnostic_report_saved_to_usb">Report was saved to USB drive:\n%1$s\n\nYou can also share or view it here. Nothing is sent automatically.</string>
     <string name="diagnostic_report_saved_to_device_no_usb">No writable USB drive detected (or no write permission). Report was saved to head unit:\n%1$s\n\nYou can also share or view it here. Nothing is sent automatically.</string>
     <string name="no_writable_usb_detected">No writable USB drive detected</string>
+    <string name="diagnostic_report_save_failed_body">Storage is unavailable. Free some space and try again.</string>
     <string name="view_diagnostic_report">View report</string>
     <string name="diagnostic_report_copy_hint">Touch and hold the report text to select and copy it. You can use this if no sharing app is available.</string>
     <string name="adapter_pair_hint">On your iPhone open Settings → Bluetooth → Other Devices, then tap the name above. Do not tap the car\'s existing Bluetooth entry.</string>

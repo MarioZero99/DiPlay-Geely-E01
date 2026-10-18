@@ -27,6 +27,11 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.TextUtils
+import android.text.style.AbsoluteSizeSpan
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -218,9 +223,12 @@ class DiPlayActivity : ComponentActivity() {
      * appear in getExternalFilesDirs until something asks again, and asking means creating directories
      * and writing a file to see — disk I/O the drawing thread is not allowed to do. So the broadcast
      * is recorded here and read once, on the export's own thread.
+     *
+     * Registered in [onResume] beside [usbTopology], not for the activity's whole life: a path kept
+     * from a page that is no longer up can name a stick that has since been pulled out.
      */
     private val mountedUsbPaths = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-    private val mediaMount = object : BroadcastReceiver() {
+    private val mediaMountReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val path = intent.data?.path ?: return
             when (intent.action) {
@@ -268,18 +276,6 @@ class DiPlayActivity : ComponentActivity() {
         openOntoRunningFirmwareOperation()
         startVendorHopInBackground()
         wakeCarHotspotInBackground()
-        // Listened to for the activity's whole life rather than only while the page is visible: the
-        // stick is usually plugged in before the driver opens settings, and the export happens on
-        // whichever page they were already on.
-        runCatching {
-            registerReceiver(mediaMount, IntentFilter().apply {
-                addAction(Intent.ACTION_MEDIA_MOUNTED)
-                addAction(Intent.ACTION_MEDIA_UNMOUNTED)
-                addAction(Intent.ACTION_MEDIA_REMOVED)
-                addAction(Intent.ACTION_MEDIA_BAD_REMOVAL)
-                addDataScheme("file")
-            })
-        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 // The exit question is drawn over everything else, so it is answered or dismissed
@@ -328,6 +324,7 @@ class DiPlayActivity : ComponentActivity() {
         // finds that out, and it stops itself there.
         maintenanceWatched?.let { startWatchingMaintenance(it) }
         registerUsbTopology()
+        registerMediaMount()
         // Back from the car settings: refresh the car hotspot reminder on the home page.
         // Opening the app never starts a connection. Wireless or USB is chosen on the connect button.
         if (initialLaunch) initialLaunch = false
@@ -335,6 +332,7 @@ class DiPlayActivity : ComponentActivity() {
     }
     override fun onPause() {
         unregisterUsbTopology()
+        unregisterMediaMount()
         handler.removeCallbacks(tick)
         // Taken off the queue as well, and put back in onResume. What it does is a root round trip on
         // the same Binder the write is using, every 700 ms, and nothing on the screen is being drawn
@@ -346,8 +344,6 @@ class DiPlayActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         handler.removeCallbacks(maintenanceTick)
-        // Registered in onCreate, so its counterpart is here and not in onPause.
-        runCatching { unregisterReceiver(mediaMount) }
         releaseAdapterPage()
         super.onDestroy()
     }
@@ -365,8 +361,15 @@ class DiPlayActivity : ComponentActivity() {
         // the next open — except when it was open a moment ago, in which case it is put straight back
         // where it was: a setting changed inside the drawer must not close it, slide it in again, or
         // throw the driver back to the top of a list they had scrolled down to reach that setting.
-        val restoreDrawer = drawerOpen || drawerRequested
+        //
+        // Two different reasons to draw it again, and they are not the same animation. `drawerOpen`
+        // is a redraw around a drawer that never went away, so it comes back without a slide.
+        // `drawerRequested` is somebody *asking* for it — the connection page's settings chip, or an
+        // outside intent — and that is a drawer arriving, which has to slide in like every other
+        // open. Folding the two together is what made that request appear with a jump.
+        val restoreDrawer = drawerOpen
         val restoreOffset = if (drawerOpen) drawer?.scrollOffset() ?: 0 else 0
+        val openRequested = !drawerOpen && drawerRequested
         drawerRequested = false
         hero = null; widgets = null; cockpitHost = null; drawer = null; drawerOpen = false; exitSheet = null
         // Read here rather than per view: the car's own day/night signal arrives as a configuration
@@ -385,7 +388,7 @@ class DiPlayActivity : ComponentActivity() {
         // and then replacing it with the cockpit cost a header, a column and a dozen views per
         // redraw on a head unit that runs with 26 MB free.
         if (page == "home") {
-            setContentView(cockpitRoot(restoreDrawer, restoreOffset))
+            setContentView(cockpitRoot(restoreDrawer, restoreOffset, openRequested))
             refreshStatus()
             return
         }
@@ -402,7 +405,10 @@ class DiPlayActivity : ComponentActivity() {
         if (page != PAGE_FIRMWARE) {
             // "Back" from every page but the home page, which is the cockpit and never gets here.
             header.addView(button(getString(R.string.back), false) { goBack() }, LinearLayout.LayoutParams(dp(130), dp(56)))
-            header.addView(button(getString(R.string.close_app), false) { closeTheApp() }, LinearLayout.LayoutParams(dp(130), dp(56)).apply { marginStart = dp(10) })
+            // The same question the cockpit's exit control asks. This button sits a thumb's width
+            // from "Back" and used to end the process on the first touch, which is the one thing the
+            // cockpit's own exit is careful never to do.
+            header.addView(button(getString(R.string.close_app), false) { confirmExit() }, LinearLayout.LayoutParams(dp(130), dp(56)).apply { marginStart = dp(10) })
         }
         content.addView(header)
         content.addView(space(24))
@@ -456,7 +462,7 @@ class DiPlayActivity : ComponentActivity() {
      * Everything the old stack carried is still here rather than dropped for the wider shape: the
      * stage holds the readiness card's notes and the gap lines, and the drawer holds every setting.
      */
-    private fun cockpitRoot(restoreDrawer: Boolean, restoreOffset: Int): View {
+    private fun cockpitRoot(restoreDrawer: Boolean, restoreOffset: Int, openRequested: Boolean): View {
         val root = FrameLayout(this).apply { setBackgroundColor(palette.screenBg) }
         val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
@@ -538,7 +544,8 @@ class DiPlayActivity : ComponentActivity() {
         cockpitHost = root
         // A drawer that was open before the redraw comes back without its slide and at the place it
         // was left: it never went away, and a setting changed inside it must not look like a reopen.
-        if (restoreDrawer) restoreSettingsDrawer(restoreOffset)
+        // A drawer that was *asked for* slides in, because it is arriving.
+        if (restoreDrawer) restoreSettingsDrawer(restoreOffset) else if (openRequested) openSettingsDrawer()
         return root
     }
 
@@ -687,10 +694,14 @@ class DiPlayActivity : ComponentActivity() {
      * The question is a card on the page rather than a platform dialog: it comes from the palette, so
      * it matches whichever skin is running instead of arriving as a grey system rectangle, and the
      * stage it is asking about stays visible behind it. See [ConfirmSheetView].
+     *
+     * It is asked on every page, not only on the cockpit. The header's close control is next to
+     * "Back" on the settings, display, system and about pages, and a thumb that lands one button to
+     * the right of the one it meant used to end the session and the process with it.
      */
     private fun confirmExit() {
-        val host = cockpitHost ?: return
         if (exitSheet != null) return
+        val host = cockpitHost ?: findViewById<ViewGroup>(android.R.id.content) ?: return
         val sheet = ConfirmSheetView(
             this,
             palette,
@@ -829,7 +840,7 @@ class DiPlayActivity : ComponentActivity() {
                 exportDiagnostics()
             }.apply { isEnabled = !exportInProgress }
             card.addView(exportButton, matchButton(10, 60))
-            card.addView(label(getString(R.string.reports_save_to_usb_or_downloads) + getString(R.string.nothing_is_sent_automatically_protocol_payloads_and_creden), 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
+            card.addView(label(getString(R.string.reports_save_to_usb_then_downloads) + getString(R.string.nothing_is_sent_automatically_protocol_payloads_and_creden), 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
         }
         columns.card(R.string.automatic_connection, R.drawable.ic_dp_automation) { card ->
             toggle(card, getString(R.string.open_after_the_car_starts), getString(R.string.availability_depends_on_your_head_unit_s_startup_settings), AirPlayPersistence.loadAutoStartOnBoot(this)) { AirPlayPersistence.saveAutoStartOnBoot(this, it) }
@@ -2546,6 +2557,26 @@ class DiPlayActivity : ComponentActivity() {
     private fun unregisterUsbTopology() = runCatching { unregisterReceiver(usbTopology) }
 
     /**
+     * Media mount events, listened to exactly while the page is up — the same pair of callbacks as
+     * [registerUsbTopology]. The action is only ever sent by the system, so the receiver is not
+     * exported; targetSdk 37 makes that flag mandatory on Android 13 and later.
+     */
+    private fun registerMediaMount() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_MEDIA_MOUNTED)
+            addAction(Intent.ACTION_MEDIA_UNMOUNTED)
+            addAction(Intent.ACTION_MEDIA_REMOVED)
+            addAction(Intent.ACTION_MEDIA_BAD_REMOVAL)
+            addDataScheme("file")
+        }
+        // An old ROM that refuses the registration must not take the settings page down with it;
+        // the vendor mount roots are still scanned as a fallback.
+        runCatching { ContextCompat.registerReceiver(this, mediaMountReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED) }
+    }
+
+    private fun unregisterMediaMount() = runCatching { unregisterReceiver(mediaMountReceiver) }
+
+    /**
      * Plugging the adapter in puts its step line on the page; pulling it out takes the line away. Only a change
      * of presence redraws, so this cannot become the redraw loop the per-second bus read used to be.
      */
@@ -2710,9 +2741,12 @@ class DiPlayActivity : ComponentActivity() {
                 result.fold(
                     onSuccess = { (outcome, report) -> showExportOutcome(outcome, report) },
                     onFailure = {
+                        // Storage was gone for every layer including the app's own. The one useful
+                        // action left is the one that failed, so the button offers it again.
                         AlertDialog.Builder(this).setTitle(getString(R.string.could_not_save_the_report))
-                            .setMessage(getString(R.string.check_that_storage_is_available_or_choose_another_save_loc))
-                            .setPositiveButton(getString(R.string.close), null).show()
+                            .setMessage(getString(R.string.diagnostic_report_save_failed_body))
+                            .setPositiveButton(getString(R.string.save_diagnostic_report)) { _, _ -> exportDiagnostics() }
+                            .setNegativeButton(getString(R.string.close), null).show()
                     },
                 )
             }
@@ -2721,35 +2755,37 @@ class DiPlayActivity : ComponentActivity() {
 
     /**
      * What happened, not what was attempted. A report on the stick and a report on the head unit are
-     * different titles and different sentences, and the probe's own line sits under both: it names the
-     * mount point and the kernel's reason, which is the only evidence a driver can carry away from a
-     * head unit with no adb and no log view.
+     * different titles and different sentences, and the probe's own line sits under both, in small
+     * print: it names the mount point and the kernel's reason, which is the only evidence a driver can
+     * carry away from a head unit with no adb and no log view.
      */
     private fun showExportOutcome(outcome: ExportOutcome, report: String) {
-        val onUsb = outcome.destination == ExportDestination.USB_ROOT ||
+        val toUsb = outcome.destination == ExportDestination.USB_ROOT ||
             outcome.destination == ExportDestination.USB_PACKAGE_DIR
-        val body = column().apply { setPadding(dp(24), dp(4), dp(24), 0) }
-        val message = if (onUsb) R.string.diagnostic_report_saved_to_usb else R.string.diagnostic_report_saved_to_device_no_usb
-        body.addView(label(getString(message, outcome.primaryPath), 16, TEXT).apply {
-            layoutParams = LinearLayout.LayoutParams(-1, -2)
-        })
-        if (outcome.probeSummary.isNotBlank()) {
-            body.addView(label(outcome.probeSummary, 12, MUTED).apply {
-                layoutParams = LinearLayout.LayoutParams(-1, -2)
-                setPadding(0, dp(12), 0, 0)
-            })
-        }
+        val body = getString(
+            if (toUsb) R.string.diagnostic_report_saved_to_usb else R.string.diagnostic_report_saved_to_device_no_usb,
+            outcome.primaryPath,
+        )
         val builder = AlertDialog.Builder(this)
-            .setTitle(getString(if (onUsb) R.string.diagnostic_report_saved else R.string.no_writable_usb_detected))
-            .setView(body)
+            .setTitle(getString(if (toUsb) R.string.diagnostic_report_saved else R.string.no_writable_usb_detected))
+            .setMessage(TextUtils.concat(body, probeLine(outcome.probeSummary)))
             .setPositiveButton(getString(R.string.view_diagnostic_report)) { _, _ -> showDiagnosticReport(report) }
             .setNegativeButton(getString(R.string.done), null)
         // No managed copy means no URI the provider may sign, so there is nothing a share sheet could
         // open. A button that could only fail is worse than no button.
-        outcome.shareableUri?.let { uri ->
-            builder.setNeutralButton(getString(R.string.share)) { _, _ -> shareReport(uri, report) }
+        outcome.shareableUri?.let { shareUri ->
+            builder.setNeutralButton(getString(R.string.share)) { _, _ -> shareReport(shareUri, report) }
         }
         builder.show()
+    }
+
+    /** The probe's evidence line: 12sp and muted, under the sentence about where the file went. */
+    private fun probeLine(summary: String): CharSequence {
+        if (summary.isBlank()) return ""
+        return SpannableString("\n\n$summary").apply {
+            setSpan(AbsoluteSizeSpan(12, true), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(ForegroundColorSpan(MUTED), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
     }
 
     private fun shareReport(uri: Uri, report: String) {

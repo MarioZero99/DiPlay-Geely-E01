@@ -158,7 +158,6 @@
     <string name="channel_is_not_valid_for_the_selected_band">所选频段不支持此信道</string>
     <string name="channel_must_be_0_or_1_196">信道必须为 0 或 1–196</string>
     <string name="check_and_enable">检查并启用</string>
-    <string name="check_that_storage_is_available_or_choose_another_save_loc">请检查存储是否可用，然后重试。</string>
     <string name="choose_iphone">选择 iPhone</string>
     <string name="choose_your_iphone">选择 iPhone</string>
     <string name="close">关闭</string>
@@ -313,7 +312,7 @@
     <string name="report_android_location_to_the_iphone">向 iPhone 报告 Android 位置</string>
     <string name="report_location_to_iphone">向 iPhone 报告位置</string>
     <string name="report_saved_open_it_from_your_file_manager_to_share_it">报告已保存。在文件管理器中打开即可分享。</string>
-    <string name="reports_save_to_usb_or_downloads">U 盘可写时保存到 U 盘，否则保存到 Downloads/DiPlay。</string>
+    <string name="reports_save_to_usb_then_downloads">U 盘可写时存入 U 盘，否则保存到车机的 Download/DiPlay。</string>
     <string name="requesting_iphone_usb_permission">正在请求 iPhone USB 权限</string>
     <string name="requesting_mfi_usb_permission">正在请求 MFi USB 权限</string>
     <string name="reset">重置</string>
@@ -448,6 +447,7 @@
     <string name="diagnostic_report_saved_to_usb">报告已存入 U 盘：\n%1$s\n\n您也可以在此分享或查看报告。不会自动发送任何内容。</string>
     <string name="diagnostic_report_saved_to_device_no_usb">未检测到可写 U 盘（或 U 盘无写入权限），报告已保存至车机：\n%1$s\n\n您可以在此分享或查看报告。不会自动发送任何内容。</string>
     <string name="no_writable_usb_detected">未检测到可写 U 盘</string>
+    <string name="diagnostic_report_save_failed_body">存储不可用，请清理空间后重试。</string>
     <string name="view_diagnostic_report">查看报告</string>
     <string name="diagnostic_report_copy_hint">长按报告文本即可选择并复制。如果没有可用的分享应用，可以使用此方式。</string>
     <string name="adapter_pair_hint">在 iPhone 上打开「设置 → 蓝牙 → 其他设备」，点上面显示的这个名字。不要点车机原有的蓝牙条目。</string>
