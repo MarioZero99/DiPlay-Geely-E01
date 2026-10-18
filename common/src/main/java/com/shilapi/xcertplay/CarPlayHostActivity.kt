@@ -48,6 +48,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.widget.CompoundButtonCompat
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -106,6 +107,7 @@ import com.shilapi.xcertplay.transport.adapter.AdapterPage
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector
+import com.shilapi.xcertplay.ui.component.QuickHudView
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -142,6 +144,14 @@ private const val ADAPTER_BLUETOOTH_NAME = "DiPlay"
  */
 class CarPlayHostActivity : ComponentActivity() {
     private var connectionPanel: View? = null
+
+    /**
+     * The bar the three-finger swipe opens over a live picture. Built with the page and kept `GONE`
+     * so showing it costs a visibility change: the whole point of it is that the driver does not
+     * leave the video for a settings screen, and building a view tree at the gesture would be the
+     * same kind of churn in a smaller place. See [QuickHudView].
+     */
+    private var quickHud: QuickHudView? = null
     private var statusLamp: View? = null
     private var stepListContainer: LinearLayout? = null
     private var stepGlyphs: List<TextView> = emptyList()
@@ -561,9 +571,17 @@ class CarPlayHostActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    // The settings overlay this used to unwind is gone — settings live on the DiPlay
-                    // page now — so back either closes the safe-area editor or leaves the page.
-                    if (safeAreaEditorActive) closeSafeAreaEditor() else showDiPlayHome()
+                    // The quick bar is a layer over the picture: back closes it before it closes the
+                    // page. The settings overlay this used to unwind is gone — settings live on the
+                    // DiPlay page now — so after the bar, back either closes the safe-area editor or
+                    // leaves the page.
+                    if (quickHud?.visibility == View.VISIBLE) {
+                        hideQuickHud()
+                    } else if (safeAreaEditorActive) {
+                        closeSafeAreaEditor()
+                    } else {
+                        showDiPlayHome()
+                    }
                 }
             },
         )
@@ -925,6 +943,9 @@ class CarPlayHostActivity : ComponentActivity() {
     override fun onStop() {
         // The controller, USB/iAP2 link, and VPN attachment intentionally outlive the UI.
         swipe.reset()
+        // And so does the bar's timer, but not the bar: it belongs to this window and is put away
+        // with it rather than left waiting for a picture that may be gone.
+        hideQuickHud()
         super.onStop()
     }
 
@@ -1006,6 +1027,18 @@ class CarPlayHostActivity : ComponentActivity() {
             buildSafeAreaEditor().apply { visibility = View.GONE }.also { safeAreaEditor = it },
             FrameLayout.LayoutParams(-1, -1),
         )
+        // Last in the tree, so it is the only thing a touch can reach while it is up: the bar takes
+        // its own presses, and anything outside it dismisses instead of reaching CarPlay.
+        quickHud = QuickHudView(
+            this,
+            night = darkMode,
+            audioStream = AirPlayPersistence.loadNavigationStreamType(this),
+            onDisconnect = { disconnectFromQuickHud() },
+            onAudioSelected = { selectQuickHudAudio(it) },
+            onToggleNight = { toggleQuickHudNight() },
+            onExit = { exitFromQuickHud() },
+            onDismiss = { hideQuickHud() },
+        ).also { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         videoView = video
         connectionPanel = panel
         updateConnectionAction()
@@ -2532,13 +2565,12 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     /**
-     * The three-finger destination: DiPlay's home page with its settings drawer already open.
+     * The connection page's way to the settings drawer — the top bar's Settings chip.
      *
-     * It used to open the standalone settings page, which is the pre-cockpit design — a second
-     * settings surface, drawn with its own headings, reached by a gesture rather than by the gear
-     * that now opens the drawer. Two surfaces for one job is the thing the cockpit rework set out to
-     * remove, so the gesture goes where the gear goes. Back then closes the drawer and leaves the
-     * driver on the home page, one press from the CarPlay picture they came from.
+     * It used to be the three-finger destination as well. That gesture now opens [QuickHudView]
+     * instead: leaving the picture for a settings page unmounted the video surface and put the
+     * drawer beside a running decoder, which is exactly the memory profile this head unit cannot
+     * afford. Settings from here are reached before a session, where no picture is being drawn.
      */
     private fun openSettingsMenu() {
         controller?.sendTouch(emptyList())
@@ -2546,6 +2578,83 @@ class CarPlayHostActivity : ComponentActivity() {
             .putExtra("page", "home")
             .putExtra(DiPlayActivity.EXTRA_OPEN_SETTINGS_DRAWER, true)
             .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+    }
+
+    /**
+     * The three-finger destination while a picture is up: four controls over the video, no page.
+     *
+     * Nothing is built here — [quickHud] was built with the page and is only being shown. The guard
+     * is about the surface, not the bar: with no screen stream there is nothing to sit over, and the
+     * connection page is already the surface that has the answer.
+     */
+    private fun showQuickHud() {
+        val hud = quickHud ?: return
+        if (activeScreenStreamTypes.isEmpty()) {
+            appendLog("Three-finger swipe down: no picture to overlay")
+            return
+        }
+        hud.setNight(darkMode)
+        hud.setAudioStream(AirPlayPersistence.loadNavigationStreamType(this))
+        hud.open()
+    }
+
+    private fun hideQuickHud() {
+        quickHud?.dismissNow()
+    }
+
+    /**
+     * Ends the session and lands on DiPlay's home page, which is what disconnecting means everywhere
+     * else in the app. The page is started before the teardown so it is already drawing by the time
+     * this activity finishes.
+     */
+    private fun disconnectFromQuickHud() {
+        hideQuickHud()
+        appendLog("Quick bar: disconnect")
+        showDiPlayHome()
+        CarPlayBackgroundSession.stop()
+    }
+
+    /**
+     * Saves the navigation stream the same way the settings page does.
+     *
+     * The sink reads this when it is built, so the change belongs to the next connection; the bar
+     * says that instead of pretending the running session moved. The bar closes afterwards — a
+     * choice made is the whole reason it was opened.
+     */
+    private fun selectQuickHudAudio(stream: Int) {
+        AirPlayPersistence.saveNavigationStreamType(this, stream)
+        hideQuickHud()
+        appendLog("Quick bar: navigation stream=$stream (next connection)")
+        Toast.makeText(
+            this,
+            getString(R.string.hud_audio_saved, stream),
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    /**
+     * Day/night for the phone's own UI, sent over the AirPlay event channel.
+     *
+     * The car still owns this signal: the next configuration change puts [darkMode] back to what the
+     * head unit reports and sends that instead, which is the right order — the manual flip is for
+     * the drive in progress, not a setting the next drive inherits.
+     */
+    private fun toggleQuickHudNight() {
+        darkMode = !darkMode
+        quickHud?.setNight(darkMode)
+        syncAirPlayDarkMode()
+        appendLog("Quick bar: night mode=$darkMode")
+    }
+
+    /** Ends the app. The bar's own two-press arm is what keeps this from being a single mis-tap. */
+    private fun exitFromQuickHud() {
+        hideQuickHud()
+        appendLog("Quick bar: exit")
+        if (CarPlayBackgroundSession.hasSession()) {
+            CarPlayBackgroundSession.exit()
+        } else {
+            shutdown(terminateProcess = true, reason = "quick bar exit")
+        }
     }
 
     private fun shutdown(terminateProcess: Boolean, reason: String, completion: () -> Unit = {}) {
@@ -2642,8 +2751,8 @@ class CarPlayHostActivity : ComponentActivity() {
             }
             ThreeFingerSwipeDetector.Decision.CONSUME -> return true
             ThreeFingerSwipeDetector.Decision.TRIGGER -> {
-                appendLog("Three-finger swipe down: opening DiPlay settings")
-                openSettingsMenu()
+                appendLog("Three-finger swipe down: quick bar")
+                showQuickHud()
                 return true
             }
         }
@@ -2764,7 +2873,11 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private fun updateDebugOverlays() {
         statusScrollView?.visibility = View.GONE
-        connectionPanel?.visibility = if (activeScreenStreamTypes.isEmpty()) View.VISIBLE else View.GONE
+        val hasPicture = activeScreenStreamTypes.isNotEmpty()
+        connectionPanel?.visibility = if (hasPicture) View.GONE else View.VISIBLE
+        // The bar lives on the picture; when the picture goes (session ended, transport error) it
+        // must not be left floating over the connection page that replaces it.
+        if (!hasPicture) hideQuickHud()
     }
 
     private fun appendLog(message: String) {

@@ -493,6 +493,9 @@
     <string name="skin_zeekr_white">极氪白</string>
     <string name="skin_flyme_blue">魅族蓝</string>
     <string name="skin_night">暗夜</string>
+    <string name="hud_day">日间</string>
+    <string name="hud_night">夜间</string>
+    <string name="hud_audio_saved">音频 %1$d · 下次连接生效</string>
     <string name="day_night_switching">日夜切换</string>
     <string name="day_night_follow_car">跟随车机</string>
     <string name="day_night_follow_time">按时间</string>

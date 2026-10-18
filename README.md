@@ -55,7 +55,7 @@ Wireless uses the **built-in car hotspot**. The name and password are already on
 
 For a cable, tap **Connect with USB**. Use a data cable in a data port. A charge-only cable does nothing.
 
-**Swipe down with three fingers** on the CarPlay screen to open settings. This version puts every setting back on one page, two across on the wide screen. Resolution, frame rate and icon size take effect only after **Apply and reconnect** during a session. Selecting a value alone leaves the previous one in place.
+**Swipe down with three fingers** on the CarPlay screen to drop down the quick bar: disconnect, the navigation audio stream, day/night, and exit — all without leaving the picture. Everything else is on DiPlay's home page, where the gear opens the settings drawer. Resolution, frame rate and icon size take effect only after **Apply and reconnect** during a session. Selecting a value alone leaves the previous one in place.
 
 If the connection stalls, open settings and **Save diagnostic report**. The published package has no upload key, so logs are not sent out on their own. Remove passwords and pairing records before posting a report to a public issue.
 
