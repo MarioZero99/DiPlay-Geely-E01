@@ -762,6 +762,7 @@ Robolectric 4.17 最低只支持 SDK 23，E01 是 API 22；这一节是唯一能
 | `7fc2b280` | 修复：车机自身存储的挂载广播不再算作 U 盘 |
 | `08827900` | 修复：errno 读取按 API 21 守卫（lint NewApi） |
 | `bbed6874` | 对齐修订版计划（onResume 注册、setMessage 取证行、私有目录保底） |
+| `750afc8f` | 修正：把误提交的座舱改动整块退回工作区 |
 
 ### 验证结果（本机）
 
@@ -799,3 +800,18 @@ Robolectric 4.17 最低只支持 SDK 23，E01 是 API 22；这一节是唯一能
 - 行为：设置页诊断卡片只剩一个保存按钮；`ChooseReportDestination` / `CreateDocument` 全仓零命中；弹窗标题与正文只按"真的写进了哪一层"分支。
 - 取证：不插盘 / 插盘 / 拔盘后三种情况的弹窗截图各一张，落盘文件在电脑上能打开且非空。
 - 未决：Preflight 第 3 条的按钮可见性拍板；若用户改主意，按该条给的 `onResume` 缓存方案补一步，别在 `render()` 里试写。
+
+### 施工事故：误把座舱改动提交进来（已修正）
+
+共享工作树的 index 被另一条线预暂存过，我又按"整文件 stage"提交了 `DiPlayActivity.kt`，结果 `7cf2bb6f` / `bbed6874` 里混进了对方 7 处座舱改动（`widgets?.updateState(...)`、`openRequested`、`confirmExit` 的 host 兜底等）。其中 `updateState` 只存在于对方未提交的 `QuickWidgetsView.kt`，所以那两个提交的 HEAD 单独 checkout 时**编译不过**——这正是 preflight 第 1 条警告的那件事，被我做成了。
+
+修正：`750afc8f` 把这 7 处整块退回工作区（对方改动仍是未提交状态，未丢失、未改动）。修正后的 HEAD 在干净 worktree（detached，仅本计划提交）里自洽：
+
+| 命令 | 结果 |
+|---|---|
+| `:shared:testDebugUnitTest` | 493 例，0 失败 |
+| `:common:testDebugUnitTest` | 268 例，0 失败；本计划的 28 例是 probe 6 + 导出 12 + store 5 + UI 5 |
+| `:mobile:assembleDebug` | BUILD SUCCESSFUL |
+| `:common:lintDebug` | 0 error |
+
+上面"验证结果"里 common 的 273 例来自共享工作树，比干净 HEAD 多出的 5 例是对方尚未提交的 `QuickHudViewTest`。教训：共享 index 上 `git add <整文件>` 会把对方暂存过的内容一起提交；判断"只有我的 hunk"必须读 hunk 内容，不能只看 hunk 头。
