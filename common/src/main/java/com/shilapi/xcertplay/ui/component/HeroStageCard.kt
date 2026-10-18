@@ -24,9 +24,11 @@ import com.shilapi.xcertplay.ui.theme.ThemePalette
  * instead of being pressed into the button. [updateState] repaints in place: the once-a-second
  * status tick must not rebuild this card, on a head unit with 26 MB free.
  *
- * The notes under the emblem are the old home page's readiness card, kept whole: the connection
- * methods this head unit can run, the adapter's own step, the live-session note, the car-hotspot
- * reminder and a failed bootstrap all survive here rather than being dropped for the wider layout.
+ * The notes under the emblem are the old home page's readiness card, kept whole — the connection
+ * methods this head unit can run, the adapter's own step, the car-hotspot reminder and a failed
+ * bootstrap all survive here rather than being dropped for the wider layout. Its live-session line
+ * does not: it told the driver to disconnect on the home page in order to change a setting, which is
+ * advice for a settings page, not for the page the Disconnect button is on.
  */
 class HeroStageCard(
     context: Context,
@@ -54,17 +56,18 @@ class HeroStageCard(
     private var usbBtn: Button? = null
     private var pulseAnim: android.animation.ObjectAnimator? = null
 
+    /**
+     * The main button's two fills, kept as fields because [updateState] recolours them once a
+     * second: the attempt in flight paints it in `accentSoft`, and rebuilding the background for
+     * that would be two drawables allocated per tick.
+     */
+    private val mainBtnFill: GradientDrawable
+    private val mainBtnPressedFill: GradientDrawable
+
     /** The gap lines and the way to the controls that close them, redrawn only when they change. */
     private val gapsBox: LinearLayout
     private var shownGaps: List<String>? = null
     private var shownBlocked = false
-
-    /** The live-session note: drawn only while a session is up, and repainted by [updateState]. */
-    private val liveNote: TextView = TextView(context).apply {
-        textSize = 15f
-        setTextColor(palette.textMuted)
-        gravity = Gravity.CENTER_VERTICAL
-    }
 
     private var currentPhase: SessionPhase = sessionPhase
 
@@ -125,22 +128,20 @@ class HeroStageCard(
         hotspotOffNote?.let {
             notes.addView(label(it, 15, palette.accent), LayoutParams(-1, -2).apply { topMargin = dp(6) })
         }
-        notes.addView(liveNote, LayoutParams(-1, -2).apply { topMargin = dp(6) })
         setupError?.let {
             notes.addView(label(it, 15, palette.accent), LayoutParams(-1, -2).apply { topMargin = dp(6) })
         }
         addView(notes, LayoutParams(-1, -2))
 
         val buttonRow = row().apply { setPadding(0, dp(14), 0, 0) }
+        mainBtnFill = shape(palette.btnMainBg, dp(10).toFloat())
+        mainBtnPressedFill = shape(shade(palette.btnMainBg), dp(10).toFloat())
         mainBtn = Button(context).apply {
             textSize = 15f
             isAllCaps = false
             setTextColor(palette.btnMainFg)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            background = GradientDrawable().apply {
-                setColor(palette.btnMainBg)
-                cornerRadius = dp(10).toFloat()
-            }
+            background = pressable(mainBtnFill, mainBtnPressedFill)
             setOnClickListener {
                 when (currentPhase) {
                     SessionPhase.Live -> onOpenProjection()
@@ -156,11 +157,7 @@ class HeroStageCard(
             textSize = 14f
             isAllCaps = false
             setTextColor(palette.textMuted)
-            background = GradientDrawable().apply {
-                setColor(palette.cardInner)
-                cornerRadius = dp(10).toFloat()
-                setStroke(dp(1), palette.cardBorder)
-            }
+            background = pressable(palette.cardInner, dp(10).toFloat(), dp(1), palette.cardBorder)
             setOnClickListener { onDisconnect() }
             visibility = View.GONE
         }
@@ -172,11 +169,7 @@ class HeroStageCard(
                 textSize = 13.5f
                 isAllCaps = false
                 setTextColor(palette.textMain)
-                background = GradientDrawable().apply {
-                    setColor(palette.cardInner)
-                    cornerRadius = dp(10).toFloat()
-                    setStroke(dp(1), palette.cardBorder)
-                }
+                background = pressable(palette.cardInner, dp(10).toFloat(), dp(1), palette.cardBorder)
                 setOnClickListener { onConnectUsb() }
                 visibility = View.GONE
             }
@@ -200,34 +193,54 @@ class HeroStageCard(
         pill.setTextColor(if (phase == SessionPhase.Connecting) palette.accent else palette.statusReady)
 
         // A blocked or unready route leads with its own reason; a ready one names the phone.
+        sub.visibility = View.VISIBLE
         if (isBlocked && !readinessGaps.isNullOrEmpty()) {
             sub.text = "● " + readinessGaps.first()
             sub.setTextColor(palette.accent)
         } else if (pairedPhone != null) {
             sub.text = "${context.getString(R.string.paired_device)}: $pairedPhone"
             sub.setTextColor(palette.textMuted)
-        } else {
-            sub.text = context.getString(R.string.ready_when_you_are)
+        } else if (phase == SessionPhase.Idle) {
+            // The pill already says the page is ready; saying it again underneath was the same
+            // sentence twice. What the idle page can usefully add is what is still missing: a phone.
+            sub.text = context.getString(R.string.pair_iphone_to_connect)
             sub.setTextColor(palette.textMuted)
+        } else {
+            sub.text = ""
+            sub.visibility = View.GONE
         }
 
         paintGaps(readinessGaps, isBlocked)
 
-        if (phase == SessionPhase.Connecting) startConnectingPulse() else stopConnectingPulse()
-        emblem.alpha = if (phase == SessionPhase.Live) 1.0f else 0.65f
+        // The pulse and the static alpha are exclusive: the animator drives this property every
+        // frame, so writing 0.65 underneath it was a value that could only ever be overwritten —
+        // and would freeze at the wrong brightness the moment the animator was stopped.
+        if (phase == SessionPhase.Connecting) {
+            startConnectingPulse()
+        } else {
+            stopConnectingPulse()
+            emblem.alpha = if (phase == SessionPhase.Live) 1.0f else 0.65f
+        }
 
-        liveNote.visibility = if (phase == SessionPhase.Idle) View.GONE else View.VISIBLE
-        liveNote.text = if (phase == SessionPhase.Idle) "" else context.getString(R.string.carplay_is_running_this_needs_it_closed)
-
+        // The card says what the session is doing and what the button will do next; it does not say
+        // "disconnect on the home page first", because this *is* the home page — that line belongs
+        // under the settings that a running session locks, and lives there (see DiPlayActivity's
+        // liveSessionNote). It was copied here with the readiness card and read as nonsense: on the
+        // stage there is nothing to change and the Disconnect button is right beside it.
         mainBtn.text = when (phase) {
             SessionPhase.Live -> context.getString(R.string.open_carplay)
             SessionPhase.Connecting -> context.getString(R.string.connecting_to_your_iphone)
             SessionPhase.Idle -> context.getString(R.string.connect_phone)
         }
         mainBtn.isEnabled = phase != SessionPhase.Connecting
-        (mainBtn.background as? GradientDrawable)?.setColor(
-            if (phase == SessionPhase.Connecting) palette.accentSoft else palette.btnMainBg,
-        )
+        // The fill and the label move together: the attempt in flight paints the button in
+        // `accentSoft`, and leaving the label in `btnMainFg` drew white on a 12% peach — a button
+        // that said nothing at all in the two light skins, exactly when it was saying the most.
+        val connecting = phase == SessionPhase.Connecting
+        val fill = if (connecting) palette.accentSoft else palette.btnMainBg
+        mainBtnFill.setColor(fill)
+        mainBtnPressedFill.setColor(shade(fill))
+        mainBtn.setTextColor(if (connecting) palette.accent else palette.btnMainFg)
 
         disconnectBtn.visibility = if (phase == SessionPhase.Live) View.VISIBLE else View.GONE
         usbBtn?.visibility = if (phase == SessionPhase.Idle && hasUsbHost) View.VISIBLE else View.GONE
@@ -238,14 +251,19 @@ class HeroStageCard(
      *
      * Rebuilt only when the list itself changes, not on every tick: the readiness is read once per
      * redraw and a per-second rebuild of six TextViews is the GC churn the stage exists to avoid.
+     *
+     * The first gap is not repeated here. [updateState] already prints it under the title as the
+     * subtitle — the card leads with the one thing standing in the way — and printing the same red
+     * sentence twice on one card read as a rendering fault rather than as emphasis. What is left for
+     * this list is the rest of them, and the way to the controls.
      */
     private fun paintGaps(readinessGaps: List<String>?, isBlocked: Boolean) {
-        val gaps = if (isBlocked) readinessGaps.orEmpty() else emptyList()
+        val gaps = if (isBlocked) readinessGaps.orEmpty().drop(1) else emptyList()
         if (gaps == shownGaps && isBlocked == shownBlocked) return
         shownGaps = gaps
         shownBlocked = isBlocked
         gapsBox.removeAllViews()
-        if (gaps.isEmpty()) {
+        if (gaps.isEmpty() && !isBlocked) {
             gapsBox.visibility = View.GONE
             return
         }
@@ -259,11 +277,7 @@ class HeroStageCard(
                 textSize = 13f
                 isAllCaps = false
                 setTextColor(palette.accent)
-                background = GradientDrawable().apply {
-                    setColor(palette.cardInner)
-                    cornerRadius = dp(8).toFloat()
-                    setStroke(dp(1), palette.cardBorder)
-                }
+                background = pressable(palette.cardInner, dp(8).toFloat(), dp(1), palette.cardBorder)
                 setOnClickListener { onOpenSettings() }
             },
             LayoutParams(-2, dp(44)).apply { topMargin = dp(8) },
@@ -284,6 +298,33 @@ class HeroStageCard(
     private fun stopConnectingPulse() {
         pulseAnim?.cancel()
         pulseAnim = null
+    }
+
+    /**
+     * The pulse is an `ObjectAnimator` on this view's own property, and nothing about detaching a
+     * target stops an animator: Choreographer keeps calling it every frame, and the animator keeps
+     * the card — and through it the Activity — reachable. The home page is rebuilt on every
+     * settings change, so an attempt in flight during a redraw used to leave one card and one
+     * running animation behind for good.
+     */
+    override fun onDetachedFromWindow() {
+        stopConnectingPulse()
+        super.onDetachedFromWindow()
+    }
+
+    /**
+     * Hidden is as good as gone for an animation nobody can see: the projection Activity covering
+     * the page, the car's own launcher, or the screen going dark all leave this view attached, so
+     * detach alone would not have stopped it. Coming back re-arms it if the attempt is still up —
+     * [updateState] runs on the next tick either way.
+     */
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility != View.VISIBLE) {
+            stopConnectingPulse()
+        } else if (currentPhase == SessionPhase.Connecting) {
+            startConnectingPulse()
+        }
     }
 
     private fun label(value: String, size: Int, color: Int) = TextView(context).apply {

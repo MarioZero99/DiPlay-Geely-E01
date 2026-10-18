@@ -73,6 +73,9 @@ class SlimDockView(
             layoutParams = LayoutParams(dp(82), dp(56))
             isClickable = true
             isFocusable = true
+            // A rail with no press state is a rail the driver has to look at to use: five 56dp
+            // targets down one edge, and nothing under the finger to say which one it found.
+            background = pressable(0, dp(10).toFloat(), pressedColor = wash(palette.textMain))
             // Spoken by a screen reader instead of the icon, which has no text of its own. It used
             // to be null: five controls that announced nothing at all.
             contentDescription = label

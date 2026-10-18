@@ -361,8 +361,15 @@ class DiPlayActivity : ComponentActivity() {
         // the next open — except when it was open a moment ago, in which case it is put straight back
         // where it was: a setting changed inside the drawer must not close it, slide it in again, or
         // throw the driver back to the top of a list they had scrolled down to reach that setting.
-        val restoreDrawer = drawerOpen || drawerRequested
+        //
+        // Two different reasons to draw it again, and they are not the same animation. `drawerOpen`
+        // is a redraw around a drawer that never went away, so it comes back without a slide.
+        // `drawerRequested` is somebody *asking* for it — the connection page's settings chip, or an
+        // outside intent — and that is a drawer arriving, which has to slide in like every other
+        // open. Folding the two together is what made that request appear with a jump.
+        val restoreDrawer = drawerOpen
         val restoreOffset = if (drawerOpen) drawer?.scrollOffset() ?: 0 else 0
+        val openRequested = !drawerOpen && drawerRequested
         drawerRequested = false
         hero = null; widgets = null; cockpitHost = null; drawer = null; drawerOpen = false; exitSheet = null
         // Read here rather than per view: the car's own day/night signal arrives as a configuration
@@ -381,7 +388,7 @@ class DiPlayActivity : ComponentActivity() {
         // and then replacing it with the cockpit cost a header, a column and a dozen views per
         // redraw on a head unit that runs with 26 MB free.
         if (page == "home") {
-            setContentView(cockpitRoot(restoreDrawer, restoreOffset))
+            setContentView(cockpitRoot(restoreDrawer, restoreOffset, openRequested))
             refreshStatus()
             return
         }
@@ -398,7 +405,10 @@ class DiPlayActivity : ComponentActivity() {
         if (page != PAGE_FIRMWARE) {
             // "Back" from every page but the home page, which is the cockpit and never gets here.
             header.addView(button(getString(R.string.back), false) { goBack() }, LinearLayout.LayoutParams(dp(130), dp(56)))
-            header.addView(button(getString(R.string.close_app), false) { closeTheApp() }, LinearLayout.LayoutParams(dp(130), dp(56)).apply { marginStart = dp(10) })
+            // The same question the cockpit's exit control asks. This button sits a thumb's width
+            // from "Back" and used to end the process on the first touch, which is the one thing the
+            // cockpit's own exit is careful never to do.
+            header.addView(button(getString(R.string.close_app), false) { confirmExit() }, LinearLayout.LayoutParams(dp(130), dp(56)).apply { marginStart = dp(10) })
         }
         content.addView(header)
         content.addView(space(24))
@@ -452,7 +462,7 @@ class DiPlayActivity : ComponentActivity() {
      * Everything the old stack carried is still here rather than dropped for the wider shape: the
      * stage holds the readiness card's notes and the gap lines, and the drawer holds every setting.
      */
-    private fun cockpitRoot(restoreDrawer: Boolean, restoreOffset: Int): View {
+    private fun cockpitRoot(restoreDrawer: Boolean, restoreOffset: Int, openRequested: Boolean): View {
         val root = FrameLayout(this).apply { setBackgroundColor(palette.screenBg) }
         val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
@@ -538,7 +548,8 @@ class DiPlayActivity : ComponentActivity() {
         cockpitHost = root
         // A drawer that was open before the redraw comes back without its slide and at the place it
         // was left: it never went away, and a setting changed inside it must not look like a reopen.
-        if (restoreDrawer) restoreSettingsDrawer(restoreOffset)
+        // A drawer that was *asked for* slides in, because it is arriving.
+        if (restoreDrawer) restoreSettingsDrawer(restoreOffset) else if (openRequested) openSettingsDrawer()
         return root
     }
 
@@ -687,10 +698,14 @@ class DiPlayActivity : ComponentActivity() {
      * The question is a card on the page rather than a platform dialog: it comes from the palette, so
      * it matches whichever skin is running instead of arriving as a grey system rectangle, and the
      * stage it is asking about stays visible behind it. See [ConfirmSheetView].
+     *
+     * It is asked on every page, not only on the cockpit. The header's close control is next to
+     * "Back" on the settings, display, system and about pages, and a thumb that lands one button to
+     * the right of the one it meant used to end the session and the process with it.
      */
     private fun confirmExit() {
-        val host = cockpitHost ?: return
         if (exitSheet != null) return
+        val host = cockpitHost ?: findViewById<ViewGroup>(android.R.id.content) ?: return
         val sheet = ConfirmSheetView(
             this,
             palette,
@@ -2588,13 +2603,29 @@ class DiPlayActivity : ComponentActivity() {
         return runCatching { adapter.isEnabled }.getOrDefault(false)
     }
 
-    private fun currentWirelessReadiness(): WirelessReadiness {
+    /**
+     * What a connection would be missing right now.
+     *
+     * [probeAdapter] is false for the once-a-second tick. Asking the adapter for its step brings its
+     * page up and reads the USB bus; a tick must not start one, so it reads the state the adapter
+     * last reported instead. That state is the one the page is already painting, so the tick and the
+     * adapter's own line cannot disagree.
+     */
+    private fun currentWirelessReadiness(probeAdapter: Boolean = true): WirelessReadiness {
         val mode = AirPlayPersistence.loadWirelessHotspotMode(this)
         val hop = DiPlayPreferences.bluetoothHop(this)
-        val plugged = AdapterRoutes.active?.present(this) == true
+        val plugged = if (probeAdapter) {
+            AdapterRoutes.active?.present(this) == true
+        } else {
+            adapterPluggedSeen == true
+        }
         // The adapter radio is the only one whose gaps read the step line, and that line is the adapter's own
         // wording — so it is asked even with the radio out of the socket, where it says so.
-        val seen = if (hop == WirelessBluetoothHop.USB_ADAPTER) adapterStatusNow() else noAdapterSeen()
+        val seen = when {
+            hop != WirelessBluetoothHop.USB_ADAPTER -> noAdapterSeen()
+            probeAdapter -> adapterStatusNow()
+            else -> adapterSeen ?: noAdapterSeen()
+        }
         val pairedAddress = adapterPage?.host?.pairedTarget()?.address
         val saved = DiPlayPreferences.phoneAddress(this)
         val phoneChosen = when (hop) {
@@ -2695,6 +2726,15 @@ class DiPlayActivity : ComponentActivity() {
                 wirelessBlocked && readiness.gaps.isNotEmpty(),
             )
         }
+        // The quick column reads the same live values: the car can join or leave a network, and its
+        // saved hotspot name can change in the car's settings, while this page is up — no tap
+        // rebuilds it. Equal values are a no-op inside updateState, so a quiet tick touches nothing.
+        widgets?.updateState(
+            currentHotspotMode(),
+            hotspotSsid(),
+            joinedWifiName(),
+            audioChannelLabel(),
+        )
     }
     private fun reportFileName() = "DiPlay-${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())}.txt"
 

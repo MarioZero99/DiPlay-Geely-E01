@@ -4,6 +4,7 @@ package com.shilapi.xcertplay.ui.component
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
@@ -18,8 +19,9 @@ import com.shilapi.xcertplay.ui.theme.ThemePalette
  *
  * Three cards, weighted 1.15 : 1.0 : fixed, because the wireless card is the one with the拨块 and
  * two live rows under it. Nothing here holds state of its own: the mode, the hotspot name and the
- * joined network are read by the Activity once per redraw and handed in, and every tap goes back
- * out to the existing connection-setting path rather than to a second copy of it.
+ * joined network are read by the Activity once per tick and handed in through [updateState], which
+ * repaints the labels and the two rows in place — these are the only controls on the page whose
+ * inputs can change without a tap, when the car joins or leaves a network on its own.
  */
 class QuickWidgetsView(
     context: Context,
@@ -28,41 +30,50 @@ class QuickWidgetsView(
     hotspotSsid: String,
     joinedWifi: String?,
     audioChannelLabel: String,
-    onModeSwitch: (WirelessHotspotMode) -> Unit,
-    onOpenHotspotSettings: () -> Unit,
-    onEditHotspotPass: () -> Unit,
-    onOpenWifiSettings: () -> Unit,
-    onEditWifiPass: () -> Unit,
-    onAudioSelect: () -> Unit,
-    onOpenDrawer: () -> Unit,
+    private val onModeSwitch: (WirelessHotspotMode) -> Unit,
+    private val onOpenHotspotSettings: () -> Unit,
+    private val onEditHotspotPass: () -> Unit,
+    private val onOpenWifiSettings: () -> Unit,
+    private val onEditWifiPass: () -> Unit,
+    private val onAudioSelect: () -> Unit,
+    private val onOpenDrawer: () -> Unit,
 ) : LinearLayout(context) {
+
+    private val hotspotTab: Button
+    private val wifiTab: Button
+    private val hotspotRow: LinearLayout
+    private val wifiRow: LinearLayout
+    private val hotspotEdit: Button
+    private val wifiEdit: Button
+    private val audioValue: TextView
+
+    /**
+     * The mode the segment and the two rows are drawn for. The taps read this rather than the mode
+     * the card was built with: after a repaint the built-in value is a redraw behind, and pressing
+     * the segment that is already in use must stay a press that changes nothing.
+     */
+    private var currentMode: WirelessHotspotMode = mode
+
+    /** What [updateState] was last given, so a tick that changes nothing touches no view. */
+    private var shownState: WidgetState? = null
+
+    private data class WidgetState(
+        val mode: WirelessHotspotMode,
+        val hotspotSsid: String,
+        val joinedWifi: String?,
+        val audioChannelLabel: String,
+    )
 
     init {
         orientation = VERTICAL
 
-        addView(wirelessCard(mode, hotspotSsid, joinedWifi, onModeSwitch, onOpenHotspotSettings, onEditHotspotPass, onOpenWifiSettings, onEditWifiPass), LayoutParams(-1, 0, 1.15f))
-        addView(View(context).apply { layoutParams = LayoutParams(1, dp(14)) })
-        addView(audioCard(audioChannelLabel, onAudioSelect), LayoutParams(-1, 0, 1.0f))
-        addView(View(context).apply { layoutParams = LayoutParams(1, dp(14)) })
-        addView(drawerCard(onOpenDrawer), LayoutParams(-1, dp(64)))
-    }
-
-    private fun wirelessCard(
-        mode: WirelessHotspotMode,
-        hotspotSsid: String,
-        joinedWifi: String?,
-        onModeSwitch: (WirelessHotspotMode) -> Unit,
-        onOpenHotspotSettings: () -> Unit,
-        onEditHotspotPass: () -> Unit,
-        onOpenWifiSettings: () -> Unit,
-        onEditWifiPass: () -> Unit,
-    ): View = column().apply {
-        orientation = VERTICAL
-        gravity = android.view.Gravity.CENTER_VERTICAL
-        background = cardBg()
-        setPadding(dp(18), dp(16), dp(18), dp(16))
-
-        addView(TextView(context).apply {
+        val wireless = column().apply {
+            orientation = VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = cardBg()
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+        }
+        wireless.addView(TextView(context).apply {
             text = context.getString(R.string.wireless_carplay)
             textSize = 14f
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -70,9 +81,8 @@ class QuickWidgetsView(
         })
 
         // The two quick routes, as a two-segment拨块. A saved local-only mode is neither of these,
-        // so neither segment lights — the card then offers the way to the other two rather than
-        // claiming one of them is in use.
-        val isHotspot = mode == WirelessHotspotMode.MANUAL
+        // so neither segment lights and neither row is shown: the card then offers the way to the
+        // two it can drive rather than claiming one of them is in use.
         val segment = LinearLayout(context).apply {
             orientation = HORIZONTAL
             background = GradientDrawable().apply {
@@ -81,72 +91,126 @@ class QuickWidgetsView(
             }
             setPadding(dp(3), dp(3), dp(3), dp(3))
         }
-        val tabHotspot = segmentTab(context.getString(R.string.built_in_car_hotspot), isHotspot) {
+        hotspotTab = tab(context.getString(R.string.built_in_car_hotspot)) {
             // Pressing the mode that is already in use is not a change: it wrote storage, rebuilt the
             // page and — for the car hotspot — put the page back into setup mode, all for a press
             // that moved nothing. Only a different segment switches.
-            if (!isHotspot) onModeSwitch(WirelessHotspotMode.MANUAL)
+            if (currentMode != WirelessHotspotMode.MANUAL) onModeSwitch(WirelessHotspotMode.MANUAL)
         }
-        val tabWifi = segmentTab(context.getString(R.string.same_wifi_network), !isHotspot && mode == WirelessHotspotMode.EXISTING_WIFI) {
-            if (mode != WirelessHotspotMode.EXISTING_WIFI) onModeSwitch(WirelessHotspotMode.EXISTING_WIFI)
+        wifiTab = tab(context.getString(R.string.same_wifi_network)) {
+            if (currentMode != WirelessHotspotMode.EXISTING_WIFI) onModeSwitch(WirelessHotspotMode.EXISTING_WIFI)
         }
-        segment.addView(tabHotspot, LayoutParams(0, dp(44), 1f))
-        segment.addView(tabWifi, LayoutParams(0, dp(44), 1f))
-        addView(segment, LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        segment.addView(hotspotTab, LayoutParams(0, dp(44), 1f))
+        segment.addView(wifiTab, LayoutParams(0, dp(44), 1f))
+        wireless.addView(segment, LayoutParams(-1, -2).apply { topMargin = dp(10) })
 
-        val hotspotRow = row().apply {
-            addView(smallButton(context.getString(R.string.open_car_hotspot_settings), onOpenHotspotSettings), LayoutParams(0, dp(46), 1f))
+        hotspotEdit = smallButton("") { onEditHotspotPass() }
+        hotspotRow = row().apply {
             addView(
-                smallButton(context.getString(R.string.edit_saved_hotspot_prefix) + hotspotSsid, onEditHotspotPass),
-                LayoutParams(0, dp(46), 1f).apply { marginStart = dp(8) },
+                smallButton(context.getString(R.string.open_car_hotspot_settings), onOpenHotspotSettings),
+                LayoutParams(0, dp(46), 1f),
             )
-            visibility = if (isHotspot) View.VISIBLE else View.GONE
+            addView(hotspotEdit, LayoutParams(0, dp(46), 1f).apply { marginStart = dp(8) })
         }
-        addView(hotspotRow, LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        wireless.addView(hotspotRow, LayoutParams(-1, -2).apply { topMargin = dp(10) })
 
-        val wifiRow = row().apply {
-            addView(smallButton(context.getString(R.string.open_car_wi_fi_settings), onOpenWifiSettings), LayoutParams(0, dp(46), 1f))
+        wifiEdit = smallButton("") { onEditWifiPass() }
+        wifiRow = row().apply {
             addView(
-                smallButton(joinedWifi ?: context.getString(R.string.existing_wifi_not_joined), onEditWifiPass),
-                LayoutParams(0, dp(46), 1f).apply { marginStart = dp(8) },
+                smallButton(context.getString(R.string.open_car_wi_fi_settings), onOpenWifiSettings),
+                LayoutParams(0, dp(46), 1f),
             )
-            visibility = if (isHotspot) View.GONE else View.VISIBLE
+            addView(wifiEdit, LayoutParams(0, dp(46), 1f).apply { marginStart = dp(8) })
         }
-        addView(wifiRow, LayoutParams(-1, -2).apply { topMargin = dp(10) })
-    }
+        wireless.addView(wifiRow, LayoutParams(-1, -2).apply { topMargin = dp(10) })
 
-    private fun audioCard(audioChannelLabel: String, onAudioSelect: () -> Unit): View = column().apply {
-        orientation = VERTICAL
-        gravity = android.view.Gravity.CENTER_VERTICAL
-        background = cardBg()
-        setPadding(dp(18), dp(16), dp(18), dp(16))
+        addView(wireless, LayoutParams(-1, 0, 1.15f))
+        addView(View(context).apply { layoutParams = LayoutParams(1, dp(14)) })
 
-        val header = row().apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        header.addView(TextView(context).apply {
-            text = context.getString(R.string.audio_routing)
-            textSize = 14f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setTextColor(palette.textMain)
-        }, LayoutParams(0, -2, 1f))
-        header.addView(TextView(context).apply {
-            // The channel actually saved, read from storage — never a stand-in value.
-            text = audioChannelLabel
+        val audio = column().apply {
+            orientation = VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = cardBg()
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+        }
+        val audioHeader = row().apply { gravity = Gravity.CENTER_VERTICAL }
+        audioHeader.addView(
+            TextView(context).apply {
+                text = context.getString(R.string.audio_routing)
+                textSize = 14f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(palette.textMain)
+            },
+            LayoutParams(0, -2, 1f),
+        )
+        // The channel actually saved, read from storage — never a stand-in value.
+        audioValue = TextView(context).apply {
             textSize = 12f
             setTextColor(palette.accent)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        })
-        addView(header)
-
-        addView(
+        }
+        audioHeader.addView(audioValue)
+        audio.addView(audioHeader)
+        audio.addView(
             smallButton(context.getString(R.string.navigation_stream_type), onAudioSelect),
             LayoutParams(-1, dp(46)).apply { topMargin = dp(12) },
         )
+        addView(audio, LayoutParams(-1, 0, 1.0f))
+
+        addView(View(context).apply { layoutParams = LayoutParams(1, dp(14)) })
+        addView(drawerCard(onOpenDrawer), LayoutParams(-1, dp(64)))
+
+        updateState(mode, hotspotSsid, joinedWifi, audioChannelLabel)
+    }
+
+    /**
+     * In-place repaint for the once-a-second tick.
+     *
+     * The car can join or leave a Wi-Fi network on its own, and the saved hotspot name can change in
+     * the car's settings while this page is up; until this existed the only path that reached these
+     * cards was a full rebuild, so they kept showing the network they were built with. Equal state
+     * returns before the first view is touched, which is the case on almost every tick.
+     */
+    fun updateState(
+        mode: WirelessHotspotMode,
+        hotspotSsid: String,
+        joinedWifi: String?,
+        audioChannelLabel: String,
+    ) {
+        val state = WidgetState(mode, hotspotSsid, joinedWifi, audioChannelLabel)
+        if (state == shownState) return
+        shownState = state
+        currentMode = mode
+
+        val isHotspot = mode == WirelessHotspotMode.MANUAL
+        val isExistingWifi = mode == WirelessHotspotMode.EXISTING_WIFI
+        paintTab(hotspotTab, isHotspot)
+        paintTab(wifiTab, isExistingWifi)
+
+        // Each row belongs to its own segment, so each row asks about its own segment. The Wi-Fi row
+        // used to be shown for anything that was not the car hotspot, which put "open the car's
+        // Wi-Fi settings" and a joined-network label on the card in a mode that joins nothing.
+        hotspotRow.visibility = if (isHotspot) View.VISIBLE else View.GONE
+        wifiRow.visibility = if (isExistingWifi) View.VISIBLE else View.GONE
+        hotspotEdit.text = context.getString(R.string.edit_saved_hotspot_prefix) + hotspotSsid
+        wifiEdit.text = joinedWifi ?: context.getString(R.string.existing_wifi_not_joined)
+        audioValue.text = audioChannelLabel
+    }
+
+    private fun paintTab(tab: Button, active: Boolean) {
+        tab.setTextColor(if (active) palette.textMain else palette.textMuted)
+        tab.background = if (active) {
+            pressable(palette.cardBg, dp(6).toFloat())
+        } else {
+            // No fill of its own: the wash is the press, over the segment's own colour.
+            pressable(0, dp(6).toFloat(), pressedColor = wash(palette.textMain))
+        }
     }
 
     private fun drawerCard(onOpenDrawer: () -> Unit): View = column().apply {
         orientation = HORIZONTAL
-        gravity = android.view.Gravity.CENTER_VERTICAL
-        background = cardBg()
+        gravity = Gravity.CENTER_VERTICAL
+        background = pressable(palette.cardBg, dp(14).toFloat(), dp(1), palette.cardBorder)
         setPadding(dp(18), 0, dp(18), 0)
         isClickable = true
         isFocusable = true
@@ -165,17 +229,10 @@ class QuickWidgetsView(
         setOnClickListener { onOpenDrawer() }
     }
 
-    private fun segmentTab(label: String, active: Boolean, onClick: () -> Unit): Button = Button(context).apply {
+    private fun tab(label: String, onClick: () -> Unit): Button = Button(context).apply {
         text = label
         isAllCaps = false
         textSize = 12.5f
-        setTextColor(if (active) palette.textMain else palette.textMuted)
-        background = if (active) {
-            GradientDrawable().apply {
-                setColor(palette.cardBg)
-                cornerRadius = dp(6).toFloat()
-            }
-        } else null
         setOnClickListener { onClick() }
     }
 
@@ -184,11 +241,7 @@ class QuickWidgetsView(
         isAllCaps = false
         textSize = 12f
         setTextColor(palette.textMain)
-        background = GradientDrawable().apply {
-            setColor(palette.cardInner)
-            cornerRadius = dp(6).toFloat()
-            setStroke(dp(1), palette.cardBorder)
-        }
+        background = pressable(palette.cardInner, dp(6).toFloat(), dp(1), palette.cardBorder)
         setOnClickListener { onClick() }
     }
 

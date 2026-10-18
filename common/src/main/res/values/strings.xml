@@ -4,6 +4,7 @@
     <string name="display_and_audio_hint">Size, resolution, frame rate, codec, audio routing, and the instrument cluster map.</string>
     <string name="settings_hint">Every setting is on this page.</string>
     <string name="system_settings">System settings</string>
+    <string name="close_settings">Close settings</string>
     <string name="system_settings_hint">Startup, location reporting, debug logs, language, and diagnostic reports.</string>
     <string name="experimental_features">Experimental features</string>
     <string name="experimental_features_hint">Only in the local build. These are still being tried on the car.</string>
@@ -293,6 +294,7 @@
     <string name="pair_your_iphone">Pair your iPhone</string>
     <string name="pair_your_iphone_with_the_car_s_bluetooth_keep_wi_fi_on_an">Pair your iPhone with the car’s Bluetooth, keep Wi-Fi on, and allow CarPlay on the iPhone. Close any other phone-projection app.\n\nIf a previous projection app left its connection running, reset CarPlay Wi-Fi below and connect again. Your car’s normal internet Wi-Fi stays on.</string>
     <string name="paired_device">Paired device</string>
+    <string name="pair_iphone_to_connect">Pair your iPhone with the car’s Bluetooth to connect.</string>
     <string name="pairing_with_iphone">Pairing with iPhone</string>
     <string name="password_must_be_empty_when_security_is_open">Password must be empty when security is Open</string>
     <string name="permissions_and_connection_help">Permissions and connection help</string>

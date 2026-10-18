@@ -119,11 +119,12 @@ class ConfirmSheetView(
             isAllCaps = false
             textSize = 16f
             setTextColor(if (primary) palette.btnMainFg else palette.textMain)
-            background = GradientDrawable().apply {
-                setColor(if (primary) palette.btnMainBg else palette.cardInner)
-                cornerRadius = dp(12).toFloat()
-                setStroke(dp(1), palette.cardBorder)
-            }
+            background = pressable(
+                if (primary) palette.btnMainBg else palette.cardInner,
+                dp(12).toFloat(),
+                dp(1),
+                palette.cardBorder,
+            )
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                 stateListAnimator = null
             }

@@ -102,6 +102,30 @@ class ThreeFingerSwipeDetectorTest {
         assertEquals(Decision.CONSUME, detector.onTouch(Phase.POINTER_DOWN, 4, 60L, 900f, 400f))
     }
 
+    /**
+     * The arm window is measured from the first finger's `DOWN`, and only from that sequence's own.
+     *
+     * A single finger that lands and lifts — the driver steadying a hand, or the start of CarPlay's
+     * own two-finger scroll — left its stamp behind. If the next three-finger attempt then loses its
+     * first `DOWN` (the car's edge rejection, a system gesture taking the touch), the first event the
+     * host sees is the third finger, and it was being measured against a press from minutes earlier:
+     * the window had always expired, so the gesture could never arm again until the app restarted.
+     */
+    @Test
+    fun `a lift that never armed clears the stamp it left`() {
+        assertEquals(Decision.PASS, detector.onTouch(Phase.DOWN, 1, 0L, 900f, 400f))
+        assertEquals(Decision.PASS, detector.onTouch(Phase.UP, 1, 90L, 900f, 400f))
+        // The `DOWN` of the next attempt never reaches the host; only its third finger does.
+        assertEquals(Decision.ARM, detector.onTouch(Phase.POINTER_DOWN, 3, 5_000L, 900f, 400f))
+    }
+
+    @Test
+    fun `a cancel that never armed clears the stamp it left`() {
+        assertEquals(Decision.PASS, detector.onTouch(Phase.DOWN, 1, 0L, 900f, 400f))
+        assertEquals(Decision.PASS, detector.onTouch(Phase.CANCEL, 1, 90L, 900f, 400f))
+        assertEquals(Decision.ARM, detector.onTouch(Phase.POINTER_DOWN, 3, 5_000L, 900f, 400f))
+    }
+
     /** The distance is measured from where the three fingers were, not from where the first one was. */
     @Test
     fun `the origin is the three finger centroid`() {

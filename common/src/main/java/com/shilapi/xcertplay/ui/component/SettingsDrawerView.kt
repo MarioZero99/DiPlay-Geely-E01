@@ -7,6 +7,7 @@ import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -79,7 +80,10 @@ class SettingsDrawerView(
                 textSize = 18f
                 isAllCaps = false
                 setTextColor(palette.textMuted)
-                background = null
+                // A glyph says nothing to a screen reader, and "multiplication sign" is worse than
+                // nothing: the control needs the word it is standing in for.
+                contentDescription = context.getString(R.string.close_settings)
+                background = pressable(0, dp(10).toFloat(), pressedColor = wash(palette.textMain))
                 layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
                 setOnClickListener { onClose() }
             },
@@ -116,17 +120,18 @@ class SettingsDrawerView(
     fun open(animate: Boolean = true) {
         settleRunningAnimation()
         visibility = VISIBLE
-        // Every open starts at the top: the panel keeps its scroll position between visits, and
-        // landing mid-page because that is where it was closed reads as the drawer opening on the
-        // wrong section. A caller that wants a section asks for it afterwards with [scrollToText];
-        // the redraw path puts the offset back with [scrollToOffset].
-        scroll.scrollTo(0, 0)
         if (!animate) {
+            // A redraw that puts an already-open drawer back: the caller restores the offset right
+            // after this returns, and a scroll-to-top before it would throw that offset away first.
             panel.translationX = 0f
             alpha = 1f
             panel.setLayerType(LAYER_TYPE_NONE, null)
             return
         }
+        // Every fresh open starts at the top: the panel keeps its scroll position between visits, and
+        // landing mid-page because that is where it was closed reads as the drawer opening on the
+        // wrong section. A caller that wants a section asks for it afterwards with [scrollToText].
+        scroll.scrollTo(0, 0)
         panel.translationX = panel.width.takeIf { it > 0 }?.toFloat() ?: dp(PANEL_WIDTH_DP).toFloat()
         alpha = 0f
         panel.setLayerType(LAYER_TYPE_HARDWARE, null)
@@ -143,6 +148,10 @@ class SettingsDrawerView(
     fun close(animate: Boolean = true, onClosed: () -> Unit = {}) {
         settleRunningAnimation()
         if (!animate) {
+            // The layer has to go back here too: a close that does not animate still hides a panel
+            // that may have been handed a hardware layer by the slide-in, and a hidden view tree
+            // left holding one keeps its GPU buffer on a head unit with 26 MB free.
+            panel.setLayerType(LAYER_TYPE_NONE, null)
             visibility = GONE
             panel.translationX = 0f
             alpha = 1f
@@ -177,7 +186,35 @@ class SettingsDrawerView(
     fun scrollOffset(): Int = scroll.scrollY
 
     fun scrollToOffset(offset: Int) {
-        scroll.post { scroll.scrollTo(0, offset) }
+        scrollWhenLaidOut { scroll.scrollTo(0, offset) }
+    }
+
+    /**
+     * Runs [action] once the panel has a height to clamp against.
+     *
+     * `scroll.post { }` is not enough, and that is what this used to do: the drawer is normally
+     * opened the moment it is built, and a runnable posted to the main queue runs on the next loop —
+     * before the vsync that measures the view. `ScrollView.scrollTo` clamps against the child's
+     * height, which is still zero, so the offset was thrown away and the panel stayed at the top.
+     * That is why opening on "audio routing" landed on "Appearance", and why a setting changed in
+     * the lower half of the list came back at the top.
+     *
+     * A panel that is already laid out — a second press on a section while the drawer is open — is
+     * scrolled straight away, because waiting for a layout that may never come would do nothing.
+     */
+    private fun scrollWhenLaidOut(action: () -> Unit) {
+        val content = scroll.getChildAt(0)
+        if (content != null && content.height > 0) {
+            action()
+            return
+        }
+        val observer = scroll.viewTreeObserver
+        observer.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                observer.removeOnGlobalLayoutListener(this)
+                action()
+            }
+        })
     }
 
     /**
@@ -192,12 +229,11 @@ class SettingsDrawerView(
     /**
      * Brings the first card whose heading starts with [prefix] into view.
      *
-     * Posted, because the drawer is normally opened the moment it is built — before its first
-     * layout, when no offset inside it means anything yet.
+     * Offsets are only meaningful after layout, so this waits for it — see [scrollWhenLaidOut].
      */
     fun scrollToText(prefix: String) {
         val target = firstTextStartingWith(content, prefix) ?: return
-        scroll.post {
+        scrollWhenLaidOut {
             var offset = 0
             var walker: View? = target
             while (walker != null && walker !== scroll) {

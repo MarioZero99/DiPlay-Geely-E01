@@ -81,6 +81,15 @@ class ThreeFingerSwipeDetector(
                     firstDownAt = eventTime
                     return Decision.PASS
                 }
+                // The sequence that started at [firstDownAt] is over. Keeping the stamp past its own
+                // lift leaves an old time behind: if the next three-finger attempt loses its first
+                // `DOWN` — the car's own edge rejection, a system gesture stealing the touch — the
+                // first event the host sees is the third finger, and the arm window is measured
+                // against a press from minutes ago, so the gesture never arms at all.
+                if (phase == Phase.UP || phase == Phase.CANCEL) {
+                    firstDownAt = NO_DOWN
+                    return Decision.PASS
+                }
                 if (
                     phase == Phase.POINTER_DOWN &&
                     pointerCount >= FINGERS &&
