@@ -41,10 +41,12 @@ class SlimDockView(
         setBackgroundColor(palette.dockBg)
         setPadding(0, dp(18), 0, dp(18))
 
-        // Top group: where the drive is, and what it sounds like.
-        addView(iconButton(R.drawable.ic_carplay, null, onHomeClick, selected = true))
+        // Top group: where the drive is, and what it sounds like. The icons are the controls' own
+        // now — a gear for settings and a speaker for audio. They were an information mark and a
+        // display, which said the opposite of what the two controls do.
+        addView(iconButton(R.drawable.ic_carplay, null, label = context.getString(R.string.home_page), onClick = onHomeClick, selected = true))
         addView(View(context).apply { layoutParams = LayoutParams(1, dp(16)) })
-        addView(iconButton(R.drawable.ic_dp_display, palette.textMuted, onAudioClick))
+        addView(iconButton(R.drawable.ic_dp_speaker, palette.textMuted, label = context.getString(R.string.audio_routing), onClick = onAudioClick))
 
         // The spacer takes the slack, so the two groups sit at the two ends of the rail.
         addView(View(context), LayoutParams(1, 0, 1f))
@@ -52,20 +54,28 @@ class SlimDockView(
         // Bottom group: settings, then the two ways off the page — out to the car's launcher with
         // DiPlay still running, and out of the app. Exit is last and red, and its confirmation is
         // the caller's — see DiPlayActivity's onExitClick.
-        addView(iconButton(R.drawable.ic_dp_about, palette.textMuted, onSettingsClick))
+        addView(iconButton(R.drawable.ic_dp_settings, palette.textMuted, label = context.getString(R.string.settings), onClick = onSettingsClick))
         addView(View(context).apply { layoutParams = LayoutParams(1, dp(16)) })
-        addView(iconButton(R.drawable.ic_dp_launcher, palette.textMuted, onLauncherClick))
+        addView(iconButton(R.drawable.ic_dp_launcher, palette.textMuted, label = context.getString(R.string.car_home), onClick = onLauncherClick))
         addView(View(context).apply { layoutParams = LayoutParams(1, dp(16)) })
-        addView(iconButton(R.drawable.ic_dp_exit, EXIT_TINT, onExitClick))
+        addView(iconButton(R.drawable.ic_dp_exit, EXIT_TINT, label = context.getString(R.string.close_app), onClick = onExitClick))
     }
 
-    private fun iconButton(resId: Int, tint: Int?, onClick: () -> Unit, selected: Boolean = false): View {
+    private fun iconButton(
+        resId: Int,
+        tint: Int?,
+        label: String,
+        onClick: () -> Unit,
+        selected: Boolean = false,
+    ): View {
         // 56dp of touch height on a 26dp icon: the target is the driver's, the glyph is the eye's.
         val container = FrameLayout(context).apply {
             layoutParams = LayoutParams(dp(82), dp(56))
             isClickable = true
             isFocusable = true
-            contentDescription = null
+            // Spoken by a screen reader instead of the icon, which has no text of its own. It used
+            // to be null: five controls that announced nothing at all.
+            contentDescription = label
         }
         if (selected) {
             // The one mark of where the driver is: a 3dp bar down the leading edge.

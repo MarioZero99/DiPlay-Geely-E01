@@ -137,6 +137,7 @@
     <string name="band">频段</string>
     <string name="cancel">取消</string>
     <string name="car_home">车机主页</string>
+    <string name="home_page">首页</string>
     <string name="car_hotspot_details">车机热点详情</string>
     <string name="car_marker_horizontal">车辆标记 · 水平</string>
     <string name="car_marker_vertical">车辆标记 · 垂直</string>

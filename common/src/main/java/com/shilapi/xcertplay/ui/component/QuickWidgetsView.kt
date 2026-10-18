@@ -82,10 +82,13 @@ class QuickWidgetsView(
             setPadding(dp(3), dp(3), dp(3), dp(3))
         }
         val tabHotspot = segmentTab(context.getString(R.string.built_in_car_hotspot), isHotspot) {
-            onModeSwitch(WirelessHotspotMode.MANUAL)
+            // Pressing the mode that is already in use is not a change: it wrote storage, rebuilt the
+            // page and — for the car hotspot — put the page back into setup mode, all for a press
+            // that moved nothing. Only a different segment switches.
+            if (!isHotspot) onModeSwitch(WirelessHotspotMode.MANUAL)
         }
         val tabWifi = segmentTab(context.getString(R.string.same_wifi_network), !isHotspot && mode == WirelessHotspotMode.EXISTING_WIFI) {
-            onModeSwitch(WirelessHotspotMode.EXISTING_WIFI)
+            if (mode != WirelessHotspotMode.EXISTING_WIFI) onModeSwitch(WirelessHotspotMode.EXISTING_WIFI)
         }
         segment.addView(tabHotspot, LayoutParams(0, dp(44), 1f))
         segment.addView(tabWifi, LayoutParams(0, dp(44), 1f))

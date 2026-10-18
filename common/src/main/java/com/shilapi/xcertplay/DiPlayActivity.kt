@@ -97,10 +97,23 @@ class DiPlayActivity : ComponentActivity() {
     private var cockpitHost: FrameLayout? = null
     private var drawer: SettingsDrawerView? = null
     private var drawerOpen = false
+    /**
+     * Set by an intent that wants the settings shown on arrival — the three-finger swipe on the
+     * CarPlay picture. Consumed by the next redraw, which opens the drawer with the page.
+     */
+    private var drawerRequested = false
     /** The exit question, while it is up: one instance, so a second press cannot stack a second sheet. */
     private var exitSheet: ConfirmSheetView? = null
     /** The palette this redraw resolved to; the cockpit's views are built from it. */
     private var palette: ThemePalette = CockpitThemeManager.ZEEKR_WHITE_PALETTE
+    /**
+     * What the last redraw resolved the palette from, so a clock-driven schedule can be re-checked
+     * without reading storage on every tick. The palette itself is one of the manager's constants,
+     * so the comparison is an identity test on the answer rather than on its inputs — the two can
+     * never disagree, and a check that compared inputs would loop on a skin that is dark anyway.
+     */
+    private var themeScheduleAtRender: ThemeSchedule = ThemeSchedule.AUTO_CAR
+    private var skinAtRender: AppSkin = AppSkin.ZEEKR_WHITE
     private var pendingCarHotspotSetup = false
 
     /**
@@ -232,6 +245,7 @@ class DiPlayActivity : ComponentActivity() {
         }
         pendingCarHotspotSetup = savedInstanceState?.getBoolean("pending_car_hotspot") ?: false
         page = savedInstanceState?.getString("page") ?: intent.getStringExtra("page") ?: "home"
+        drawerRequested = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS_DRAWER, false)
         // The selector must open on what is actually stored, or the user cannot tell what is in effect.
         navigationStreamType = AirPlayPersistence.loadNavigationStreamType(this)
         loadConnectionSettings()
@@ -246,7 +260,9 @@ class DiPlayActivity : ComponentActivity() {
                 exitSheet?.let { it.dismiss(); return }
                 // The drawer is drawn over the page, so back closes it before it changes page: a key
                 // that took the driver off the page behind an open panel would look like a jump.
-                if (drawer?.isOpen() == true) {
+                // Asked of the drawer's own state, not of its visibility: for the 180 ms it takes to
+                // slide out it is still drawn, and back during that window used to be swallowed.
+                if (drawerOpen) {
                     closeSettingsDrawer()
                     return
                 }
@@ -266,7 +282,9 @@ class DiPlayActivity : ComponentActivity() {
         // back within a beat, which is a page that flickers away and back under their hands; not
         // moving is better, and it is what the page is for.
         if (!firmwareRunning()) {
-            page = intent.getStringExtra("page") ?: "home"; render()
+            page = intent.getStringExtra("page") ?: "home"
+            drawerRequested = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS_DRAWER, false)
+            render()
         }
     }
     override fun onSaveInstanceState(outState: Bundle) { outState.putString("page", page); outState.putBoolean("pending_car_hotspot", pendingCarHotspotSetup); super.onSaveInstanceState(outState) }
@@ -316,19 +334,32 @@ class DiPlayActivity : ComponentActivity() {
         if (page !in KNOWN_PAGES) page = "home"
         // The cockpit is rebuilt on every redraw, so the drawer is dropped with it and built again on
         // the next open — except when it was open a moment ago, in which case it is put straight back
-        // (see cockpitRoot): a setting changed inside the drawer must not close it under the driver.
-        val drawerWasOpen = drawerOpen
+        // where it was: a setting changed inside the drawer must not close it, slide it in again, or
+        // throw the driver back to the top of a list they had scrolled down to reach that setting.
+        val restoreDrawer = drawerOpen || drawerRequested
+        val restoreOffset = if (drawerOpen) drawer?.scrollOffset() ?: 0 else 0
+        drawerRequested = false
         hero = null; widgets = null; cockpitHost = null; drawer = null; drawerOpen = false; exitSheet = null
         // Read here rather than per view: the car's own day/night signal arrives as a configuration
         // change, which calls render(), so one read per redraw is exactly one read per signal.
+        themeScheduleAtRender = AirPlayPersistence.loadThemeSchedule(this)
+        skinAtRender = AirPlayPersistence.loadAppSkin(this)
         palette = CockpitThemeManager.resolvePalette(
-            AirPlayPersistence.loadAppSkin(this),
-            AirPlayPersistence.loadThemeSchedule(this),
+            skinAtRender,
+            themeScheduleAtRender,
             resources.configuration.uiMode,
             Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
         )
         pageScroll?.let { if (scrollYPage == page) pageScrollY = it.scrollY }
         if (scrollYPage != page) { scrollYPage = page; pageScrollY = 0 }
+        // The home page is the cockpit, which is not a scrolling document: building the page below
+        // and then replacing it with the cockpit cost a header, a column and a dozen views per
+        // redraw on a head unit that runs with 26 MB free.
+        if (page == "home") {
+            setContentView(cockpitRoot(restoreDrawer, restoreOffset))
+            refreshStatus()
+            return
+        }
         val scroll = ScrollView(this).apply { setBackgroundColor(BG); isFillViewport = true; clipToPadding = false }
         val content = column().apply { setPadding(dp(32), dp(24), dp(32), dp(32)) }
         scroll.addView(content)
@@ -340,13 +371,8 @@ class DiPlayActivity : ComponentActivity() {
         // that cannot show them what is happening — the second of them out of the app entirely. What
         // leaves it is its own control, which appears once there is nothing left to wait for.
         if (page != PAGE_FIRMWARE) {
-            header.addView(button(if (page == "home") getString(R.string.car_home) else getString(R.string.back), false) {
-                // Named "Car home" rather than "Back" on the home page, because that is where it goes:
-                // out to the head unit's own launcher, the same key it is everywhere else but a
-                // different place to land.
-                if (page == "home") startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
-                else goBack()
-            }, LinearLayout.LayoutParams(dp(130), dp(56)))
+            // "Back" from every page but the home page, which is the cockpit and never gets here.
+            header.addView(button(getString(R.string.back), false) { goBack() }, LinearLayout.LayoutParams(dp(130), dp(56)))
             header.addView(button(getString(R.string.close_app), false) { closeTheApp() }, LinearLayout.LayoutParams(dp(130), dp(56)).apply { marginStart = dp(10) })
         }
         content.addView(header)
@@ -359,13 +385,9 @@ class DiPlayActivity : ComponentActivity() {
             PAGE_FIRMWARE -> firmwareProgress(content)
             else -> Unit
         }
-        if (page == "home") {
-            setContentView(cockpitRoot(drawerWasOpen))
-        } else {
-            setContentView(scroll)
-            pageScroll = scroll
-            restoreScroll(scroll, pageScrollY)
-        }
+        setContentView(scroll)
+        pageScroll = scroll
+        restoreScroll(scroll, pageScrollY)
         refreshStatus()
     }
 
@@ -405,7 +427,7 @@ class DiPlayActivity : ComponentActivity() {
      * Everything the old stack carried is still here rather than dropped for the wider shape: the
      * stage holds the readiness card's notes and the gap lines, and the drawer holds every setting.
      */
-    private fun cockpitRoot(restoreDrawer: Boolean): View {
+    private fun cockpitRoot(restoreDrawer: Boolean, restoreOffset: Int): View {
         val root = FrameLayout(this).apply { setBackgroundColor(palette.screenBg) }
         val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
@@ -414,7 +436,7 @@ class DiPlayActivity : ComponentActivity() {
             palette,
             onHomeClick = { if (page != "home") { page = "home"; render() } },
             onAudioClick = { openSettingsDrawer(getString(R.string.audio_routing)) },
-            onSettingsClick = { if (drawer?.isOpen() == true) closeSettingsDrawer() else openSettingsDrawer() },
+            onSettingsClick = { if (drawerOpen) closeSettingsDrawer() else openSettingsDrawer() },
             onLauncherClick = { leaveToLauncher() },
             onExitClick = { confirmExit() },
         )
@@ -485,8 +507,9 @@ class DiPlayActivity : ComponentActivity() {
         }
         root.addView(horizontal, FrameLayout.LayoutParams(-1, -1))
         cockpitHost = root
-        // A drawer that was open before the redraw comes back without its slide: it never left.
-        if (restoreDrawer) openSettingsDrawer()
+        // A drawer that was open before the redraw comes back without its slide and at the place it
+        // was left: it never went away, and a setting changed inside it must not look like a reopen.
+        if (restoreDrawer) restoreSettingsDrawer(restoreOffset)
         return root
     }
 
@@ -509,18 +532,31 @@ class DiPlayActivity : ComponentActivity() {
             "${getString(R.string.navigation_stream_type)} · $navigationStreamType"
         }
 
-    private fun openSettingsDrawer(scrollTo: String? = null) {
+    private fun openSettingsDrawer(scrollTo: String? = null, animate: Boolean = true) {
         val host = cockpitHost ?: return
+        // Already open: a second press scrolls to the section asked for and does not restart the
+        // slide. Reopening an open drawer is how it used to flash on every press of the gear.
+        if (drawerOpen) {
+            scrollTo?.let { drawer?.scrollToText(it) }
+            return
+        }
         val view = drawer ?: buildSettingsDrawer().also {
             drawer = it
             host.addView(it, FrameLayout.LayoutParams(-1, -1))
         }
         drawerOpen = true
-        view.open()
+        view.open(animate = animate)
         scrollTo?.let { view.scrollToText(it) }
     }
 
+    /** Puts an already-open drawer back after a redraw: no slide, and the offset it was left at. */
+    private fun restoreSettingsDrawer(offset: Int) {
+        openSettingsDrawer(animate = false)
+        if (offset > 0) drawer?.scrollToOffset(offset)
+    }
+
     private fun closeSettingsDrawer() {
+        if (!drawerOpen) return
         drawerOpen = false
         drawer?.close()
     }
@@ -651,7 +687,7 @@ class DiPlayActivity : ComponentActivity() {
      * [closeTheApp] is the one that ends them.
      */
     private fun leaveToLauncher() {
-        if (drawer?.isOpen() == true) closeSettingsDrawer()
+        if (drawerOpen) closeSettingsDrawer()
         startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
     }
 
@@ -2561,6 +2597,21 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun refreshStatus() {
+        // A clock-driven skin has to change on the clock. Checked here because the tick is the only
+        // thing that runs while the cockpit is on screen and nothing is being pressed; compared
+        // against the palette a redraw would produce now, so it fires once per actual change.
+        if (themeScheduleAtRender == ThemeSchedule.AUTO_TIME) {
+            val expected = CockpitThemeManager.resolvePalette(
+                skinAtRender,
+                themeScheduleAtRender,
+                resources.configuration.uiMode,
+                Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
+            )
+            if (expected !== palette) {
+                render()
+                return
+            }
+        }
         val running = CarPlayBackgroundSession.hasSession()
         status?.text = when {
             setupError != null -> getString(R.string.setup_needs_attention)
@@ -2580,10 +2631,15 @@ class DiPlayActivity : ComponentActivity() {
         // The cockpit's stage is repainted here rather than rebuilt: this runs on every tick, and a
         // rebuild a second would be the churn the in-place design exists to avoid. The gaps are the
         // same ones the settings page prints, from the same one readiness object.
+        //
+        // The phase is asked for fresh instead of taken from that object: [pageState] holds its
+        // answer for the length of one redraw, and the tick is not a redraw — reading the session
+        // through it painted whatever was true when the page was built, so a connection that ended
+        // while the driver was looking at the page kept saying it was up.
         hero?.let { card ->
             val readiness = pageState().readiness
             card.updateState(
-                pageState().session,
+                sessionPhase(CarPlayBackgroundSession.hasSession(), CarPlayBackgroundSession.active),
                 DiPlayPreferences.phoneName(this),
                 readiness.gaps.map { gapText(it, readiness.adapter) },
                 wirelessBlocked && readiness.gaps.isNotEmpty(),
@@ -3076,6 +3132,14 @@ class DiPlayActivity : ComponentActivity() {
     private fun space(height: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(height)) }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     companion object {
+        /**
+         * Asks for the home page with its settings drawer already open.
+         *
+         * The one caller today is the three-finger swipe on the CarPlay picture, which needs the
+         * settings without being sent to a second settings surface of its own.
+         */
+        const val EXTRA_OPEN_SETTINGS_DRAWER = "open_settings_drawer"
+
         /**
          * The width at which a page is given two columns instead of one.
          *

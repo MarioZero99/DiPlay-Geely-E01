@@ -143,6 +143,8 @@
     <string name="band">Band</string>
     <string name="cancel">Cancel</string>
     <string name="car_home">Car home</string>
+    <!-- Spoken by a screen reader for the dock's first control, which has no visible text. -->
+    <string name="home_page">Home</string>
     <string name="car_hotspot_details">Car hotspot details</string>
     <string name="car_marker_horizontal">Car marker · horizontal</string>
     <string name="car_marker_vertical">Car marker · vertical</string>

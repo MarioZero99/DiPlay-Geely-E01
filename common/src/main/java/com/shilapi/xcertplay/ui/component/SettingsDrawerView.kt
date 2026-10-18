@@ -109,17 +109,22 @@ class SettingsDrawerView(
      *
      * [animate] false is for a redraw that has to put an already-open drawer back where it was:
      * the page rebuilds around it, and slamming it shut — or sliding it in again — would be the
-     * flicker the whole in-place design exists to avoid.
+     * flicker the whole in-place design exists to avoid. A slide that is still running is cancelled
+     * first, including its end action: that action puts the panel back to `GONE`, and a reopen that
+     * raced a close used to end with an invisible drawer the Activity still believed was open.
      */
     fun open(animate: Boolean = true) {
+        settleRunningAnimation()
         visibility = VISIBLE
         // Every open starts at the top: the panel keeps its scroll position between visits, and
         // landing mid-page because that is where it was closed reads as the drawer opening on the
-        // wrong section. A caller that wants a section asks for it afterwards with [scrollToText].
+        // wrong section. A caller that wants a section asks for it afterwards with [scrollToText];
+        // the redraw path puts the offset back with [scrollToOffset].
         scroll.scrollTo(0, 0)
         if (!animate) {
             panel.translationX = 0f
             alpha = 1f
+            panel.setLayerType(LAYER_TYPE_NONE, null)
             return
         }
         panel.translationX = panel.width.takeIf { it > 0 }?.toFloat() ?: dp(PANEL_WIDTH_DP).toFloat()
@@ -136,8 +141,11 @@ class SettingsDrawerView(
 
     /** 180ms accelerating slide-out, a beat quicker than the way in so leaving feels lighter. */
     fun close(animate: Boolean = true, onClosed: () -> Unit = {}) {
+        settleRunningAnimation()
         if (!animate) {
             visibility = GONE
+            panel.translationX = 0f
+            alpha = 1f
             onClosed()
             return
         }
@@ -150,12 +158,36 @@ class SettingsDrawerView(
             .withEndAction {
                 panel.setLayerType(LAYER_TYPE_NONE, null)
                 visibility = GONE
+                // Left at its off-screen position would make the next open start from there and
+                // animate from 520 to 520 — a drawer that appears without sliding.
+                panel.translationX = 0f
+                alpha = 1f
                 onClosed()
             }
             .start()
     }
 
-    fun isOpen(): Boolean = visibility == VISIBLE
+    /**
+     * The scroll position, for a redraw that has to put the panel back where the driver left it.
+     *
+     * A settings change inside the drawer rebuilds the page under it, and every rebuild is a new
+     * panel: without this, changing anything in the lower half of the list threw the driver back to
+     * the appearance section at the top, which reads as the drawer having been reopened.
+     */
+    fun scrollOffset(): Int = scroll.scrollY
+
+    fun scrollToOffset(offset: Int) {
+        scroll.post { scroll.scrollTo(0, offset) }
+    }
+
+    /**
+     * Stops whatever the two animators are doing, end actions included, so the next open or close
+     * starts from a settled panel rather than from the middle of the previous move.
+     */
+    private fun settleRunningAnimation() {
+        panel.animate().cancel()
+        animate().cancel()
+    }
 
     /**
      * Brings the first card whose heading starts with [prefix] into view.

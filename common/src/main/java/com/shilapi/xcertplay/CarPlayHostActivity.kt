@@ -105,6 +105,7 @@ import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.adapter.AdapterPage
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
+import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -410,10 +411,22 @@ class CarPlayHostActivity : ComponentActivity() {
         }
     }
     private var sessionLog: SessionLogFile? = null
-    private var gestureSequenceActive = false
-    private var gestureTracking = false
-    private var gestureStartX = 0f
-    private var gestureStartY = 0f
+
+    /**
+     * The three-finger swipe, as a state machine over the touch stream rather than four booleans in
+     * the middle of the dispatch. See [ThreeFingerSwipeDetector] for what it owns and when.
+     *
+     * Built on first touch, not in the constructor: its distance is in pixels, and an Activity is
+     * constructed before its context is attached — reading the density then is the crash
+     * [CarPlayHostActivityConstructionTest] exists to catch.
+     */
+    private val swipe: ThreeFingerSwipeDetector by lazy {
+        ThreeFingerSwipeDetector(
+            distance = dp(THREE_FINGER_SWIPE_DISTANCE_DP).toFloat(),
+            directionRatio = THREE_FINGER_SWIPE_DIRECTION_RATIO,
+            armWindowMillis = THREE_FINGER_ARM_WINDOW_MILLIS,
+        )
+    }
     private val shuttingDown = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
     /** The Bluetooth stack reports from its own threads; everything it says about the adapter goes through here. */
@@ -903,11 +916,15 @@ class CarPlayHostActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        // A gesture sequence dies with the focus: whatever is left of it is never going to be
+        // finished, and a half-finished one would swallow the first touches after the screen is back.
+        if (!hasFocus) swipe.reset()
         if (hasFocus) applyFullscreenMode()
     }
 
     override fun onStop() {
         // The controller, USB/iAP2 link, and VPN attachment intentionally outlive the UI.
+        swipe.reset()
         super.onStop()
     }
 
@@ -2514,7 +2531,22 @@ class CarPlayHostActivity : ComponentActivity() {
             .putExtra("page", page).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
     }
 
-    private fun openSettingsMenu() = showDiPlayHome("settings")
+    /**
+     * The three-finger destination: DiPlay's home page with its settings drawer already open.
+     *
+     * It used to open the standalone settings page, which is the pre-cockpit design — a second
+     * settings surface, drawn with its own headings, reached by a gesture rather than by the gear
+     * that now opens the drawer. Two surfaces for one job is the thing the cockpit rework set out to
+     * remove, so the gesture goes where the gear goes. Back then closes the drawer and leaves the
+     * driver on the home page, one press from the CarPlay picture they came from.
+     */
+    private fun openSettingsMenu() {
+        controller?.sendTouch(emptyList())
+        startActivity(Intent(this, DiPlayActivity::class.java)
+            .putExtra("page", "home")
+            .putExtra(DiPlayActivity.EXTRA_OPEN_SETTINGS_DRAWER, true)
+            .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+    }
 
     private fun shutdown(terminateProcess: Boolean, reason: String, completion: () -> Unit = {}) {
         if (!shuttingDown.compareAndSet(false, true)) { completion(); return }
@@ -2557,54 +2589,63 @@ class CarPlayHostActivity : ComponentActivity() {
         } else {
             sink?.setSurface(SCREEN_TYPE_ALT, surface)
         }
+        // A surface that arrives while the stream is already up is usually the picture coming back:
+        // the driver left this activity — the three-finger swipe to the settings, the car's own home
+        // key — and the window's surface was destroyed under a decoder that kept running. Nothing
+        // asks the phone for a new reference frame on its own, and a CarPlay screen that is not
+        // moving sends none, so the picture stayed at whatever was on it when the UI went away. One
+        // forceKeyFrame when the surface is handed back is the whole fix.
+        if (activeScreenStreamTypes.isNotEmpty()) requestKeyFrame("surface reattached")
     }
 
-    private fun onHostTouch(view: View, event: MotionEvent): Boolean {
-
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                gestureSequenceActive = false
-                gestureTracking = false
+    /** Asks the phone for an IDR, off the UI thread: this writes to the session's control socket. */
+    private fun requestKeyFrame(reason: String) {
+        val session = activeAirPlaySession ?: return
+        try {
+            airPlayCommandExecutor.execute {
+                val sent = runCatching { session.sendCommand(mapOf("type" to "forceKeyFrame")) }
+                    .getOrDefault(false)
+                Log.i(TAG, "keyframe requested reason=$reason sent=$sent")
+                appendLog("Asked the phone for a keyframe ($reason)")
             }
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                if (event.pointerCount == THREE_FINGER_COUNT && !gestureSequenceActive) {
-                    gestureSequenceActive = true
-                    gestureTracking = true
-                    gestureStartX = pointerCentroid(event, horizontal = true)
-                    gestureStartY = pointerCentroid(event, horizontal = false)
-                    controller?.sendTouch(emptyList())
-                    appendLog("Three-finger swipe tracking started")
-                    return true
-                }
-            }
+        } catch (_: RejectedExecutionException) {
+            // The session is being torn down; there is nothing left to draw into.
         }
+    }
 
-        if (gestureSequenceActive) {
-            if (!gestureTracking || event.pointerCount != THREE_FINGER_COUNT) {
-                if (event.actionMasked == MotionEvent.ACTION_UP ||
-                    event.actionMasked == MotionEvent.ACTION_CANCEL
-                ) {
-                    gestureSequenceActive = false
-                    gestureTracking = false
-                } else if (event.actionMasked == MotionEvent.ACTION_POINTER_UP) {
-                    gestureTracking = false
-                }
+    /**
+     * Everything that touches the CarPlay picture passes through here, because CarPlay is sent
+     * synthesised contacts rather than being given the view: the three-finger swipe has to be taken
+     * out of the stream before the phone ever sees it, and the rest has to reach the phone untouched.
+     *
+     * The decision of what a sequence is belongs to [swipe]; this only carries it out. Two things it
+     * must not get wrong: the moment the third finger lands, CarPlay is told the touch was cancelled
+     * — otherwise the two-finger scroll it had already started is left half-done — and once the
+     * swipe has opened the settings, the remainder of that stream is swallowed rather than forwarded
+     * as moves whose down the phone never saw.
+     */
+    private fun onHostTouch(view: View, event: MotionEvent): Boolean {
+        val phase = swipePhase(event.actionMasked) ?: return true
+        val decision = swipe.onTouch(
+            phase = phase,
+            pointerCount = event.pointerCount,
+            eventTime = event.eventTime,
+            centroidX = pointerCentroid(event, horizontal = true),
+            centroidY = pointerCentroid(event, horizontal = false),
+        )
+        when (decision) {
+            ThreeFingerSwipeDetector.Decision.PASS -> Unit
+            ThreeFingerSwipeDetector.Decision.ARM -> {
+                controller?.sendTouch(emptyList())
+                appendLog("Three-finger swipe armed")
                 return true
             }
-            if (event.actionMasked == MotionEvent.ACTION_MOVE) {
-                val deltaX = Math.abs(pointerCentroid(event, horizontal = true) - gestureStartX)
-                val deltaY = pointerCentroid(event, horizontal = false) - gestureStartY
-                if (
-                    deltaY >= dp(THREE_FINGER_SWIPE_DISTANCE_DP) &&
-                    deltaY >= deltaX * THREE_FINGER_SWIPE_DIRECTION_RATIO
-                ) {
-                    gestureSequenceActive = false
-                    gestureTracking = false
-                    openSettingsMenu()
-                    return true
-                }
+            ThreeFingerSwipeDetector.Decision.CONSUME -> return true
+            ThreeFingerSwipeDetector.Decision.TRIGGER -> {
+                appendLog("Three-finger swipe down: opening DiPlay settings")
+                openSettingsMenu()
+                return true
             }
-            return true
         }
 
         val contacts = CarPlayTouchMapper.contacts(event, view.width, view.height)
@@ -2621,6 +2662,17 @@ class CarPlayHostActivity : ComponentActivity() {
             )
         }
         return true
+    }
+
+    /** The six actions the swipe cares about; anything else — hover, batched moves — is not one. */
+    private fun swipePhase(action: Int): ThreeFingerSwipeDetector.Phase? = when (action) {
+        MotionEvent.ACTION_DOWN -> ThreeFingerSwipeDetector.Phase.DOWN
+        MotionEvent.ACTION_MOVE -> ThreeFingerSwipeDetector.Phase.MOVE
+        MotionEvent.ACTION_POINTER_DOWN -> ThreeFingerSwipeDetector.Phase.POINTER_DOWN
+        MotionEvent.ACTION_POINTER_UP -> ThreeFingerSwipeDetector.Phase.POINTER_UP
+        MotionEvent.ACTION_UP -> ThreeFingerSwipeDetector.Phase.UP
+        MotionEvent.ACTION_CANCEL -> ThreeFingerSwipeDetector.Phase.CANCEL
+        else -> null
     }
 
     private fun pointerCentroid(event: MotionEvent, horizontal: Boolean): Float {
@@ -2904,9 +2956,20 @@ class CarPlayHostActivity : ComponentActivity() {
         const val STEP_PENDING = "○"
         const val AUDIO_CAPTURE_MARKER = "audio-capture.enabled"
         const val AUDIO_CAPTURE_DIRECTORY = "audio-captures"
-        const val THREE_FINGER_COUNT = 3
+        /**
+         * The swipe's geometry. The finger count lives with the detector — it is the one place that
+         * decides what a sequence is, and a second copy here would only drift from it.
+         */
         const val THREE_FINGER_SWIPE_DISTANCE_DP = 72
         const val THREE_FINGER_SWIPE_DIRECTION_RATIO = 1.15f
+
+        /**
+         * How long the three fingers have to arrive, counted from the first one landing.
+         *
+         * Without it, two fingers resting on the glass and a thumb coming down anywhere near them
+         * armed the gesture, and the settings page opened on a press the driver had not made.
+         */
+        const val THREE_FINGER_ARM_WINDOW_MILLIS = 350L
         const val MAX_SETTINGS_MENU_WIDTH_PX = 1200
         val MENU_BACKGROUND = Color.rgb(12, 16, 19)
         val MENU_SECONDARY = Color.rgb(170, 180, 190)
