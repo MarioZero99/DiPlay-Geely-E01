@@ -159,9 +159,14 @@ internal object DiagnosticVolumeProbe {
     private fun errnoOf(error: Throwable): String? {
         var current: Throwable? = error
         while (current != null) {
-            if (current is android.system.ErrnoException) {
-                val name = runCatching { android.system.OsConstants.errnoName(current.errno) }.getOrNull()
-                return name ?: "errno_${current.errno}"
+            // android.system arrived with Android 5, and this app still installs down to 4.4: on
+            // those units there is no kernel errno to read, only the exception's own message.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                val kernel = runCatching { (current as? android.system.ErrnoException)?.errno }.getOrNull()
+                if (kernel != null) {
+                    val name = runCatching { android.system.OsConstants.errnoName(kernel) }.getOrNull()
+                    return name ?: "errno_$kernel"
+                }
             }
             val match = current.message?.let {
                 Regex("""\b(EACCES|EROFS|EPERM|ENOENT|ENOTDIR|ENOSPC|EIO)\b""").find(it)
