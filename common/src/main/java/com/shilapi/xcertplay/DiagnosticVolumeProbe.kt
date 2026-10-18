@@ -52,9 +52,13 @@ internal object DiagnosticVolumeProbe {
         }
 
         // Source 2: the path ACTION_MEDIA_MOUNTED carried, recorded when the stick was plugged in.
+        // The same action is broadcast for the head unit's own storage, and a report written to
+        // /storage/emulated/0/DiPlay is not "saved to a USB drive" — that would be the exact false
+        // claim this whole path exists to stop, so the device's own volume is refused here.
         for (path in extraMountPaths) {
             val file = File(path)
-            if (file.isDirectory) candidates[file.name] = file
+            if (!file.isDirectory || isPrimaryStorage(file)) continue
+            candidates[file.name] = file
         }
 
         // Source 3: vendor roots, last and only as a fallback — these names are guesses, the two
@@ -69,6 +73,12 @@ internal object DiagnosticVolumeProbe {
 
         val results = candidates.map { (name, target) -> probeVolume(context, name, target) }
         return ProbeSummary(results, formatSummary(results))
+    }
+
+    private fun isPrimaryStorage(candidate: File): Boolean {
+        val primary = runCatching { android.os.Environment.getExternalStorageDirectory() }.getOrNull()
+            ?: return false
+        return candidate.absolutePath == primary.absolutePath
     }
 
     private fun extractVolumeName(packageDir: File): String {

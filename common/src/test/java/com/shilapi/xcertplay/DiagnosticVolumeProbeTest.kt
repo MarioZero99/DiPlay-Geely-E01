@@ -82,4 +82,14 @@ class DiagnosticVolumeProbeTest {
         val summary = DiagnosticVolumeProbe.probe(context, setOf(mountedDir.absolutePath))
         assertTrue(summary.volumes.any { it.name == "mnt-media-rw-usb" })
     }
+
+    /**
+     * The head unit broadcasts the same mount action for its own storage. Counting that as a stick
+     * would make every report "saved to USB drive", which is the false claim this path exists to stop.
+     */
+    @Test fun theHeadUnitsOwnStorageIsNeverCountedAsAStick() {
+        val primary = android.os.Environment.getExternalStorageDirectory()
+        val summary = DiagnosticVolumeProbe.probe(context, setOf(primary.absolutePath))
+        assertFalse(summary.volumes.any { it.rootDir?.absolutePath == primary.absolutePath })
+    }
 }
