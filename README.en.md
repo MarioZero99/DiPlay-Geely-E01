@@ -4,7 +4,7 @@
 
 CarPlay for the **2021 Geely Xingrui (星瑞)** head unit: ECARX E01, MediaTek MT6735, GKUI 19, **Android 5.1 (API 22)**. Installed on the car. No jailbreak, no dongle.
 
-Current version: **`0.4.3-geely`**. App id: `com.shihab.diplay`. Install `DiPlay-Legacy-Geely-V043.apk`.
+Current version: **`0.4.4-geely`**. App id: `com.shihab.diplay`. Install `DiPlay-Legacy-Geely-V044.apk`.
 
 Not Apple-certified, and not affiliated with Geely or ECARX. CarPlay is a trademark of Apple Inc.
 
@@ -59,14 +59,14 @@ A later build of this fork installs over the previous one and keeps its settings
 
 ```sh
 adb uninstall com.shihab.diplay
-adb install -r DiPlay-Legacy-Geely-V043.apk
+adb install -r DiPlay-Legacy-Geely-V044.apk
 ```
 
 Without ADB, copy the APK to a USB stick and install it from the head unit's file manager.
 
 ### Which package
 
-Use `DiPlay-Legacy-Geely-V043.apk` for normal installation.
+Use `DiPlay-Legacy-Geely-V044.apk` for normal installation.
 
 ## After it opens
 
