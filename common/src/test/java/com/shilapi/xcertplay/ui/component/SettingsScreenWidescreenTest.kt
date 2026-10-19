@@ -41,4 +41,35 @@ class SettingsScreenWidescreenTest {
         view.selectTab(SettingsTab.SYSTEM)
         assertEquals(SettingsTab.SYSTEM, view.currentTab())
     }
+
+    @Test
+    fun `right-hand drive places Slim Rail on the right side closer to driver`() {
+        val lhdView = SettingsScreenView(
+            context,
+            CockpitThemeManager.ZEEKR_WHITE_PALETTE,
+            isRightHandDrive = false,
+            onBack = {},
+            buildAudioSection = {},
+            buildConnectionSection = {},
+            buildDisplaySection = {},
+            buildSystemSection = {},
+        )
+        val lhdRoot = lhdView.getChildAt(0) as android.widget.LinearLayout
+        val lhdFirstChild = lhdRoot.getChildAt(0)
+        assertNotNull(lhdFirstChild.findViewWithTag("settings_back_btn"))
+
+        val rhdView = SettingsScreenView(
+            context,
+            CockpitThemeManager.ZEEKR_WHITE_PALETTE,
+            isRightHandDrive = true,
+            onBack = {},
+            buildAudioSection = {},
+            buildConnectionSection = {},
+            buildDisplaySection = {},
+            buildSystemSection = {},
+        )
+        val rhdRoot = rhdView.getChildAt(0) as android.widget.LinearLayout
+        val rhdSecondChild = rhdRoot.getChildAt(1)
+        assertNotNull(rhdSecondChild.findViewWithTag("settings_back_btn"))
+    }
 }

@@ -37,6 +37,7 @@ class SettingsScreenView(
     private val palette: ThemePalette,
     initialTab: SettingsTab = SettingsTab.CONNECTION,
     hasExperimental: Boolean = false,
+    isRightHandDrive: Boolean = false,
     private val onBack: () -> Unit,
     private val onCloseApp: (() -> Unit)? = null,
     buildAudioSection: (LinearLayout) -> Unit,
@@ -124,8 +125,6 @@ class SettingsScreenView(
             rail.addView(closeBtn)
         }
 
-        root.addView(rail)
-
         // 2. 右侧全屏卡片容器区
         val contentStage = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(0, -1, 1f)
@@ -155,7 +154,13 @@ class SettingsScreenView(
             contentContainers[SettingsTab.EXPERIMENTAL] = wrapSection(buildExperimentalSection).also { contentStage.addView(it) }
         }
 
-        root.addView(contentStage)
+        if (isRightHandDrive) {
+            root.addView(contentStage)
+            root.addView(rail)
+        } else {
+            root.addView(rail)
+            root.addView(contentStage)
+        }
         addView(root)
 
         selectTab(initialTab)

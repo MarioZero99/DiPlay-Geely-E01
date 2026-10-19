@@ -657,6 +657,7 @@ class DiPlayActivity : ComponentActivity() {
             palette,
             initialTab = activeSettingsTab,
             hasExperimental = ExperimentalFeatures.enabled,
+            isRightHandDrive = AirPlayPersistence.loadRightHandDrive(this),
             onBack = { page = "home"; render() },
             onCloseApp = { confirmExit() },
             buildAudioSection = { col ->
