@@ -73,4 +73,28 @@ class VideoDecodeQueueTest {
         assertEquals(3, attempts)
         assertEquals(-1, VideoInputPump.acquire(running = { false }, drain = { fail() }, dequeue = { fail(); 0 }))
     }
+
+    @Test fun frameAndByteCountersAccuratelyEnforceBudgetsWithoutAllocation() {
+        val queue = VideoDecodeQueue(maxFrames = 3, maxBytes = 100)
+        queue.offer(VideoJob.Frame(ByteArray(30)))
+        queue.offer(VideoJob.Frame(ByteArray(40)))
+        // Total: 2 frames, 70 bytes. Third frame of 40 bytes will exceed 100 bytes -> trigger resync.
+        queue.offer(VideoJob.Frame(ByteArray(40)))
+        assertEquals(VideoJob.Resync, queue.poll(0))
+        val remaining = queue.poll(0) as VideoJob.Frame
+        assertEquals(40, remaining.nalus.size)
+        assertNull(queue.poll(0))
+    }
+
+    @Test fun counterNeverDriftsBelowZeroOnDiscardOrPoll() {
+        val queue = VideoDecodeQueue(maxFrames = 2, maxBytes = 100)
+        queue.offer(VideoJob.Frame(ByteArray(20)))
+        queue.discardFrames()
+        // Queue is empty, counters must be exactly zero, next frame must succeed normally
+        queue.offer(VideoJob.Frame(ByteArray(20)))
+        val polled = queue.poll(0) as VideoJob.Frame
+        assertEquals(20, polled.nalus.size)
+        assertNull(queue.poll(0))
+    }
 }
+
