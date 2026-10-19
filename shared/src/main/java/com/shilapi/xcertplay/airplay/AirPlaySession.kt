@@ -742,9 +742,13 @@ class AirPlaySession(
                         "airplay event rx ${message.method} ${message.path} cseq=${message.headers["cseq"] ?: "-"} bodyBytes=${message.body.size}",
                     )
                     val response = RtspMessage.buildResponse(message, RtspMessage.Response(status = 200))
-                    // Same reasoning as the tx trace above: the hex costs one Formatter per byte and
-                    // never survives the redactor. The debugLog above already carries what matters.
-                    trace("airplay event rx ${message.method} bytes=${message.body.size}")
+                    // Plan Task 6 keeps these: the event channel runs per message, not per touch, so
+                    // this is not the touch hot path, and the hex is evidence if an exchange stalls.
+                    trace(
+                        "airplay event rx headers=${message.headers} " +
+                            "bodyHex=${message.body.toHex()}",
+                    )
+                    trace("airplay event tx wireHex=${response.toHex()}")
                     synchronized(eventWriteLock) {
                         output.write(cipher.encrypt(response))
                         output.flush()
