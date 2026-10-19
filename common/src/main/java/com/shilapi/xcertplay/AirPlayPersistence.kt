@@ -776,20 +776,34 @@ object AirPlayPersistence {
         File(context.filesDir, CUSTOM_ICON_FILE).delete()
     }
 
+    @Volatile private var cachedIdentity: AirPlayIdentity? = null
+
+    @Synchronized
+    fun resetCachedIdentityForTesting() {
+        cachedIdentity = null
+    }
+
     fun loadIdentity(context: Context): AirPlayIdentity {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val privateKey = prefs.getString(KEY_IDENT_PRIVATE, null)
-        val publicKey = prefs.getString(KEY_IDENT_PUBLIC, null)
-        val pairingId = prefs.getString(KEY_PAIRING_ID, null)
-        if (privateKey != null && publicKey != null && pairingId != null) {
-            return AirPlayIdentity(privateKey.decodeHex(), publicKey.decodeHex(), pairingId)
-        }
-        return AirPlayIdentity.generate().also { identity ->
-            prefs.edit()
-                .putString(KEY_IDENT_PRIVATE, identity.privateKey.toHex())
-                .putString(KEY_IDENT_PUBLIC, identity.publicKey.toHex())
-                .putString(KEY_PAIRING_ID, identity.pairingId)
-                .apply()
+        cachedIdentity?.let { return it }
+        synchronized(this) {
+            cachedIdentity?.let { return it }
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val privateKey = prefs.getString(KEY_IDENT_PRIVATE, null)
+            val publicKey = prefs.getString(KEY_IDENT_PUBLIC, null)
+            val pairingId = prefs.getString(KEY_PAIRING_ID, null)
+            val identity = if (privateKey != null && publicKey != null && pairingId != null) {
+                AirPlayIdentity(privateKey.decodeHex(), publicKey.decodeHex(), pairingId)
+            } else {
+                AirPlayIdentity.generate().also { gen ->
+                    prefs.edit()
+                        .putString(KEY_IDENT_PRIVATE, gen.privateKey.toHex())
+                        .putString(KEY_IDENT_PUBLIC, gen.publicKey.toHex())
+                        .putString(KEY_PAIRING_ID, gen.pairingId)
+                        .apply()
+                }
+            }
+            cachedIdentity = identity
+            return identity
         }
     }
 

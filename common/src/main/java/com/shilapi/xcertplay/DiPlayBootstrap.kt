@@ -9,12 +9,43 @@ import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
 
 /** Installs the private beta's experimental identity. It has no remote fallback. */
-internal object DiPlayBootstrap {
+object DiPlayBootstrap {
     @Volatile private var ready = false
+    @Volatile private var prewarmFuture: Future<*>? = null
+    private val prewarmExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "diplay-prewarm").apply { isDaemon = true }
+    }
+
+    val isReady: Boolean get() = ready
+
+    fun prewarm(context: Context) {
+        if (ready || prewarmFuture != null) return
+        val appContext = context.applicationContext
+        synchronized(this) {
+            if (ready || prewarmFuture != null) return
+            try {
+                prewarmFuture = prewarmExecutor.submit {
+                    runCatching {
+                        AirPlayPersistence.loadIdentity(appContext)
+                        ensure(appContext)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
 
     @Synchronized fun ensure(context: Context) {
+        if (ready) return
+        prewarmFuture?.let { future ->
+            if (!future.isDone) {
+                runCatching { future.get(3, TimeUnit.SECONDS) }
+            }
+        }
         if (ready) return
         val privateRoot = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) context.noBackupFilesDir else context.filesDir
         val target = File(privateRoot, LocalMfiAuthenticationClient.DIRECTORY)
