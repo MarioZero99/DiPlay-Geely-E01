@@ -563,9 +563,8 @@ class CarPlayHostActivity : ComponentActivity() {
         }
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         DiagCrashHandler.install(this)
-        // Rotating seven files and truncating the newest is disk I/O on the drawing thread. Timed
-        // because that is exactly the kind of cost a report has to be able to prove before the fix
-        // moves it to a background thread.
+        // Session log reset and file rotation are executed asynchronously on sessionLogExecutor
+        // to prevent disk I/O from stalling the main thread.
         PerfTrace.span("startup/session-log", warnAboveMs = 100) { initializeSessionLog() }
         darkMode = isDarkMode(resources.configuration.uiMode)
         advancedAudioChannelMappingSupported =
@@ -2958,13 +2957,6 @@ class CarPlayHostActivity : ComponentActivity() {
     private fun initializeSessionLog() {
         val logFile = File(File(filesDir, "logs"), "diplay.log")
         val activeLog = SessionLogFile(logFile)
-        runCatching {
-            activeLog.reset(
-                "DiPlay log started " +
-                    "${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())} " +
-                    "pid=${Process.myPid()} path=${logFile.absolutePath}",
-            )
-        }
         sessionLog = activeLog
         // Everything the transport, media and network code logged went to logcat and nowhere else.
         // The page is the only thing that owns a session file, so it lends one to those threads. The
@@ -2974,10 +2966,22 @@ class CarPlayHostActivity : ComponentActivity() {
         // this log's reset just discarded. They are the ones the adapter's run is judged by, so the adapter is
         // asked for whatever it logged before a session existed and they are carried over.
         val carried = AdapterRoutes.active?.drainDiagnostics().orEmpty()
-        if (carried.isNotEmpty()) {
-            activeLog.append("--- adapter lines from the connection page, before this run ---")
-            carried.forEach(activeLog::append)
-            activeLog.append("--- end of those lines ---")
+        val header = "DiPlay log started " +
+            "${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())} " +
+            "pid=${Process.myPid()} path=${logFile.absolutePath}"
+        try {
+            sessionLogExecutor.execute {
+                runCatching {
+                    activeLog.reset(header)
+                }
+                if (carried.isNotEmpty()) {
+                    activeLog.append("--- adapter lines from the connection page, before this run ---")
+                    carried.forEach(activeLog::append)
+                    activeLog.append("--- end of those lines ---")
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            // onDestroy has already shut the writer down.
         }
     }
 
