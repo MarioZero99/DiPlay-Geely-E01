@@ -349,46 +349,50 @@ class Iap2LinkChannel private constructor(
             maxOutgoing = 4,
             controlSessionVersion = 2,
             zeroAcknowledgements = true,
-            // Wired CarPlay is the route that works on the car today, and this is the declaration it
-            // runs on. Stated here rather than left to the default: the wireless work below must give
-            // sessions up on purpose, and must not do it to the cable by accident.
-            declareOptionalSessions = true,
         )
         private val WIRELESS_LINK_CONFIG = Iap2LinkConfig(
             maxOutgoing = 4,
             controlSessionVersion = 2,
-            // Control session only. EA is not implemented on this link and the accessory no longer
-            // names the EA messages either, so declaring the session would offer a channel the phone
-            // can open and nothing here can answer.
-            declareOptionalSessions = false,
         )
         private val TUNNEL_LINK_CONFIG = Iap2LinkConfig(
             maxOutgoing = 4,
             controlSessionVersion = 2,
             zeroAcknowledgements = true,
-            // Same session set as the RFCOMM leg it continues: the tunnel carries the wireless
-            // session over Wi-Fi, and EA is not implemented there either.
-            declareOptionalSessions = false,
         )
 
         /** Opens and immediately starts a wired iAP2 link, taking ownership of the supplied stream. */
         fun open(
             underlying: BlockingDuplexByteStream,
             onTrace: (String) -> Unit = {},
+            declareOptionalSessions: Boolean = true,
         ): Iap2LinkChannel =
-            Iap2LinkChannel(underlying, WIRED_LINK_CONFIG, initiateNegotiation = true, onTrace = onTrace)
-                .also { it.worker.start() }
+            Iap2LinkChannel(
+                underlying,
+                WIRED_LINK_CONFIG.copy(declareOptionalSessions = declareOptionalSessions),
+                initiateNegotiation = true,
+                onTrace = onTrace,
+            ).also { it.worker.start() }
 
         /**
          * Opens a wireless RFCOMM link. LIVI sends the iAP2 marker but lets the phone initiate
          * synchronization, and keeps acknowledgements enabled for Bluetooth.
+         *
+         * [declareOptionalSessions] belongs to the identification profile, not to this function:
+         * see [Iap2IdentificationProfile.declaresOptionalLinkSessions]. It is a parameter rather
+         * than a constant here because 0.4.2 changed exactly this constant while leaving the
+         * identification parameters saying the opposite, and there was no single place to see both.
          */
         fun openWireless(
             underlying: BlockingDuplexByteStream,
             onTrace: (String) -> Unit = {},
+            declareOptionalSessions: Boolean = true,
         ): Iap2LinkChannel =
-            Iap2LinkChannel(underlying, WIRELESS_LINK_CONFIG, initiateNegotiation = false, onTrace = onTrace)
-                .also { it.worker.start() }
+            Iap2LinkChannel(
+                underlying,
+                WIRELESS_LINK_CONFIG.copy(declareOptionalSessions = declareOptionalSessions),
+                initiateNegotiation = false,
+                onTrace = onTrace,
+            ).also { it.worker.start() }
 
         /**
          * Opens the iAP2 link carried by an AirPlay type-130 tunnel. The accessory initiates
@@ -397,9 +401,14 @@ class Iap2LinkChannel private constructor(
         fun openTunnel(
             underlying: BlockingDuplexByteStream,
             onTrace: (String) -> Unit = {},
+            declareOptionalSessions: Boolean = true,
         ): Iap2LinkChannel =
-            Iap2LinkChannel(underlying, TUNNEL_LINK_CONFIG, initiateNegotiation = true, onTrace = onTrace)
-                .also { it.worker.start() }
+            Iap2LinkChannel(
+                underlying,
+                TUNNEL_LINK_CONFIG.copy(declareOptionalSessions = declareOptionalSessions),
+                initiateNegotiation = true,
+                onTrace = onTrace,
+            ).also { it.worker.start() }
 
         private fun nowMillis(): Long = System.nanoTime() / NANOS_PER_MILLISECOND
     }

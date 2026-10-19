@@ -230,6 +230,10 @@ class CarPlayHostActivity : ComponentActivity() {
             hardwareVersion = Build.HARDWARE.takeIf { !it.isNullOrBlank() && '\u0000' !in it } ?: "1.0",
             carPlayUsbInterfaceNumber = 3,
             locationInformationEnabled = locationReportingEnabled,
+            // Which message set parameters 6/7/10 carry. Switched by
+            // debug.diplay.iap2.profile (v041 by default, compliant to try the EA-free shape)
+            // so a wrong guess costs a reconnect, not a rebuild.
+            profile = Iap2ProfileSelection.current(),
         ),
         label = "DiPlay",
         hostName = "diplay-" + DiPlayBootstrap.deviceId(airPlayIdentity).replace(":", "").lowercase(),

@@ -34,6 +34,162 @@ class Iap2WirelessIdentification(
     }
 }
 
+/**
+ * Which identification message set parameters 6, 7 and 10 carry.
+ *
+ * The two sets differ only in whether this accessory offers the external-accessory plane. Both are
+ * internally consistent, and that is the point: the car rejects the whole exchange with 0x1d03 when
+ * parameter 10 names an EA protocol while parameter 7 does not carry the EA session messages that
+ * open it. Keeping the two sets side by side lets the car pick the answer without a rebuild.
+ */
+enum class Iap2IdentificationProfile(
+    /**
+     * Whether the link's synchronization frame also declares the EA and file-transfer sessions
+     * beside session 10.
+     *
+     * This is the link layer, not the identification layer: 0x1d03 is about parameters 6/7/10 and
+     * says nothing about what the link negotiated. It is kept beside the profile because the two
+     * describe the same decision — whether this accessory offers the EA plane — and a build that
+     * answers yes in one place and no in the other is answering a question twice.
+     */
+    val declaresOptionalLinkSessions: Boolean,
+) {
+    /**
+     * The bytes v0.4.1 shipped, accepted by this car on 2026-10-14 (wired) and 2026-10-16
+     * (wireless). Names the accessory's own EA protocol and declares the matching EA session
+     * messages; v0.4.1's wireless link also declared the optional sessions.
+     *
+     * Default: a profile the car has not accepted yet must not be what an unattended head unit
+     * boots into.
+     */
+    VERIFIED_V041(declaresOptionalLinkSessions = true),
+
+    /**
+     * v0.4.1's subscription pairs without the EA plane: parameter 10 is absent, so parameter 7 must
+     * not carry 0xea00/0xea01 either, and the link declares control session only. This is the shape
+     * for an accessory that has no EA session handler — the honest one, but not yet proven on this
+     * car.
+     */
+    PROTOCOL_COMPLIANT(declaresOptionalLinkSessions = false),
+}
+
+/**
+ * Parameters 6, 7 and 10 as one value, so the three can be checked against each other.
+ *
+ * The rules are the ones the phone enforces when it answers 0x1d03:
+ * - 0xea00/0xea01 are declared together or not at all.
+ * - Parameter 10 declares an EA protocol exactly when parameter 7 declares those session messages.
+ * - Each subscription's Start and Stop messages are declared together: a Start with no Stop is a
+ *   subscription the accessory can open and never close.
+ *
+ * A profile that breaks any of them cannot be constructed, which is what turns a silent protocol
+ * mismatch into a build-and-test failure.
+ */
+internal class Iap2IdentificationMessages(
+    val sentByAccessory: IntArray,
+    val receivedFromPhone: IntArray,
+    val externalAccessoryProtocols: List<String>,
+) {
+    init {
+        require(externalAccessoryProtocols.size <= 1) {
+            "This profile declares at most one external-accessory protocol"
+        }
+        val opensExternalAccessorySession = EA_OPEN_SESSION in receivedFromPhone
+        val closesExternalAccessorySession = EA_CLOSE_SESSION in receivedFromPhone
+        require(opensExternalAccessorySession == closesExternalAccessorySession) {
+            "EA session messages must be declared as a pair: " +
+                "0xea00=$opensExternalAccessorySession, 0xea01=$closesExternalAccessorySession"
+        }
+        require(externalAccessoryProtocols.isNotEmpty() == opensExternalAccessorySession) {
+            "Parameters 7 and 10 disagree: protocols=$externalAccessoryProtocols, " +
+                "EA session messages declared=$opensExternalAccessorySession. " +
+                "An EA protocol without its session messages is what 0x1d03 rejects."
+        }
+        for ((start, stop) in SUBSCRIPTION_PAIRS) {
+            require((start in sentByAccessory) == (stop in sentByAccessory)) {
+                "Subscription 0x${start.toString(16)}/0x${stop.toString(16)} must be declared as a pair"
+            }
+        }
+        require(
+            (START_LOCATION_INFORMATION in receivedFromPhone) ==
+                (STOP_LOCATION_INFORMATION in receivedFromPhone),
+        ) {
+            "Location subscription 0xfffa/0xfffc must be declared as a pair"
+        }
+    }
+
+    companion object {
+        private const val EA_OPEN_SESSION = 0xea00
+        private const val EA_CLOSE_SESSION = 0xea01
+        private const val START_LOCATION_INFORMATION = 0xfffa
+        private const val STOP_LOCATION_INFORMATION = 0xfffc
+
+        private val SUBSCRIPTION_PAIRS = listOf(
+            0x5000 to 0x5002, // NowPlaying
+            0x5200 to 0x5203, // RouteGuidance
+            0xae00 to 0xae02, // Power
+            0x4157 to 0x4159, // Communications
+            0x4154 to 0x4156, // CallState
+        )
+
+        /** What v0.4.1 sent, byte for byte. */
+        private val V041_SENT = intArrayOf(
+            0xaa01, // AuthenticationCertificate
+            0xaa03, // AuthenticationResponse
+            0x5000, // StartNowPlayingUpdates
+            0x5002, // StopNowPlayingUpdates
+            0x5200, // StartRouteGuidanceUpdates
+            0x5203, // StopRouteGuidanceUpdates
+            0xae00, // StartPowerUpdates
+            0xae02, // StopPowerUpdates
+            0x4157, // StartCommunicationsUpdates
+            0x4159, // StopCommunicationsUpdates
+            0x4154, // StartCallStateUpdates
+            0x4156, // StopCallStateUpdates
+            0xae03, // PowerSourceUpdate
+            0x4301, // CarPlayStartSession
+        )
+
+        /** v0.4.1's phone-side messages, including the EA session pair. */
+        private val V041_RECEIVED = intArrayOf(
+            0xaa00, // RequestAuthenticationCertificate
+            0xaa02, // RequestAuthenticationChallengeResponse
+            0xaa04, // AuthenticationFailed
+            0xaa05, // AuthenticationSucceeded
+            0xea00, // StartExternalAccessoryProtocolSession
+            0xea01, // StopExternalAccessoryProtocolSession
+            0x5001, // NowPlayingUpdate
+            0x5201, // RouteGuidanceUpdate
+            0x5202, // RouteGuidanceManeuverUpdate
+            0xae01, // PowerUpdate
+            0x4158, // CommunicationsUpdate
+            0x4155, // CallStateUpdate
+            0x4300, // CarPlayAvailability
+        )
+
+        /** The same messages without the EA session pair. */
+        private val COMPLIANT_RECEIVED = intArrayOf(
+            0xaa00, 0xaa02, 0xaa04, 0xaa05,
+            0x5001, 0x5201, 0x5202, 0xae01, 0x4158, 0x4155, 0x4300,
+        )
+
+        fun forProfile(profile: Iap2IdentificationProfile, eaProtocol: String) =
+            when (profile) {
+                Iap2IdentificationProfile.VERIFIED_V041 -> Iap2IdentificationMessages(
+                    sentByAccessory = V041_SENT.copyOf(),
+                    receivedFromPhone = V041_RECEIVED.copyOf(),
+                    externalAccessoryProtocols = listOf(eaProtocol),
+                )
+
+                Iap2IdentificationProfile.PROTOCOL_COMPLIANT -> Iap2IdentificationMessages(
+                    sentByAccessory = V041_SENT.copyOf(),
+                    receivedFromPhone = COMPLIANT_RECEIVED.copyOf(),
+                    externalAccessoryProtocols = emptyList(),
+                )
+            }
+    }
+}
+
 /** Required identity for the minimal wired or wireless iAP2 identification exchange. */
 data class Iap2IdentificationConfig(
     val name: String,
@@ -55,6 +211,8 @@ data class Iap2IdentificationConfig(
     val vehicleStatusEnabled: Boolean = false,
     /** The charging inlets declared with [vehicleStatusEnabled]. */
     val chargingConnectors: EvChargingConnectors = EvChargingConnectors.CCS2_TYPE2,
+    /** Which message set parameters 6/7/10 carry. See [Iap2IdentificationProfile]. */
+    val profile: Iap2IdentificationProfile = Iap2IdentificationProfile.VERIFIED_V041,
 ) {
     constructor(
         name: String,
@@ -105,11 +263,16 @@ data class Iap2IdentificationConfig(
 
 /** Identification failures distinguished from the underlying iAP2 transport failure. */
 sealed class Iap2IdentificationException(message: String) : IOException(message) {
-    class Rejected(parameterIds: Set<Int>) : Iap2IdentificationException(
-        "iAP2 identification rejected parameters ${parameterIds.sorted().joinToString(prefix = "[", postfix = "]") { "0x${it.toString(16).padStart(4, '0')}" }}; " +
-            "this minimal identification profile has no optional components to remove",
+    class Rejected(
+        parameterIds: Set<Int>,
+        profile: Iap2IdentificationProfile = Iap2IdentificationProfile.VERIFIED_V041,
+    ) : Iap2IdentificationException(
+        "iAP2 identification rejected parameters ${parameterIds.sorted().joinToString(prefix = "[", postfix = "]") { "0x${it.toString(16).padStart(4, '0')}" }} " +
+            "profile=${profile.name}; parameters 6/7/10 are the message set and the EA protocol, " +
+            "and the phone rejects them together when one names what another does not carry",
     ) {
         val parameterIds: Set<Int> = parameterIds.toSet()
+        val profile: Iap2IdentificationProfile = profile
     }
 
     class UnexpectedMessage(messageId: Int) : Iap2IdentificationException(
@@ -154,7 +317,7 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
                         session.send(identificationInformation(currentConfig), remainingMillis(deadlineNanos))
                         continue
                     }
-                    throw Iap2IdentificationException.Rejected(rejected)
+                    throw Iap2IdentificationException.Rejected(rejected, currentConfig.profile)
                 }
                 else -> throw Iap2IdentificationException.UnexpectedMessage(frame.messageId)
             }
@@ -174,22 +337,19 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
         /** Builds the smallest honest LIVI-compatible wired or wireless IdentificationInformation. */
         fun identificationInformation(config: Iap2IdentificationConfig): Iap2Frame {
             val wireless = config.wireless
-            var sentMessages = if (config.locationInformationEnabled) {
-                MESSAGES_SENT_BY_ACCESSORY + LOCATION_INFORMATION
+            val messages = messagesFor(config)
+            // Bluetooth drops the power-source update and adds the Wi-Fi configuration; the message
+            // set behind it is the same one parameters 6/7/10 were checked against.
+            val sentByAccessory = if (wireless == null) {
+                messages.sentByAccessory.toList()
             } else {
-                MESSAGES_SENT_BY_ACCESSORY
+                messages.sentByAccessory.filterNot { it == POWER_SOURCE_UPDATE } +
+                    ACCESSORY_WIFI_CONFIGURATION_INFORMATION
             }
-            var receivedMessages = if (config.locationInformationEnabled) {
-                MESSAGES_RECEIVED_FROM_PHONE + START_LOCATION_INFORMATION + STOP_LOCATION_INFORMATION
+            val receivedFromPhone = if (wireless == null) {
+                messages.receivedFromPhone.toList()
             } else {
-                MESSAGES_RECEIVED_FROM_PHONE
-            }
-            if (config.vehicleStatusEnabled) {
-                sentMessages += Iap2VehicleStatus.VEHICLE_STATUS_UPDATE
-                receivedMessages += intArrayOf(
-                    Iap2VehicleStatus.START_VEHICLE_STATUS_UPDATES,
-                    Iap2VehicleStatus.STOP_VEHICLE_STATUS_UPDATES,
-                )
+                messages.receivedFromPhone.toList() + WIRELESS_PHONE_MESSAGES.toList()
             }
             return Iap2Messages.build(Iap2Endpoints.IDENTIFICATION_INFORMATION) {
                 string(0, config.name)
@@ -198,29 +358,18 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
                 string(3, config.serialNumber)
                 string(4, config.firmwareVersion)
                 string(5, config.hardwareVersion)
-                u16List(
-                    6,
-                    if (wireless == null) {
-                        sentMessages.asIterable()
-                    } else {
-                        sentMessages.filterNot { it == POWER_SOURCE_UPDATE }.toIntArray().asIterable() +
-                            ACCESSORY_WIFI_CONFIGURATION_INFORMATION
-                    },
-                )
-                u16List(
-                    7,
-                    if (wireless == null) {
-                        receivedMessages.asIterable()
-                    } else {
-                        receivedMessages.asIterable() + WIRELESS_PHONE_MESSAGES.asIterable()
-                    },
-                )
+                u16List(6, sentByAccessory)
+                u16List(7, receivedFromPhone)
                 u8(8, if (wireless == null) 2 else 0)
                 u16(9, 20)
-                group(10) {
-                    u8(0, 1)
-                    string(1, config.externalAccessoryProtocol)
-                    u8(2, 0)
+                // Omitted rather than sent empty when the profile offers no EA plane: parameter 10
+                // naming a protocol is what makes the phone expect 0xea00/0xea01 in parameter 7.
+                messages.externalAccessoryProtocols.forEachIndexed { index, protocol ->
+                    group(10) {
+                        u8(0, messages.externalAccessoryProtocols.size)
+                        string(1, protocol)
+                        u8(2, index)
+                    }
                 }
                 string(12, config.language)
                 strings(13, listOf(config.language))
@@ -276,31 +425,36 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
             return min(MAXIMUM_TIMEOUT_MILLIS, (remainingNanos + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND)
         }
 
-        /* Include the authentication messages implemented by Iap2MfiAuthenticationClient. */
-        private val MESSAGES_SENT_BY_ACCESSORY = intArrayOf(
-            0xaa01, // AuthenticationCertificate
-            0xaa03, // AuthenticationResponse
-            0x5000, // StartNowPlayingUpdates
-            0x5200, // StartRouteGuidanceUpdates
-            0xae00, // StartPowerUpdates
-            0x4157, // StartCommunicationsUpdates
-            0x4154, // StartCallStateUpdates
-            0xae03, // PowerSourceUpdate
-            0x4301, // CarPlayStartSession
-        )
-        private val MESSAGES_RECEIVED_FROM_PHONE = intArrayOf(
-            0xaa00, // RequestAuthenticationCertificate
-            0xaa02, // RequestAuthenticationChallengeResponse
-            0xaa04, // AuthenticationFailed
-            0xaa05, // AuthenticationSucceeded
-            0x5001, // NowPlayingUpdate
-            0x5201, // RouteGuidanceUpdate
-            0x5202, // RouteGuidanceManeuverUpdate
-            0xae01, // PowerUpdate
-            0x4158, // CommunicationsUpdate
-            0x4155, // CallStateUpdate
-            0x4300, // CarPlayAvailability
-        )
+        /**
+         * The profile's message set plus whatever optional components the deployment turned on.
+         *
+         * Location and vehicle status are added here rather than in the profile so that both
+         * profiles carry them identically, and so that each addition stays in the pairs the
+         * constructor checks.
+         */
+        private fun messagesFor(config: Iap2IdentificationConfig): Iap2IdentificationMessages {
+            val base = Iap2IdentificationMessages.forProfile(config.profile, config.externalAccessoryProtocol)
+            if (!config.locationInformationEnabled && !config.vehicleStatusEnabled) return base
+            val sent = base.sentByAccessory.toMutableList()
+            val received = base.receivedFromPhone.toMutableList()
+            if (config.locationInformationEnabled) {
+                sent += LOCATION_INFORMATION
+                received += listOf(START_LOCATION_INFORMATION, STOP_LOCATION_INFORMATION)
+            }
+            if (config.vehicleStatusEnabled) {
+                sent += Iap2VehicleStatus.VEHICLE_STATUS_UPDATE
+                received += listOf(
+                    Iap2VehicleStatus.START_VEHICLE_STATUS_UPDATES,
+                    Iap2VehicleStatus.STOP_VEHICLE_STATUS_UPDATES,
+                )
+            }
+            return Iap2IdentificationMessages(
+                sentByAccessory = sent.toIntArray(),
+                receivedFromPhone = received.toIntArray(),
+                externalAccessoryProtocols = base.externalAccessoryProtocols,
+            )
+        }
+
         private const val POWER_SOURCE_UPDATE = 0xae03
         private const val CARPLAY_AVAILABILITY = 0x4300
         private const val CARPLAY_START_SESSION = 0x4301

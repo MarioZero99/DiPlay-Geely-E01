@@ -109,22 +109,37 @@ open class Iap2Session internal constructor(
             underlying: BlockingDuplexByteStream,
             traceContext: String = "wired",
             onTrace: (String) -> Unit = {},
+            declareOptionalSessions: Boolean = true,
         ): Iap2Session =
-            Iap2Session(Iap2CsmChannel.open(underlying, linkTrace(traceContext, onTrace)), traceContext, onTrace)
+            Iap2Session(
+                Iap2CsmChannel.open(underlying, linkTrace(traceContext, onTrace), declareOptionalSessions),
+                traceContext,
+                onTrace,
+            )
 
         fun openWireless(
             underlying: BlockingDuplexByteStream,
             traceContext: String = "wireless",
             onTrace: (String) -> Unit = {},
+            declareOptionalSessions: Boolean = true,
         ): Iap2Session =
-            Iap2Session(Iap2CsmChannel.openWireless(underlying, linkTrace(traceContext, onTrace)), traceContext, onTrace)
+            Iap2Session(
+                Iap2CsmChannel.openWireless(underlying, linkTrace(traceContext, onTrace), declareOptionalSessions),
+                traceContext,
+                onTrace,
+            )
 
         fun openTunnel(
             underlying: BlockingDuplexByteStream,
             traceContext: String = "wireless-tunnel",
             onTrace: (String) -> Unit = {},
+            declareOptionalSessions: Boolean = true,
         ): Iap2Session =
-            Iap2Session(Iap2CsmChannel.openTunnel(underlying, linkTrace(traceContext, onTrace)), traceContext, onTrace)
+            Iap2Session(
+                Iap2CsmChannel.openTunnel(underlying, linkTrace(traceContext, onTrace), declareOptionalSessions),
+                traceContext,
+                onTrace,
+            )
 
         fun wrap(
             channel: Iap2CsmChannel,

@@ -1371,6 +1371,7 @@ class CarPlayController(
                 stream,
                 traceContext = "wireless-rfcomm",
                 onTrace = ::debugLog,
+                declareOptionalSessions = config.identification.profile.declaresOptionalLinkSessions,
             ).also { csm = it }
             debugLog("wireless iAP2 CSM channel opened over RFCOMM")
             if (isStaleWirelessRun(generation)) {
@@ -1508,6 +1509,7 @@ class CarPlayController(
                 stream,
                 traceContext = "wireless-tunnel",
                 onTrace = ::debugLog,
+                declareOptionalSessions = identification.profile.declaresOptionalLinkSessions,
             )
         } catch (error: Throwable) {
             debugLog("Could not open the tunneled iAP2 link", error)
@@ -2096,6 +2098,7 @@ class CarPlayController(
                 carkit,
                 traceContext = "wired",
                 onTrace = ::debugLog,
+                declareOptionalSessions = config.identification.profile.declaresOptionalLinkSessions,
             )
             this.csm = csm
             debugLog("wired iAP2 CSM channel opened")
