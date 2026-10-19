@@ -58,7 +58,7 @@
 ```
 预期: PASS。
 
-- [ ] **Step 3: 提交 Task 1 代码**
+- [x] **Step 3: 提交 Task 1 代码**
 
 ```bash
 git add common/src/main/java/com/shilapi/xcertplay/DiPlayActivity.kt
@@ -102,7 +102,7 @@ git commit -m "refactor(cockpit): decouple audioRoutingCard and displayPerforman
   fun currentTab(): SettingsTab
   ```
 
-- [ ] **Step 1: 编写 `SettingsScreenViewTest` 单元测试**
+- [x] **Step 1: 编写 `SettingsScreenViewTest` 单元测试**
 
 在 `common/src/test/java/com/shilapi/xcertplay/ui/component/SettingsScreenViewTest.kt` 中编写：
 
@@ -175,7 +175,7 @@ class SettingsScreenViewTest {
 }
 ```
 
-- [ ] **Step 2: 运行测试验证失败**
+- [x] **Step 2: 运行测试验证失败**
 
 运行:
 ```bash
@@ -183,7 +183,7 @@ class SettingsScreenViewTest {
 ```
 预期: FAIL。
 
-- [ ] **Step 3: 实现 `SettingsScreenView` 全屏双栏组件**
+- [x] **Step 3: 实现 `SettingsScreenView` 全屏双栏组件**
 
 在 `common/src/main/java/com/shilapi/xcertplay/ui/component/SettingsScreenView.kt` 中编写实现：
 
@@ -370,7 +370,7 @@ class SettingsScreenView(
 }
 ```
 
-- [ ] **Step 4: 运行测试验证通过**
+- [x] **Step 4: 运行测试验证通过**
 
 运行:
 ```bash
@@ -378,7 +378,7 @@ class SettingsScreenView(
 ```
 预期: PASS。
 
-- [ ] **Step 5: 提交 Task 2 代码**
+- [x] **Step 5: 提交 Task 2 代码**
 
 ```bash
 git add common/src/main/java/com/shilapi/xcertplay/ui/component/SettingsScreenView.kt common/src/test/java/com/shilapi/xcertplay/ui/component/SettingsScreenViewTest.kt
@@ -400,7 +400,7 @@ git commit -m "feat(ui): add SettingsScreenView dual-column layout for automotiv
   在 `onSaveInstanceState` 中保存 `activeSettingsTab: String` 并在重新进入时恢复。
   移除 `drawerOpen`, `drawerRequested`, `restoreSettingsDrawer()`, `closeSettingsDrawer()`, `buildSettingsDrawer()`.
 
-- [ ] **Step 1: 在 `DiPlayActivity.kt` 中引入常量与状态恢复**
+- [x] **Step 1: 在 `DiPlayActivity.kt` 中引入常量与状态恢复**
 
 在 `DiPlayActivity.kt` companion object 中声明：
 ```kotlin
@@ -422,7 +422,7 @@ savedInstanceState?.getString(KEY_SETTINGS_TAB)?.let {
 }
 ```
 
-- [ ] **Step 2: 改造 `render()` 中的 `"settings"` 页面渲染**
+- [x] **Step 2: 改造 `render()` 中的 `"settings"` 页面渲染**
 
 替换原先的 `settings(content)`：
 ```kotlin
@@ -458,7 +458,7 @@ savedInstanceState?.getString(KEY_SETTINGS_TAB)?.let {
 }
 ```
 
-- [ ] **Step 3: 将所有点击设置的入口重定向至全屏设置并清理旧抽屉引用**
+- [x] **Step 3: 将所有点击设置的入口重定向至全屏设置并清理旧抽屉引用**
 
 1. `SlimDockView` 交互：
    - `onAudioClick`: `page = "settings"; activeSettingsTab = SettingsTab.AUDIO; render()`
@@ -472,7 +472,7 @@ savedInstanceState?.getString(KEY_SETTINGS_TAB)?.let {
    在 `handleOnBackPressed` 中：若 `page == "settings"`，则直接切回 `page = "home"; render()`。
 5. 删除 `drawer`, `drawerOpen`, `drawerRequested`, `openSettingsDrawer()`, `closeSettingsDrawer()`, `restoreSettingsDrawer()`, `buildSettingsDrawer()`。
 
-- [ ] **Step 4: 运行 `SettingsPagesUiTest` 验证**
+- [x] **Step 4: 运行 `SettingsPagesUiTest` 验证**
 
 运行:
 ```bash
@@ -480,7 +480,7 @@ savedInstanceState?.getString(KEY_SETTINGS_TAB)?.let {
 ```
 预期: PASS。
 
-- [ ] **Step 5: 提交 Task 3 代码**
+- [x] **Step 5: 提交 Task 3 代码**
 
 ```bash
 git add common/src/main/java/com/shilapi/xcertplay/DiPlayActivity.kt common/src/test/java/com/shilapi/xcertplay/SettingsPagesUiTest.kt
@@ -494,7 +494,7 @@ git commit -m "feat(cockpit): replace drawer with SettingsScreenView and preserv
 **Files:**
 - Modify: `common/src/main/java/com/shilapi/xcertplay/CarPlayHostActivity.kt:2585-2591`
 
-- [ ] **Step 1: 更新 `openSettingsMenu()` 跳转 Intent**
+- [x] **Step 1: 更新 `openSettingsMenu()` 跳转 Intent**
 
 在 `CarPlayHostActivity.kt` 中：
 ```kotlin
@@ -506,7 +506,7 @@ private fun openSettingsMenu() {
 }
 ```
 
-- [ ] **Step 2: 编译测试验证**
+- [x] **Step 2: 编译测试验证**
 
 运行:
 ```bash
@@ -514,7 +514,7 @@ private fun openSettingsMenu() {
 ```
 预期: BUILD SUCCESSFUL。
 
-- [ ] **Step 3: 提交 Task 4 代码**
+- [x] **Step 3: 提交 Task 4 代码**
 
 ```bash
 git add common/src/main/java/com/shilapi/xcertplay/CarPlayHostActivity.kt
@@ -531,7 +531,7 @@ git commit -m "fix(carplay): route top-bar settings button directly to fullscree
 - Delete: `common/src/test/java/com/shilapi/xcertplay/ui/component/SettingsDrawerScrollTest.kt`
 - Create: `common/src/test/java/com/shilapi/xcertplay/ui/component/SettingsScreenWidescreenTest.kt`
 
-- [ ] **Step 1: 删除废弃的 `SettingsDrawerView.kt` 及相关抽屉单测**
+- [x] **Step 1: 删除废弃的 `SettingsDrawerView.kt` 及相关抽屉单测**
 
 执行:
 ```bash
@@ -540,7 +540,7 @@ git rm common/src/test/java/com/shilapi/xcertplay/ui/component/SettingsDrawerWid
 git rm common/src/test/java/com/shilapi/xcertplay/ui/component/SettingsDrawerScrollTest.kt
 ```
 
-- [ ] **Step 2: 创建 `SettingsScreenWidescreenTest.kt` 验证 1920 宽屏双栏布局**
+- [x] **Step 2: 创建 `SettingsScreenWidescreenTest.kt` 验证 1920 宽屏双栏布局**
 
 在 `common/src/test/java/com/shilapi/xcertplay/ui/component/SettingsScreenWidescreenTest.kt` 中编写：
 
@@ -585,7 +585,7 @@ class SettingsScreenWidescreenTest {
 }
 ```
 
-- [ ] **Step 3: 运行全量单元测试与编译检查**
+- [x] **Step 3: 运行全量单元测试与编译检查**
 
 运行:
 ```bash
@@ -593,7 +593,7 @@ class SettingsScreenWidescreenTest {
 ```
 预期: 全量单元测试 100% 通过，0 失败。
 
-- [ ] **Step 4: 提交 Task 5 代码**
+- [x] **Step 4: 提交 Task 5 代码**
 
 ```bash
 git add common/src/test/java/com/shilapi/xcertplay/ui/component/SettingsScreenWidescreenTest.kt
