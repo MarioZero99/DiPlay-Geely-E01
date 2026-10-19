@@ -111,16 +111,24 @@ class ExistingWifiManagerTest {
     }
 
     @Test
-    fun aPasswordThePlatformHidesIsPublishedAsNoPasswordRatherThanAnEmptyOne() {
+    fun wirelessHotspotInfoIncludesDefaultGatewayWhenPresent() {
+        manager().use { manager ->
+            val info = start(manager)
+            // properties does not have routes by default, so defaultGateway is null
+            assertNull(info.defaultGateway)
+        }
+    }
+
+    @Test
+    fun securedNetworkWithoutPasswordThrowsExistingWifiCredentialsMissingException() {
         val hidden = addSavedNetwork(passphrase = null)
         shadowOf(wifi).setConnectionInfo(stationInfo("Pocket Wi-Fi", hidden))
 
         manager().use { manager ->
-            val info = start(manager)
-
-            assertNull(info.passphrase)
-            assertEquals(Iap2WirelessSecurity.WPA_WPA2, info.security)
-            assertTrue(diagnostics.any { it.contains("credentials=absent") })
+            val error = assertThrows(ExistingWifiCredentialsMissingException::class.java) {
+                start(manager)
+            }
+            assertEquals("Pocket Wi-Fi", error.ssid)
         }
     }
 

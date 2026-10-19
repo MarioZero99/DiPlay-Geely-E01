@@ -273,6 +273,9 @@ class ExistingWifiManager(
                 "from=${password.source} " +
                 "channel=$channel security=${credentials.security}",
         )
+        if (credentials.security != Iap2WirelessSecurity.NONE && password.value.isNullOrEmpty()) {
+            throw ExistingWifiCredentialsMissingException(attached.ssid)
+        }
         return WirelessHotspotInfo(
             ssid = attached.ssid,
             passphrase = password.value,
@@ -291,6 +294,7 @@ class ExistingWifiManager(
             // Read from the live connection, never typed by the driver: this is the access point the
             // car is actually on, and it is a hint about somebody else's hardware.
             accessPointBssid = accessPointAddress(attached.info?.bssid),
+            defaultGateway = defaultGateway(attached.properties),
         )
     }
 
@@ -658,3 +662,12 @@ private const val KEY_MGMT_OWE = 9
 private fun unquoted(value: String?): String? = value?.removeSurrounding("\"")
 
 private const val REDACTED_PASSWORD = "*"
+
+/**
+ * Thrown when the car is connected to a secured Wi-Fi network, but neither the platform
+ * nor the driver has supplied a password for it.
+ */
+class ExistingWifiCredentialsMissingException(
+    val ssid: String,
+    message: String = "Wi-Fi network \"$ssid\" requires a password, but none is saved in DiPlay settings",
+) : IOException(message)

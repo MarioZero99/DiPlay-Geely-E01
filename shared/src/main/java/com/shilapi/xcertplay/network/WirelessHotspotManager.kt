@@ -47,12 +47,17 @@ class WirelessHotspotInfo(
      * the phone has no way of knowing which access point to expect.
      */
     val accessPointBssid: ByteArray? = null,
+    /**
+     * The default IPv4 gateway on an existing Wi-Fi connection, or null when none was reported
+     * or when the hotspot backend owns the access point itself.
+     */
+    val defaultGateway: String? = null,
 ) {
     override fun toString(): String =
         "WirelessHotspotInfo(backend=${backend.label}, ssid='$ssid', " +
             "passphrase=<redacted>, security=$security, channel=$channel, " +
             "frequencyMHz=$frequencyMHz, bssid='$bssid', interfaceName=$interfaceName, " +
-            "hostAddress=$hostAddress, bandLabel='$bandLabel')"
+            "hostAddress=$hostAddress, bandLabel='$bandLabel', defaultGateway=$defaultGateway)"
 }
 
 /** Owns one Android Wi-Fi access point and all resources needed to keep it alive. */
