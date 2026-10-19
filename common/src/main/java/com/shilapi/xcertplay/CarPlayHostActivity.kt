@@ -558,7 +558,10 @@ class CarPlayHostActivity : ComponentActivity() {
         }
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         DiagCrashHandler.install(this)
-        initializeSessionLog()
+        // Rotating seven files and truncating the newest is disk I/O on the drawing thread. Timed
+        // because that is exactly the kind of cost a report has to be able to prove before the fix
+        // moves it to a background thread.
+        PerfTrace.span("startup/session-log", warnAboveMs = 100) { initializeSessionLog() }
         darkMode = isDarkMode(resources.configuration.uiMode)
         advancedAudioChannelMappingSupported =
             resources.getBoolean(R.bool.config_advanced_audio_channel_mapping)
@@ -601,6 +604,9 @@ class CarPlayHostActivity : ComponentActivity() {
         } else {
             microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
         }
+        // Reached only when the page is actually being shown: a failed bootstrap has already returned
+        // to DiPlay settings, and the timeline should not claim this screen opened.
+        PerfTrace.mark("startup", "startup/host-create-done")
     }
 
     private fun loadPersistedSettings() {

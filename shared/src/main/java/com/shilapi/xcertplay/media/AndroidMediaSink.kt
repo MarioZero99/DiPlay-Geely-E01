@@ -11,6 +11,7 @@ import android.os.Build
 import android.view.Surface
 import androidx.annotation.RequiresApi
 import com.shilapi.xcertplay.DiagLog
+import com.shilapi.xcertplay.PerfTrace
 import com.shilapi.xcertplay.airplay.AudioCodecKind
 import com.shilapi.xcertplay.airplay.AudioFormat
 import com.shilapi.xcertplay.airplay.MediaSink
@@ -230,11 +231,16 @@ private class VideoDecoder(
     private var lastConfig: VideoJob.Config? = null
     private var renderedFrameLogged = false
     private var submittedFrameLogged = false
+    private var firstFrameMarked = false
+    private var firstInputMarked = false
     private var duplicateConfigLogged = false
     private val referenceChain = VideoReferenceChain()
     private var lastKeyFrameRequestNs = 0L
     // The main screen keeps the historical log format; other screens are labelled.
     private val stats = VideoStats(if (streamType == 110) "" else " stream=$streamType")
+    private val decodeSeries = if (streamType == 110) "video/decode" else "video/decode[$streamType]"
+    /** Kept from the constructor argument, which is not a property and cannot be read from a method. */
+    private val streamLabel = if (streamType == 110) "" else "[$streamType]"
     private val thread = Thread(::run, "carplay-video").apply { isDaemon = true; start() }
 
     fun configure(codec: VideoCodec, codecData: ByteArray) {
@@ -414,6 +420,12 @@ private class VideoDecoder(
         val codec = decoder ?: return
         if (!submittedFrameLogged) {
             submittedFrameLogged = true
+            // Once per session, not once per decoder: this is the "the phone's picture has reached
+            // the decoder" point, and a recovery must not restamp it as if the run had just started.
+            if (!firstInputMarked) {
+                firstInputMarked = true
+                PerfTrace.mark("video", videoMarkName("first-input"))
+            }
             DiagLog.i(
                 TAG,
                 "video decoder first input avcc=${nalus.size} annexB=${annexB.size} " +
@@ -457,6 +469,24 @@ private class VideoDecoder(
         requestKeyFrame()
     }
 
+    /**
+     * Queue-to-picture latency, one sample per rendered frame.
+     *
+     * The input timestamp is the moment the frame was handed to the codec, so the difference is the
+     * half of the delay the head unit owns — decoder queueing plus the release that hands the buffer to
+     * the surface. The network half is already in [VideoStats] as `rx` and `maxGap`, and keeping them
+     * apart is what says whether a late picture is the radio or the decoder.
+     */
+    private fun recordDecodeLatency(presentationTimeUs: Long, nowNs: Long) {
+        if (presentationTimeUs <= 0L) return
+        val latencyMs = (nowNs - presentationTimeUs * 1_000L) / 1_000_000L
+        // Negative means the clocks disagree; minutes mean the timestamp is not a timestamp. Either
+        // would poison the p95 the report is supposed to be trusted on.
+        if (latencyMs in 0L..10_000L) PerfTrace.record(decodeSeries, latencyMs, warnAboveMs = 120)
+    }
+
+    private fun videoMarkName(suffix: String): String = "video/$suffix$streamLabel"
+
     private fun drainOutput(codec: MediaCodec) {
         val info = MediaCodec.BufferInfo()
         while (running) {
@@ -466,10 +496,18 @@ private class VideoDecoder(
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> logOutputFormat(codec.outputFormat)
                 index >= 0 -> {
                     val render = outputSurface != null
+                    val nowNs = System.nanoTime()
                     codec.releaseOutputBuffer(index, render)
-                    if (render) stats.onRendered()
+                    if (render) {
+                        stats.onRendered()
+                        recordDecodeLatency(info.presentationTimeUs, nowNs)
+                    }
                     if (render && !renderedFrameLogged) {
                         renderedFrameLogged = true
+                        if (!firstFrameMarked) {
+                            firstFrameMarked = true
+                            PerfTrace.mark("video", videoMarkName("first-frame"))
+                        }
                         report("first frame rendered")
                         DiagLog.i(TAG, "video decoder rendered first frame bytes=${info.size}")
                     }

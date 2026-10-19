@@ -9,6 +9,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import com.shilapi.xcertplay.host.R
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -23,6 +24,30 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "en", shadows = [FileProviderPathTestShadow::class])
 class DiagnosticExportUiTest {
+    @Before fun clearPerformanceSamples() = PerfTrace.reset()
+
+    /**
+     * The header is where a reader looks for "why is it slow"; a timing block that only appears in a
+     * log section would be behind the byte budget's ranking, which puts failures first.
+     */
+    @Test fun theHeaderCarriesTheTimingBlock() {
+        val activity = Robolectric.buildActivity(DiPlayActivity::class.java).setup().get()
+        PerfTrace.record("ui/tick", 3, warnAboveMs = 8)
+        PerfTrace.record("ui/tick", 12, warnAboveMs = 8)
+        PerfTrace.mark("startup", "startup/first-draw")
+        val header = ReflectionHelpers.callInstanceMethod<String>(
+            activity, "buildDiagnosticHeader",
+            ReflectionHelpers.ClassParameter.from(Context::class.java, activity.applicationContext),
+        )
+        assertTrue(header, header.contains("--- Performance"))
+        assertTrue(header, header.contains("ui/tick"))
+        assertTrue(header, header.contains("p95=12"))
+        assertTrue(header, header.contains("startup/first-draw"))
+        // The loss counters and the timing block are neighbours: a report that says nothing was lost
+        // and then quotes nothing is a different story from one that says why.
+        assertTrue(header, header.indexOf("Log losses") < header.indexOf("--- Performance"))
+    }
+
     /**
      * One exit, and the dialog says what actually happened: no stick here, so it must not claim one,
      * and the probe's own evidence line has to appear underneath the sentence.

@@ -12,6 +12,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import com.shilapi.xcertplay.DiagLog
+import com.shilapi.xcertplay.PerfTrace
 import com.shilapi.xcertplay.airplay.AirPlayConfig
 import com.shilapi.xcertplay.airplay.AirPlayContact
 import com.shilapi.xcertplay.airplay.AirPlayDeviceInfo
@@ -339,6 +341,12 @@ class CarPlayController(
     private var reenumerationAttempts = 0
     private var lastReportedStatus: CarPlayStatus? = null
     private var mfiResetLogged = false
+
+    // Where the connection spent its time, kept only so one line can be written when the ladder ends.
+    // The report has the whole timeline; this is for a log pulled off the unit without one.
+    private var firstStepAtNs = 0L
+    private var slowestStep = ""
+    private var slowestStepMs = 0L
 
     // The wired-link diagnosis. [startIphone] resets `wiredEmptyPolls` rather than every phase change,
     // because a re-enumeration detaches the phone by design. The re-plug rounds outlive even this
@@ -2698,10 +2706,59 @@ class CarPlayController(
         mainHandler.post {
             if (!closed && status != lastReportedStatus) {
                 lastReportedStatus = status
-                uiListener?.onDebugLog(status.debugLogMessage())
+                val message = status.debugLogMessage()
+                // The STEP line says which rung was reached; the mark says how long the climb to it
+                // took. A report with only the first cannot tell a phone that was slow to answer from
+                // a head unit that was slow to ask.
+                val stepMs = PerfTrace.mark("connect", perfStepName(message))
+                noteConnectionCost(status, message, stepMs)
+                uiListener?.onDebugLog(message)
                 uiStatusReporter?.invoke(status)
             }
         }
+    }
+
+    /** `STEP usb/config: ...` becomes `connect/usb/config`: the stable half of the line, for the report. */
+    private fun perfStepName(message: String): String =
+        if (message.startsWith("STEP ")) "connect/" + message.removePrefix("STEP ").substringBefore(':')
+        else "connect/error"
+
+    /**
+     * One line when the ladder ends: how long it took, and which rung held it up.
+     *
+     * The report's marks section says the same thing in more detail, but a report has to be generated
+     * and carried off the unit, while `diplay.log` is already there. Written through [DiagLog] rather
+     * than the UI listener so it reaches that file without adding a row to the handshake list.
+     *
+     * A retry inside the same controller restarts the clock at its first STEP, so a ladder that ran
+     * twice does not report the sum of both.
+     */
+    private fun noteConnectionCost(status: CarPlayStatus, message: String, stepMs: Long) {
+        val now = System.nanoTime()
+        if (message.startsWith("STEP ")) {
+            if (firstStepAtNs == 0L) {
+                firstStepAtNs = now
+                slowestStep = ""
+                slowestStepMs = 0L
+            }
+            if (stepMs > slowestStepMs) {
+                slowestStepMs = stepMs
+                slowestStep = message.removePrefix("STEP ").substringBefore(':')
+            }
+        }
+        val outcome = when (status) {
+            CarPlayStatus.RunningControl, CarPlayStatus.WirelessActive -> "up"
+            is CarPlayStatus.Failed -> "failed"
+            else -> return
+        }
+        if (firstStepAtNs == 0L) return
+        val totalMs = (now - firstStepAtNs) / 1_000_000L
+        DiagLog.i(
+            "DiPlay-Perf",
+            "connect $outcome in ${totalMs}ms; " +
+                "slowest=${slowestStep.ifEmpty { "none" }}+${slowestStepMs}ms",
+        )
+        firstStepAtNs = 0L
     }
 
     private fun CarPlayStatus.debugLogMessage(): String = when (this) {
