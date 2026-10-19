@@ -21,6 +21,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.text.Editable
 import android.text.InputType
 import android.text.TextUtils
@@ -2743,6 +2744,20 @@ class CarPlayHostActivity : ComponentActivity() {
      * swipe has opened the settings, the remainder of that stream is swallowed rather than forwarded
      * as moves whose down the phone never saw.
      */
+    /**
+     * `MotionEvent.eventTime` is on the uptimeMillis clock; `nanoTime` is not. Converts an event's own
+     * stamp to a nanoTime origin so the uplink can measure from the finger.
+     *
+     * Returns 0 when the stamp is unusable (synthesised events report 0) or implausibly old — the
+     * caller treats 0 as "unknown" rather than as an origin in the distant past.
+     */
+    private fun uptimeToNanos(eventTimeMillis: Long): Long {
+        if (eventTimeMillis <= 0L) return 0L
+        val ageMs = SystemClock.uptimeMillis() - eventTimeMillis
+        if (ageMs < 0L || ageMs > MAX_EVENT_AGE_MS) return 0L
+        return System.nanoTime() - ageMs * 1_000_000L
+    }
+
     private fun onHostTouch(view: View, event: MotionEvent): Boolean {
         val phase = swipePhase(event.actionMasked) ?: return true
         val decision = swipe.onTouch(
@@ -2768,7 +2783,12 @@ class CarPlayHostActivity : ComponentActivity() {
         }
 
         val contacts = CarPlayTouchMapper.contacts(event, view.width, view.height)
-        val queued = controller?.sendTouch(contacts) ?: false
+        // Only a MOVE may be dropped in transit; every press, release and pointer boundary keeps its
+        // slot. originNs is the finger's own clock, so latency is measured from the touch, not from
+        // when this callback happened to run.
+        val move = event.actionMasked == MotionEvent.ACTION_MOVE
+        val originNs = uptimeToNanos(event.eventTime)
+        val queued = controller?.sendTouch(contacts, move, originNs) ?: false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN,
             MotionEvent.ACTION_POINTER_DOWN,
@@ -3068,6 +3088,9 @@ class CarPlayHostActivity : ComponentActivity() {
         const val SESSION_LOG_DRAIN_TIMEOUT_MILLIS = 500L
         /** Bounded so a stalled disk cannot grow the queue without limit on a 26 MB device. */
         const val SESSION_LOG_QUEUE_CAPACITY = 64
+
+        /** Older than this is a stale event, not a touch the driver is still making. */
+        const val MAX_EVENT_AGE_MS = 2_000L
 
         /**
          * Rung marks. Drawn as text rather than icons because the page already ships one typeface
