@@ -2227,6 +2227,12 @@ class CarPlayHostActivity : ComponentActivity() {
                         status.reason == CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON ->
                             appendLog("Not retrying: the car's own hotspot is on and DiPlay cannot switch it off")
 
+                        status.reason == CarPlayFailureReason.EXISTING_WIFI_CREDENTIALS_MISSING ->
+                            appendLog("Not retrying: Wi-Fi password is not configured in DiPlay settings")
+
+                        status.reason == CarPlayFailureReason.EXISTING_WIFI_PHONE_NOT_ON_NETWORK ->
+                            appendLog("Not retrying: iPhone never joined the existing Wi-Fi (check Wi-Fi password)")
+
                         else -> reconnectAfterLoss(description)
                     }
                 }
@@ -3050,7 +3056,7 @@ class CarPlayHostActivity : ComponentActivity() {
      * The failure in the driver's language, with the exception text kept as a diagnostic tail.
      * The controller has no resources, so it reports a reason code; the sentence is ours.
      */
-    private fun failureText(reason: CarPlayFailureReason, detail: String?): String {
+    internal fun failureText(reason: CarPlayFailureReason, detail: String?): String {
         val sentence = getString(
             when (reason) {
                 CarPlayFailureReason.MFI_USB_PERMISSION_DENIED -> R.string.failure_mfi_usb_permission_denied
@@ -3066,6 +3072,10 @@ class CarPlayHostActivity : ComponentActivity() {
                 CarPlayFailureReason.FIRST_TCP_TIMEOUT -> R.string.failure_first_tcp_timeout
                 CarPlayFailureReason.WIRELESS_PHONE_NOT_ON_NETWORK ->
                     R.string.failure_phone_not_on_network
+                CarPlayFailureReason.EXISTING_WIFI_CREDENTIALS_MISSING ->
+                    R.string.failure_existing_wifi_credentials_missing
+                CarPlayFailureReason.EXISTING_WIFI_PHONE_NOT_ON_NETWORK ->
+                    R.string.failure_existing_wifi_phone_not_on_network
                 CarPlayFailureReason.BRING_UP_FAILED -> R.string.failure_bring_up_failed
             },
         )

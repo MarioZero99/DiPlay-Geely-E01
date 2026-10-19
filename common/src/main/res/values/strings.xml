@@ -490,6 +490,8 @@
     <string name="failure_host_id_rejected">The iPhone refused this accessory\'s identity. On the iPhone, remove this car under Settings, General, CarPlay — or forget the accessory in Bluetooth — then plug the cable in again.</string>
     <string name="failure_first_tcp_timeout">The iPhone did not connect over Wi-Fi. Retrying with the other network address.</string>
     <string name="failure_phone_not_on_network">The iPhone never joined this car’s Wi-Fi, so the address it was given was never the problem. Check the iPhone’s Wi-Fi, then press Retry.</string>
+    <string name="failure_existing_wifi_credentials_missing">This Wi-Fi network requires a password, but none is saved in DiPlay settings. Please enter the Wi-Fi password in DiPlay settings.</string>
+    <string name="failure_existing_wifi_phone_not_on_network">iPhone did not join the Wi-Fi network. If this network requires a password, please verify the Wi-Fi password in DiPlay settings and ensure iPhone is connected to this Wi-Fi.</string>
     <string name="failure_bring_up_failed">CarPlay could not start.</string>
     <string name="switch_on">On</string>
     <string name="switch_off">Off</string>

@@ -489,6 +489,8 @@
     <string name="failure_host_id_rejected">iPhone 拒绝了这个配件的身份。请在 iPhone 的「设置 → 通用 → CarPlay」里移除本车，或在蓝牙设置里忽略这个配件，然后重新插线。</string>
     <string name="failure_first_tcp_timeout">iPhone 没能通过 Wi-Fi 连上。正在改用另一个网络地址重试。</string>
     <string name="failure_phone_not_on_network">iPhone 没有连上本车的 Wi-Fi，所以给它哪个地址都不是问题所在。请检查 iPhone 的 Wi-Fi，然后点重试。</string>
+    <string name="failure_existing_wifi_credentials_missing">当前 Wi-Fi 为加密网络，车机 DiPlay 尚未配置此 Wi-Fi 密码。请在 DiPlay 设置中输入 Wi-Fi 密码。</string>
+    <string name="failure_existing_wifi_phone_not_on_network">iPhone 未能连入该 Wi-Fi 网络。若为加密网络，请检查车机 DiPlay 设置中填写的 Wi-Fi 密码是否正确，并确认 iPhone 已连入此 Wi-Fi。</string>
     <string name="failure_bring_up_failed">CarPlay 启动失败。</string>
     <string name="switch_on">开</string>
     <string name="switch_off">关</string>
