@@ -17,6 +17,9 @@ internal class VideoStats(
     private var touchSamples = 0
     private var touchLatencySumNs = 0L
     private var maxTouchLatencyNs = 0L
+    private var renderSamples = 0
+    private var renderLatencySumNs = 0L
+    private var maxRenderLatencyNs = 0L
 
     @Synchronized fun onReceived(size: Int) {
         val now = nanoTime()
@@ -34,7 +37,22 @@ internal class VideoStats(
         bytes += size
     }
 
-    @Synchronized fun onRendered() { rendered++ }
+    /**
+     * [nowNs] is taken before `releaseOutputBuffer`, so this closes when the buffer is handed to the
+     * surface — not when the pixel lights up. It is still one composite plus one vsync short, which
+     * is why it compares versions rather than claiming an absolute number.
+     */
+    @Synchronized fun onRendered(nowNs: Long) {
+        rendered++
+        // Only the main screen carries touches; a second stream must not consume their samples.
+        if (label.isNotEmpty()) return
+        val latency = TouchLatencyProbe.onRendered(nowNs)
+        if (latency >= 0) {
+            renderSamples++
+            renderLatencySumNs += latency
+            maxRenderLatencyNs = maxOf(maxRenderLatencyNs, latency)
+        }
+    }
 
     @Synchronized fun onRecovery() { recoveries++ }
 
@@ -45,17 +63,22 @@ internal class VideoStats(
         val seconds = elapsedNs / 1e9
         if (received == 0 && touchSamples == 0) { windowStartNs = now; return null }
         val touchAvgMs = if (touchSamples == 0) -1 else touchLatencySumNs / touchSamples / 1_000_000
+        val renderAvgMs = if (renderSamples == 0) -1 else renderLatencySumNs / renderSamples / 1_000_000
         val line = ("video stats$label rx=%.1ffps shown=%.1ffps maxGap=%dms kbps=%d recoveries=%d " +
-            "touch2frame avg=%dms max=%dms n=%d touchSendMax=%dms").format(
+            "touch2frame avg=%dms max=%dms n=%d touch2render avg=%dms max=%dms n=%d " +
+            "touchSendMax=%dms").format(
             received / seconds, rendered / seconds, maxArrivalGapNs / 1_000_000,
             (bytes * 8 / 1000 / seconds).toLong(), recoveries,
-            touchAvgMs, maxTouchLatencyNs / 1_000_000, touchSamples, TouchLatencyProbe.maxSendNs / 1_000_000,
-        )
+            touchAvgMs, maxTouchLatencyNs / 1_000_000, touchSamples,
+            renderAvgMs, maxRenderLatencyNs / 1_000_000, renderSamples,
+            TouchLatencyProbe.maxSendNs / 1_000_000,
+        ) + (if (label.isEmpty()) TouchLatencyProbe.queueSummary() else "")
         TouchLatencyProbe.maxSendNs = 0
         DiagLog.i(TAG, line)
         windowStartNs = now
         received = 0; rendered = 0; recoveries = 0; bytes = 0; maxArrivalGapNs = 0
         touchSamples = 0; touchLatencySumNs = 0; maxTouchLatencyNs = 0
+        renderSamples = 0; renderLatencySumNs = 0; maxRenderLatencyNs = 0
         return line
     }
 

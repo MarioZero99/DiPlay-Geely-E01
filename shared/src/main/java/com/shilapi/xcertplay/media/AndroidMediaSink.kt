@@ -499,7 +499,7 @@ private class VideoDecoder(
                     val nowNs = System.nanoTime()
                     codec.releaseOutputBuffer(index, render)
                     if (render) {
-                        stats.onRendered()
+                        stats.onRendered(nowNs)
                         recordDecodeLatency(info.presentationTimeUs, nowNs)
                     }
                     if (render && !renderedFrameLogged) {
