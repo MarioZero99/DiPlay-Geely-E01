@@ -4,7 +4,7 @@
 
 CarPlay for the **2021 Geely Xingrui (星瑞)** head unit: ECARX E01, MediaTek MT6735, GKUI 19, **Android 5.1 (API 22)**. Installed on the car. No jailbreak, no dongle.
 
-Current version: **`0.4.2-geely`**. App id: `com.shihab.diplay`. Install `DiPlay-Legacy-Geely-V042.apk`.
+Current version: **`0.4.3-geely`**. App id: `com.shihab.diplay`. Install `DiPlay-Legacy-Geely-V043.apk`.
 
 Not Apple-certified, and not affiliated with Geely or ECARX. CarPlay is a trademark of Apple Inc.
 
@@ -30,7 +30,7 @@ The cockpit is laid out for the 1920×720 panel: a Slim Dock on the left, the co
 
 - **Wired CarPlay** over a USB data cable; it has shown a picture on the reference car.
 - **Wireless · car hotspot**: the head unit makes the hotspot, the iPhone joins it, paired over Bluetooth.
-- **Wireless · same Wi-Fi**: the head unit joins an existing network (phone hotspot, router, iPhone Personal Hotspot) and the iPhone joins the same one. Credentials are read from the head unit; a password can be entered by hand when the head unit will not hand it over.
+- **Wireless · same Wi-Fi (experimental, local package only)**: the head unit joins an existing network (phone hotspot, router, iPhone Personal Hotspot) and the iPhone joins the same one. Credentials are read from the head unit; a password can be entered by hand when the head unit will not hand it over. It has not carried a session on the car yet, and the official package does not offer it.
 - **Steering wheel** previous/next works. There is no play/pause key — that position is the head unit's screen-mirroring button.
 - **Three-finger quick bar** over the CarPlay picture: disconnect, navigation audio stream, day/night, exit.
 - **Diagnostic report**: saved to a USB stick first, then Downloads/private storage. The official package never uploads on its own.
@@ -47,7 +47,7 @@ Wireless CarPlay uses the vendor Bluetooth already running on the head unit. To 
 
 Use a cable to avoid all of that. **USB does not touch Bluetooth.**
 
-Full risk note and disclaimer: [v0.4.2 release notes](docs/release-notes/v0.4.2-geely.md).
+Full risk note and disclaimer: [v0.4.3 release notes](docs/release-notes/v0.4.3-geely.md).
 
 ## Install
 
@@ -59,20 +59,20 @@ A later build of this fork installs over the previous one and keeps its settings
 
 ```sh
 adb uninstall com.shihab.diplay
-adb install -r DiPlay-Legacy-Geely-V042.apk
+adb install -r DiPlay-Legacy-Geely-V043.apk
 ```
 
 Without ADB, copy the APK to a USB stick and install it from the head unit's file manager.
 
 ### Which package
 
-Use `DiPlay-Legacy-Geely-V042.apk` for normal installation. The `-local` build in the repository is an internal test package and may be unstable; it is not meant for daily use.
+Use `DiPlay-Legacy-Geely-V043.apk` for normal installation. The `-local` build in the repository is an internal test package and may be unstable; it is not meant for daily use.
 
 ## After it opens
 
 **Car hotspot.** Turn on Bluetooth and Wi-Fi on the phone, pair it with the car, keep the car hotspot on, then tap **Connect phone**. DiPlay reads the saved hotspot name and password; 5 GHz is used when the radio allows it.
 
-**Same Wi-Fi.** Join the head unit and the iPhone to the same network in the head unit's own Wi-Fi settings, pick **Same Wi-Fi network**, enter the password only if the head unit will not hand it over, then connect. The car hotspot is switched off for this mode.
+**Same Wi-Fi (experimental, local package only).** Join the head unit and the iPhone to the same network in the head unit's own Wi-Fi settings, pick **Same Wi-Fi network**, enter the password only if the head unit will not hand it over, then connect. The car hotspot is switched off for this mode. The official package offers the car hotspot alone; a selection made in a local package reads back as the car hotspot there.
 
 **Wired.** Tap **Connect with USB**, use a data cable in a data port. On the reference car an iPhone 17 Pro Max draws more current than the port supplies and reconnects; a powered hub avoids that.
 
@@ -89,7 +89,7 @@ Use `DiPlay-Legacy-Geely-V042.apk` for normal installation. The `-local` build i
 | Steering wheel previous/next | ✅ Verified on the reference car |
 | Wired USB picture | ✅ Shown on the reference car; power-related reconnects |
 | Built-in Bluetooth wireless | 🟡 One pass on the car on 2026-10-14; latest cockpit changes not re-tested |
-| Same Wi-Fi mode | 🟡 Desktop/AVD only; not yet working on the car |
+| Same Wi-Fi mode | 🟡 Experimental, local package only; not yet working on the car |
 | Cockpit UI / drawer / quick bar | 🟡 AVD 1920×720 screenshots; no long drive on the car |
 | USB diagnostic export | 🟡 Code and tests; real stick on the car still to verify |
 | Calls / Bluetooth music after wireless takeover | ❌ Not tested on the car |
@@ -97,7 +97,7 @@ Use `DiPlay-Legacy-Geely-V042.apk` for normal installation. The `-local` build i
 
 Reference car: software **5068** (factory batch 5066), build `SWFS11G0706H5181.00600`. Check **Settings → About the smart platform → Version**. A different version can still be installed, but the risk may differ.
 
-**Memory is the binding constraint:** free memory is often only **26–33 MB**. The cockpit is kept light and updated in place rather than rebuilt every second. The build also runs on **Android 4.4** head units; the car used is 5.1. Wireless keeps two modes — car hotspot and same Wi-Fi — with no unreachable direct mode.
+**Memory is the binding constraint:** free memory is often only **26–33 MB**. The cockpit is kept light and updated in place rather than rebuilt every second. The build also runs on **Android 4.4** head units; the car used is 5.1. The official package offers the car hotspot only; the same-Wi-Fi route is experimental and lives in the local package.
 
 ## Origin
 
@@ -111,7 +111,7 @@ The repository does not contain the signing key. The release APK carries an expe
 
 - [What changed after 4.1 — additions, improvements, optimizations, fixes](CHANGELOG-4.1-to-HEAD.md)
 - [Full changelog](CHANGELOG.md)
-- [v0.4.2 release notes](docs/release-notes/v0.4.2-geely.md)
+- [v0.4.3 release notes](docs/release-notes/v0.4.3-geely.md)
 - [Build from source (developers)](docs/BUILD.md)
 - [Install and connect](docs/INSTALL.md)
 - [Compatibility](docs/COMPATIBILITY.md)

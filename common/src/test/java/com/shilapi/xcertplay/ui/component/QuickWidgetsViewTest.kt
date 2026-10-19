@@ -52,7 +52,29 @@ class QuickWidgetsViewTest {
         assertFalse(shown.contains(wifiSettings()))
     }
 
-    private fun visibleButtons(mode: WirelessHotspotMode): List<String> {
+    /**
+     * In the official package the same-network route is not in the build, so the card is the car
+     * hotspot alone: no second segment to press, and no row about a network it cannot join.
+     */
+    @Test
+    fun `the official package draws no same-network segment`() {
+        val view = card(WirelessHotspotMode.MANUAL, sameWifiOffered = false)
+        val shown = visibleButtons(view)
+        assertTrue(shown.contains(context.getString(R.string.built_in_car_hotspot)))
+        assertFalse(shown.contains(context.getString(R.string.same_wifi_network)))
+        assertFalse(shown.contains(wifiSettings()))
+        assertTrue(shown.contains(hotspotSettings()))
+    }
+
+    private fun visibleButtons(mode: WirelessHotspotMode): List<String> = visibleButtons(card(mode))
+
+    private fun visibleButtons(view: QuickWidgetsView): List<String> {
+        val found = mutableListOf<String>()
+        collectButtons(view, found)
+        return found
+    }
+
+    private fun card(mode: WirelessHotspotMode, sameWifiOffered: Boolean = true): QuickWidgetsView {
         val view = QuickWidgetsView(
             context,
             palette,
@@ -67,11 +89,10 @@ class QuickWidgetsViewTest {
             onEditWifiPass = {},
             onAudioSelect = {},
             onOpenDrawer = {},
+            sameWifiOffered = sameWifiOffered,
         )
         view.updateState(mode, "Geely-5G", null, "Stream 3")
-        val found = mutableListOf<String>()
-        collectButtons(view, found)
-        return found
+        return view
     }
 
     /** Skips whole subtrees the card is not drawing: a row is `GONE`, its buttons are not. */

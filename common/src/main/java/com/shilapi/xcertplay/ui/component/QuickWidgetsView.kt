@@ -37,6 +37,12 @@ class QuickWidgetsView(
     private val onEditWifiPass: () -> Unit,
     private val onAudioSelect: () -> Unit,
     private val onOpenDrawer: () -> Unit,
+    /**
+     * Whether the same-network route is in this package. It is experimental and only a local build
+     * carries it; without it the card is the car hotspot and nothing else, rather than two segments
+     * where one can only refuse.
+     */
+    private val sameWifiOffered: Boolean = true,
 ) : LinearLayout(context) {
 
     private val hotspotTab: Button
@@ -82,7 +88,9 @@ class QuickWidgetsView(
 
         // The two quick routes, as a two-segment拨块. A saved local-only mode is neither of these,
         // so neither segment lights and neither row is shown: the card then offers the way to the
-        // two it can drive rather than claiming one of them is in use.
+        // two it can drive rather than claiming one of them is in use. In the official package the
+        // same-network route is not in the build, so its segment and row are not added at all — the
+        // car hotspot is the whole card.
         val segment = LinearLayout(context).apply {
             orientation = HORIZONTAL
             background = GradientDrawable().apply {
@@ -101,7 +109,7 @@ class QuickWidgetsView(
             if (currentMode != WirelessHotspotMode.EXISTING_WIFI) onModeSwitch(WirelessHotspotMode.EXISTING_WIFI)
         }
         segment.addView(hotspotTab, LayoutParams(0, dp(44), 1f))
-        segment.addView(wifiTab, LayoutParams(0, dp(44), 1f))
+        if (sameWifiOffered) segment.addView(wifiTab, LayoutParams(0, dp(44), 1f))
         wireless.addView(segment, LayoutParams(-1, -2).apply { topMargin = dp(10) })
 
         hotspotEdit = smallButton("") { onEditHotspotPass() }
@@ -122,7 +130,7 @@ class QuickWidgetsView(
             )
             addView(wifiEdit, LayoutParams(0, dp(46), 1f).apply { marginStart = dp(8) })
         }
-        wireless.addView(wifiRow, LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        if (sameWifiOffered) wireless.addView(wifiRow, LayoutParams(-1, -2).apply { topMargin = dp(10) })
 
         addView(wireless, LayoutParams(-1, 0, 1.15f))
         addView(View(context).apply { layoutParams = LayoutParams(1, dp(14)) })
@@ -183,7 +191,7 @@ class QuickWidgetsView(
         currentMode = mode
 
         val isHotspot = mode == WirelessHotspotMode.MANUAL
-        val isExistingWifi = mode == WirelessHotspotMode.EXISTING_WIFI
+        val isExistingWifi = sameWifiOffered && mode == WirelessHotspotMode.EXISTING_WIFI
         paintTab(hotspotTab, isHotspot)
         paintTab(wifiTab, isExistingWifi)
 

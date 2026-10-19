@@ -46,9 +46,18 @@ import org.robolectric.shadows.ShadowAlertDialog
 @Config(sdk = [28], qualifiers = "en")
 class SettingsPagesUiTest {
 
-    @Before fun thisBuildHasNoAdapterStack() = AdapterRoutes.override(null)
+    // Same-network is an experimental route now: it is in the local package, and several of the
+    // assertions here are about what its page says. Pinned the way the adapter is, so the suite does
+    // not pass or fail according to the switch the machine happened to be built with.
+    @Before fun thisBuildHasNoAdapterStackAndCarriesTheLocalFeatures() {
+        AdapterRoutes.override(null)
+        ExperimentalFeatures.override(true)
+    }
 
-    @After fun giveTheBuildItsOwnAnswerBack() = AdapterRoutes.resetOverride()
+    @After fun giveTheBuildItsOwnAnswerBack() {
+        AdapterRoutes.resetOverride()
+        ExperimentalFeatures.resetOverride()
+    }
 
     /**
      * The buckets: the route that still opens each one, its heading, and a control only it has.

@@ -249,26 +249,34 @@ object AirPlayPersistence {
      * A string the enum no longer has — `WIFI_P2P`, written by an install that offered it — reads as
      * the car hotspot, and the write below puts that back into storage so the next read is not the
      * migration again.
+     *
+     * The same-network route is experimental: only a local package offers it. A value written by one
+     * of those reads as the car hotspot here, and is written back as one — without this the
+     * connection would keep running the experimental route while the page, which no longer draws it,
+     * said car hotspot. The official package's way to the same network is the car hotspot it has.
      */
     fun loadWirelessHotspotMode(context: Context): WirelessHotspotMode {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val stored = prefs.getString(KEY_WIRELESS_HOTSPOT_MODE, null)
         val mode = WirelessHotspotMode.entries.firstOrNull { it.name == stored }
             ?: WirelessHotspotMode.MANUAL
-        val supported = if (mode == WirelessHotspotMode.LOCAL_ONLY_HOTSPOT) {
-            WirelessHotspotMode.MANUAL
-        } else {
-            mode
-        }
+        val supported = supportedHotspotMode(mode)
         if (stored != supported.name) saveWirelessHotspotMode(context, supported)
         return supported
     }
 
     fun saveWirelessHotspotMode(context: Context, mode: WirelessHotspotMode) {
-        val supported = if (mode == WirelessHotspotMode.LOCAL_ONLY_HOTSPOT) WirelessHotspotMode.MANUAL else mode
+        val supported = supportedHotspotMode(mode)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_WIRELESS_HOTSPOT_MODE, supported.name)
             .apply()
+    }
+
+    /** The mode this package can actually run: the two that are gone read as the car hotspot. */
+    private fun supportedHotspotMode(mode: WirelessHotspotMode): WirelessHotspotMode = when {
+        mode == WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> WirelessHotspotMode.MANUAL
+        mode == WirelessHotspotMode.EXISTING_WIFI && !ExperimentalFeatures.enabled -> WirelessHotspotMode.MANUAL
+        else -> mode
     }
 
     fun loadManualHotspotSsid(context: Context): String =

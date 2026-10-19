@@ -64,7 +64,8 @@ internal data class HeadUnitProbe(
 internal data class ConnectionSupportReport(
     val usable: List<UsableConnection>,
     val carHotspotNotes: List<CarHotspotBlocker>,
-    /** The hotspot modes this head unit can be set up to use, in the order they are offered. */
+    /** The hotspot modes this head unit can be set up to use, in the order they are offered. The
+     *  same-network route is experimental and appears only when the package carries it. */
     val wirelessModes: List<WirelessHotspotMode>,
     /**
      * Whether the wireless route can carry CarPlay here at all, ignoring what happens to be switched
@@ -86,7 +87,13 @@ internal data class ConnectionSupportReport(
 )
 
 internal object DeviceConnectionSupport {
-    fun assess(probe: HeadUnitProbe): ConnectionSupportReport {
+    /**
+     * [sameWifiOffered] is whether this package carries the same-network route at all. That route is
+     * experimental — it has not carried a session on the car, and taking it costs the driver the car's
+     * own hotspot — so only a local package (`-Pexperimental=on`) offers it. The official package is
+     * left with the car hotspot, which is the route that has worked on the car.
+     */
+    fun assess(probe: HeadUnitProbe, sameWifiOffered: Boolean = true): ConnectionSupportReport {
         val notes = mutableListOf<CarHotspotBlocker>()
         if (!probe.wifiManager) notes += CarHotspotBlocker.NO_WIFI
         else if (!probe.hotspotApi) notes += CarHotspotBlocker.NO_HOTSPOT_API
@@ -131,11 +138,12 @@ internal object DeviceConnectionSupport {
             // available here, not whether the route can be configured at all.
             if (probe.wifiManager) add(WirelessHotspotMode.MANUAL)
             // Joining a network that already exists needs no hotspot call of ours and no radio of
-            // ours, so it is offered wherever there is Wi-Fi at all and the platform is new enough
-            // to describe one network at a time (Android 5). It is also the one mode that asks
-            // nothing of the driver's Bluetooth, which on a head unit whose stack cannot carry iAP2
-            // is the difference between a route that can be set up and one that cannot.
-            if (probe.wifiManager && probe.sdkInt >= Build.VERSION_CODES.LOLLIPOP) {
+            // ours, so it would be offered wherever there is Wi-Fi at all and the platform is new
+            // enough to describe one network at a time (Android 5). It is experimental, though: the
+            // attempts on the car stopped in the network layer, and the mode spends the car's own
+            // hotspot to try. Only the local package offers it; the official one keeps the car
+            // hotspot, which is the route that has carried a session on this head unit.
+            if (sameWifiOffered && probe.wifiManager && probe.sdkInt >= Build.VERSION_CODES.LOLLIPOP) {
                 add(WirelessHotspotMode.EXISTING_WIFI)
             }
         }
@@ -161,7 +169,8 @@ internal object DeviceConnectionSupport {
         )
     }
 
-    fun inspect(context: Context): ConnectionSupportReport = assess(probe(context))
+    fun inspect(context: Context): ConnectionSupportReport =
+        assess(probe(context), sameWifiOffered = ExperimentalFeatures.enabled)
 
     @SuppressLint("MissingPermission")
     fun probe(context: Context): HeadUnitProbe {

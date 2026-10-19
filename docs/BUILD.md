@@ -50,6 +50,7 @@ DIPLAY_VENDOR_HOP_DIR=/absolute/path/to/the/car-hop scripts/package-geely.sh loc
 | `-Pexperimental` | `off` | `on` |
 | log-upload key | no | yes |
 | the settings page's experimental bucket | not drawn | drawn |
+| same-network Wi-Fi mode | not offered | offered |
 | file | `dist/DiPlay-Legacy-Geely-V<nnn>.apk` | `dist/DiPlay-Legacy-Geely-V<nnn>-local.apk` |
 
 Both carry the car hop and the accessory identity, both are release builds, and both use the same

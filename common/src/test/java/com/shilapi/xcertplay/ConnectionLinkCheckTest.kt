@@ -102,6 +102,18 @@ class DeviceConnectionSupportTest {
         assertTrue(WirelessHotspotMode.EXISTING_WIFI in DeviceConnectionSupport.assess(ready(21)).wirelessModes)
     }
 
+    /**
+     * The official package offers the car hotspot alone.
+     *
+     * Same-network is an experimental route: the attempts on the car stopped in the network layer, and
+     * taking it spends the car's own hotspot. A local package carries it; the one that is handed out
+     * keeps the route that has carried a session on this head unit.
+     */
+    @Test fun theOfficialPackageOffersTheCarHotspotAlone() {
+        val report = DeviceConnectionSupport.assess(ready(22), sameWifiOffered = false)
+        assertEquals(listOf(WirelessHotspotMode.MANUAL), report.wirelessModes)
+    }
+
     @Test fun withNoWifiServiceThereIsNothingToSetUp() {
         val report = DeviceConnectionSupport.assess(ready(22).copy(wifiManager = false))
         assertEquals(listOf(CarHotspotBlocker.NO_WIFI), report.carHotspotNotes)

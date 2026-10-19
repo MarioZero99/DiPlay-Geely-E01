@@ -597,6 +597,7 @@ class DiPlayActivity : ComponentActivity() {
             },
             onAudioSelect = { openSettingsDrawer(getString(R.string.audio_routing)) },
             onOpenDrawer = { openSettingsDrawer() },
+            sameWifiOffered = ExperimentalFeatures.enabled,
         )
         widgets = quick
 

@@ -14,6 +14,42 @@ alignment line, not the base line, is what says how current a release is.
 
 ---
 
+## 0.4.3-geely — 2026-10-19
+
+**Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
+
+**The same-network route is experimental now.** Joining a Wi-Fi network that already exists has not
+carried a session on the car: both attempts on 2026-10-19 stopped in the network layer, with the head
+unit's own station interface dropping off the network, and taking the route costs the driver the car's
+own hotspot to try. It is in the local package (`-Pexperimental=on`) and in no other. The official
+package offers the car hotspot alone — the route that connected on the car that afternoon in 7.5 s. A
+same-network selection made in a local package reads as the car hotspot in the official one, so the
+page and the connection cannot disagree about which route is running.
+
+**Connecting can be cancelled.** The disconnect control is on the stage while an attempt is running,
+not only after a session exists; during a connect it says Cancel. A failed attempt that stays in its
+phase no longer leaves the button greyed out for good: it comes back after 1.2 s.
+
+**The first launch asks which way.** `wireless_enabled` answered both "what was used last" and "what
+to start with", so a fresh install went wireless without anyone choosing. Storage has a third state
+now: with nothing saved, the main control says "Choose connection mode" and offers wired and wireless
+side by side. Wired no longer shows the wireless readiness lines or the hotspot note; a head unit with
+no USB host says why and greys the wired control.
+
+**IAP2 identification: the EA profile is a choice.** Parameter 10 declared the EA protocol while
+parameter 7 did not carry the messages that switch it on, so the phone answered `0x1d03`. The three
+parameters are built from one value now, and the rules hold at construction: `0xea00`/`0xea01` go
+together, parameter 10 has a protocol exactly when parameter 7 has that pair, and every subscribed
+Start/Stop is paired. Two profiles exist, chosen at runtime by `debug.diplay.iap2.profile`: the
+default is the one verified on this car (wired 2026-10-14, wireless 2026-10-16), and `compliant` drops
+the EA plane. An unreadable, misspelled or empty value falls back to the verified one. The link layer
+follows the same choice, so identification and link can no longer disagree about EA.
+
+**Smaller.** The settings drawer takes 42% of the screen width, clamped to 680–800 dp, instead of a
+fixed 520 dp. The 21 audio channels are a 3×7 grid that fits the card, so every cell is reachable. The
+test tone's PCM is read once rather than on every press, and teardown clears its timers before
+releasing the track.
+
 ## 0.4.2-geely — 2026-10-18
 
 **Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
