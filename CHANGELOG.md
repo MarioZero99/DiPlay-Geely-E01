@@ -37,9 +37,9 @@ control now says "Choose connection mode" and offers wired and wireless side by 
 shows the wireless readiness lines or the hotspot note; a head unit with no USB host says why and
 greys the wired control.
 
-**Smaller.** The settings drawer takes 42% of the screen width, clamped to 680–800 dp, instead of a
-fixed 520 dp. The 21 audio channels are a 3×7 grid that fits the card, so every cell is reachable. The
-test tone no longer stutters on every press, and its timers are cleared before the track is released.
+**Smaller.** The settings drawer takes 42% of the screen width (680–800 dp here) instead of a fixed
+520 dp. The 21 audio channels are a 3×7 grid that fits the card, so every cell is reachable. The test
+tone no longer stutters on every press, and shuts down cleanly when the app exits.
 
 ## 0.4.2-geely — 2026-10-18
 
