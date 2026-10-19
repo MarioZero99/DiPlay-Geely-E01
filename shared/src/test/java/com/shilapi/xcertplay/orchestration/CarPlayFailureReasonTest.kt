@@ -47,4 +47,24 @@ class CarPlayFailureReasonTest {
             failureReasonFor(FirstTcpTimeoutException("no AirPlay TCP")),
         )
     }
+
+    @Test
+    fun existingWifiFailuresMapToDistinctReasons() {
+        val missingCreds = com.shilapi.xcertplay.network.ExistingWifiCredentialsMissingException("MyHotspot")
+        assertEquals(
+            CarPlayFailureReason.EXISTING_WIFI_CREDENTIALS_MISSING,
+            failureReasonFor(missingCreds),
+        )
+        // Also when wrapped in IOException
+        assertEquals(
+            CarPlayFailureReason.EXISTING_WIFI_CREDENTIALS_MISSING,
+            failureReasonFor(java.io.IOException("Could not establish EXISTING_WIFI hotspot", missingCreds)),
+        )
+
+        val notOnNetwork = ExistingWifiPhoneNotOnNetworkException("MyHotspot", "no peer joined")
+        assertEquals(
+            CarPlayFailureReason.EXISTING_WIFI_PHONE_NOT_ON_NETWORK,
+            failureReasonFor(notOnNetwork),
+        )
+    }
 }

@@ -204,7 +204,29 @@ enum class CarPlayFailureReason {
      * cannot be helped by a different address on a network it is not on.
      */
     WIRELESS_PHONE_NOT_ON_NETWORK,
+
+    /**
+     * The car is on a secured Wi-Fi network, but no Wi-Fi password was provided either by the system
+     * or by the driver in DiPlay settings.
+     */
+    EXISTING_WIFI_CREDENTIALS_MISSING,
+
+    /**
+     * In existing Wi-Fi mode, the phone never joined the Wi-Fi network (no peer other than the gateway
+     * was found in the ARP table within 30 seconds of StartSession).
+     */
+    EXISTING_WIFI_PHONE_NOT_ON_NETWORK,
 }
+
+/**
+ * Thrown when CarPlay was started over an existing Wi-Fi network, but no device ever joined
+ * the network (excluding the gateway). Usually indicates that the Wi-Fi password entered in
+ * DiPlay is incorrect.
+ */
+class ExistingWifiPhoneNotOnNetworkException(
+    val ssid: String?,
+    message: String,
+) : IOException(message)
 
 /**
  * The one thing the same-network route asks of the car, and the car will not do it.
@@ -264,12 +286,25 @@ internal fun reportsLockdownError(error: Throwable, code: String): Boolean {
  * though it *is* retried, because it is the one retry that comes out different: the attempt after it
  * publishes the other address family.
  */
-internal fun failureReasonFor(error: Throwable): CarPlayFailureReason = when {
-    error is CarHotspotStaysOnException -> CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON
-    error is FirstTcpTimeoutException -> CarPlayFailureReason.FIRST_TCP_TIMEOUT
-    error is WirelessPhoneNotOnNetworkException -> CarPlayFailureReason.WIRELESS_PHONE_NOT_ON_NETWORK
-    reportsLockdownError(error, "InvalidHostID") -> CarPlayFailureReason.HOST_ID_REJECTED
-    else -> CarPlayFailureReason.BRING_UP_FAILED
+internal fun failureReasonFor(error: Throwable): CarPlayFailureReason {
+    val unwrap = generateSequence(error) { it.cause }.firstOrNull {
+        it is com.shilapi.xcertplay.network.ExistingWifiCredentialsMissingException ||
+            it is ExistingWifiPhoneNotOnNetworkException ||
+            it is CarHotspotStaysOnException ||
+            it is FirstTcpTimeoutException ||
+            it is WirelessPhoneNotOnNetworkException
+    } ?: error
+    return when {
+        unwrap is com.shilapi.xcertplay.network.ExistingWifiCredentialsMissingException ->
+            CarPlayFailureReason.EXISTING_WIFI_CREDENTIALS_MISSING
+        unwrap is ExistingWifiPhoneNotOnNetworkException ->
+            CarPlayFailureReason.EXISTING_WIFI_PHONE_NOT_ON_NETWORK
+        unwrap is CarHotspotStaysOnException -> CarPlayFailureReason.CAR_HOTSPOT_STAYS_ON
+        unwrap is FirstTcpTimeoutException -> CarPlayFailureReason.FIRST_TCP_TIMEOUT
+        unwrap is WirelessPhoneNotOnNetworkException -> CarPlayFailureReason.WIRELESS_PHONE_NOT_ON_NETWORK
+        reportsLockdownError(error, "InvalidHostID") -> CarPlayFailureReason.HOST_ID_REJECTED
+        else -> CarPlayFailureReason.BRING_UP_FAILED
+    }
 }
 
 /**
@@ -413,6 +448,8 @@ class CarPlayController(
      * whose neighbour table to read. Null whenever no hotspot of this run is up.
      */
     @Volatile private var wirelessHotspotInterface: String? = null
+    @Volatile private var wirelessHotspotGateway: String? = null
+    @Volatile private var wirelessHotspotBackend: WirelessHotspotBackend? = null
     @Volatile private var vpnService: CarPlayVpnService? = null
     @Volatile private var vpnBound = false
     private val wirelessHandoffRequested = AtomicBoolean(false)
@@ -1162,6 +1199,8 @@ class CarPlayController(
                 return
             }
             wirelessHotspotInterface = hotspotInfo.interfaceName
+            wirelessHotspotGateway = hotspotInfo.defaultGateway
+            wirelessHotspotBackend = hotspotInfo.backend
             val startedHotspot = hotspot
             wirelessConnectionProof.begin(generation) {
                 if (!isStaleWirelessRun(generation)) startedHotspot?.onCarPlayConfirmed()
@@ -2364,6 +2403,7 @@ class CarPlayController(
             if (hotspot === manager) hotspot = null
             closeBestEffort(hotspotMode.name) { manager.close() }
             if (isStaleWirelessRun(generation)) throw failure
+            if (failure is com.shilapi.xcertplay.network.ExistingWifiCredentialsMissingException) throw failure
             throw IOException(
                 "Could not establish ${hotspotMode.name} hotspot: " +
                     (failure.message ?: failure.javaClass.simpleName),
@@ -2447,6 +2487,8 @@ class CarPlayController(
         wirelessAlternateAddress = null
         wirelessAddressRecovery = null
         wirelessHotspotInterface = null
+        wirelessHotspotGateway = null
+        wirelessHotspotBackend = null
         media.setIapTunnelHandler(null)
         val activeTunnel = wirelessTunnelChannel
         wirelessTunnelChannel = null
@@ -2559,15 +2601,24 @@ class CarPlayController(
                     // change the next attempt in a way that cannot help, and would spend the family
                     // budget learning the same thing again.
                     closeWirelessStack()
-                    fail(
+                    val isExistingWifi = wirelessHotspotBackend == WirelessHotspotBackend.EXISTING_WIFI
+                    val ex = if (isExistingWifi) {
+                        ExistingWifiPhoneNotOnNetworkException(
+                            ssid,
+                            "no device joined Wi-Fi network ${ssid ?: "unknown"} within " +
+                                "${WirelessStartupPolicy.FIRST_TCP_MILLIS} ms of CarPlay StartSession: " +
+                                "check whether the Wi-Fi password in DiPlay settings is correct",
+                        )
+                    } else {
                         WirelessPhoneNotOnNetworkException(
                             "no device joined ${ssid ?: "the access point"} " +
                                 "(${interfaceName ?: "unknown interface"}) within " +
                                 "${WirelessStartupPolicy.FIRST_TCP_MILLIS} ms of CarPlay StartSession: " +
                                 "no IPv4 peer was ever resolved on it, so the phone either did not " +
                                 "join the network or never got an address from it",
-                        ),
-                    )
+                        )
+                    }
+                    fail(ex)
                     return@Thread
                 }
                 flipWirelessAddressFamily()
@@ -2597,8 +2648,12 @@ class CarPlayController(
     private fun ipv4PeersOnAccessPoint(): Set<String>? {
         if (wirelessPublishedAddress !is Inet4Address) return null
         val interfaceName = wirelessHotspotInterface ?: return null
-        val peers = arpPeersOn(interfaceName) ?: return null
-        debugLog("wireless first TCP timeout: iface=$interfaceName ipv4Peers=${peers.size}")
+        val gateway = wirelessHotspotGateway
+        val peers = arpPeersOn(interfaceName, gateway) ?: return null
+        debugLog(
+            "wireless first TCP timeout: iface=$interfaceName ipv4Peers=${peers.size} " +
+                "gatewayExcluded=${gateway ?: "none"}",
+        )
         return peers
     }
 

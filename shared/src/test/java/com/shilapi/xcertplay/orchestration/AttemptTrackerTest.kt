@@ -248,6 +248,7 @@ class AttemptTrackerTest {
                 "IPHONE_USB_PERMISSION_TIMEOUT", "CONTROL_CHANNEL_CLOSED", "WIRELESS_CONTROL_CHANNEL_CLOSED",
                 "TRANSPORT_ATTACH_FAILED", "BRING_UP_FAILED", "HOST_ID_REJECTED", "CAR_HOTSPOT_STAYS_ON",
                 "FIRST_TCP_TIMEOUT", "WIRELESS_PHONE_NOT_ON_NETWORK",
+                "EXISTING_WIFI_CREDENTIALS_MISSING", "EXISTING_WIFI_PHONE_NOT_ON_NETWORK",
             ),
             CarPlayFailureReason.entries.map { it.name },
         )
