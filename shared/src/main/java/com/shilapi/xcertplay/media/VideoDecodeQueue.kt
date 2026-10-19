@@ -57,11 +57,13 @@ internal class VideoDecodeQueue(
         queuedBytes = 0L
     }
 
-    @Synchronized fun poll(timeoutMillis: Long): VideoJob? {
+    fun poll(timeoutMillis: Long): VideoJob? {
         val job = jobs.poll(timeoutMillis, TimeUnit.MILLISECONDS) ?: return null
-        if (job is VideoJob.Frame) {
-            queuedFrames = maxOf(0, queuedFrames - 1)
-            queuedBytes = maxOf(0L, queuedBytes - job.nalus.size)
+        synchronized(this) {
+            if (job is VideoJob.Frame) {
+                queuedFrames = maxOf(0, queuedFrames - 1)
+                queuedBytes = maxOf(0L, queuedBytes - job.nalus.size)
+            }
         }
         return job
     }

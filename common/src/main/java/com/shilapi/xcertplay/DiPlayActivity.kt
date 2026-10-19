@@ -2001,6 +2001,7 @@ class DiPlayActivity : ComponentActivity() {
         val ssid = runCatching { wifi.connectionInfo?.ssid }.getOrNull()?.removeSurrounding("\"")
         val result = ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
         cachedJoinedWifiName = result
+        lastNetworkCheckElapsed = now
         return result
     }
 

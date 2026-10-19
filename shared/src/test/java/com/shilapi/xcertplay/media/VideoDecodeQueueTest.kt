@@ -96,5 +96,20 @@ class VideoDecodeQueueTest {
         assertEquals(20, polled.nalus.size)
         assertNull(queue.poll(0))
     }
+
+    @Test fun pollDoesNotHoldLockDuringBlockingWait() {
+        val queue = VideoDecodeQueue(maxFrames = 10, maxBytes = 1000)
+        val thread = Thread {
+            val job = queue.poll(500)
+            assertNotNull(job)
+        }
+        thread.start()
+        Thread.sleep(50)
+        val offerStart = System.currentTimeMillis()
+        queue.offer(VideoJob.Frame(ByteArray(10)))
+        val offerDuration = System.currentTimeMillis() - offerStart
+        assertTrue("offer must not be blocked by poll: duration=$offerDuration", offerDuration < 200)
+        thread.join(1000)
+    }
 }
 

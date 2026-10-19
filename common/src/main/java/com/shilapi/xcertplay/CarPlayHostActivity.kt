@@ -2958,10 +2958,6 @@ class CarPlayHostActivity : ComponentActivity() {
         val logFile = File(File(filesDir, "logs"), "diplay.log")
         val activeLog = SessionLogFile(logFile)
         sessionLog = activeLog
-        // Everything the transport, media and network code logged went to logcat and nowhere else.
-        // The page is the only thing that owns a session file, so it lends one to those threads. The
-        // write goes through the same bounded queue, so a transport thread still never waits on a disk.
-        DiagSink.attach { line -> enqueueSessionLine(activeLog, line) }
         // The pairing half of the chain ran on the connection page, whose session is gone by now and whose lines
         // this log's reset just discarded. They are the ones the adapter's run is judged by, so the adapter is
         // asked for whatever it logged before a session existed and they are carried over.
@@ -2983,6 +2979,10 @@ class CarPlayHostActivity : ComponentActivity() {
         } catch (_: RejectedExecutionException) {
             // onDestroy has already shut the writer down.
         }
+        // Everything the transport, media and network code logged went to logcat and nowhere else.
+        // The page is the only thing that owns a session file, so it lends one to those threads. The
+        // write goes through the same bounded queue, so a transport thread still never waits on a disk.
+        DiagSink.attach { line -> enqueueSessionLine(activeLog, line) }
     }
 
     private fun refreshLogView(nowMillis: Long) {
