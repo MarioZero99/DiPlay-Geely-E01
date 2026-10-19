@@ -986,6 +986,11 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun displayCards(columns: CardColumns) {
+        displayPerformanceCard(columns)
+        audioRoutingCard(columns)
+    }
+
+    private fun displayPerformanceCard(columns: CardColumns) {
         columns.card(R.string.display_and_performance, R.drawable.ic_dp_display) { card ->
             carPlaySizeControl(card)
             choice(card, getString(R.string.resolution), listOf(getString(R.string.resolution_native), getString(R.string.s_80_lighter_load), getString(R.string.s_60_lightest_load)), listOf(10, 8, 6).indexOf(AirPlayPersistence.loadDisplayScaleTenths(this)).coerceAtLeast(0)) { AirPlayPersistence.saveDisplayScaleTenths(this, listOf(10, 8, 6)[it]) }
@@ -1025,45 +1030,6 @@ class DiPlayActivity : ComponentActivity() {
                 widthPhysicalMm = lengths[it]
                 AirPlayPersistence.saveWidthPhysicalMm(this, widthPhysicalMm)
             }
-        }
-        // The stream types sit in a row of equal shares now, not in cells measured against the
-        // screen, so this card no longer has to claim the whole width to keep them inside itself.
-        columns.card(R.string.audio_routing) { card ->
-            val channelTitle = label(getString(R.string.navigation_stream_type), 18, TEXT, true)
-            val channelHint = label(getString(R.string.tap_a_number_to_test_14_driver_speaker_on_byd), 14, MUTED)
-            val grid = channelSelector()
-            val saveButton = button(getString(R.string.save), true) {
-                AirPlayPersistence.saveNavigationStreamType(this, navigationStreamType)
-                toast(getString(R.string.audio_saved_value, navigationStreamType))
-            }
-            fun applyChannelEnabled(enabled: Boolean) {
-                val alpha = if (enabled) 1f else 0.4f
-                listOf(channelTitle, channelHint, saveButton).forEach {
-                    it.isEnabled = enabled
-                    it.alpha = alpha
-                }
-                // Through the buttons themselves, not the container: the cells are now grandchildren
-                // of a column of rows, and walking `grid.childCount` would have dimmed three rows
-                // and left all 21 buttons live inside them.
-                channelButtons.forEach {
-                    it.isEnabled = enabled
-                    it.alpha = alpha
-                }
-            }
-            val aaosSupported = resources.getBoolean(R.bool.config_advanced_audio_channel_mapping)
-            if (aaosSupported) {
-                toggle(card, getString(R.string.advanced_audio_channel_mapping),
-                    getString(R.string.use_usage_content_type_routing_instead_of_stream_type),
-                    AirPlayPersistence.loadAdvancedAudioChannelMapping(this)) {
-                    AirPlayPersistence.saveAdvancedAudioChannelMapping(this, it)
-                    applyChannelEnabled(!it)
-                }
-            }
-            card.addView(channelTitle)
-            card.addView(channelHint)
-            card.addView(grid)
-            card.addView(saveButton, matchButton(12, 56))
-            if (aaosSupported) applyChannelEnabled(!AirPlayPersistence.loadAdvancedAudioChannelMapping(this))
         }
         // The cluster map keeps a gate of its own: it draws AirPlay's alt-screen stream on a public
         // presentation display, so what it needs is that display, not the car's HUD services. It used
@@ -1145,6 +1111,48 @@ class DiPlayActivity : ComponentActivity() {
                     reconnectForClusterMap()
                 }, matchButton(10, 56))
             }
+        }
+    }
+
+    private fun audioRoutingCard(columns: CardColumns) {
+        // The stream types sit in a row of equal shares now, not in cells measured against the
+        // screen, so this card no longer has to claim the whole width to keep them inside itself.
+        columns.card(R.string.audio_routing) { card ->
+            val channelTitle = label(getString(R.string.navigation_stream_type), 18, TEXT, true)
+            val channelHint = label(getString(R.string.tap_a_number_to_test_14_driver_speaker_on_byd), 14, MUTED)
+            val grid = channelSelector()
+            val saveButton = button(getString(R.string.save), true) {
+                AirPlayPersistence.saveNavigationStreamType(this, navigationStreamType)
+                toast(getString(R.string.audio_saved_value, navigationStreamType))
+            }
+            fun applyChannelEnabled(enabled: Boolean) {
+                val alpha = if (enabled) 1f else 0.4f
+                listOf(channelTitle, channelHint, saveButton).forEach {
+                    it.isEnabled = enabled
+                    it.alpha = alpha
+                }
+                // Through the buttons themselves, not the container: the cells are now grandchildren
+                // of a column of rows, and walking `grid.childCount` would have dimmed three rows
+                // and left all 21 buttons live inside them.
+                channelButtons.forEach {
+                    it.isEnabled = enabled
+                    it.alpha = alpha
+                }
+            }
+            val aaosSupported = resources.getBoolean(R.bool.config_advanced_audio_channel_mapping)
+            if (aaosSupported) {
+                toggle(card, getString(R.string.advanced_audio_channel_mapping),
+                    getString(R.string.use_usage_content_type_routing_instead_of_stream_type),
+                    AirPlayPersistence.loadAdvancedAudioChannelMapping(this)) {
+                    AirPlayPersistence.saveAdvancedAudioChannelMapping(this, it)
+                    applyChannelEnabled(!it)
+                }
+            }
+            card.addView(channelTitle)
+            card.addView(channelHint)
+            card.addView(grid)
+            card.addView(saveButton, matchButton(12, 56))
+            if (aaosSupported) applyChannelEnabled(!AirPlayPersistence.loadAdvancedAudioChannelMapping(this))
         }
     }
 
