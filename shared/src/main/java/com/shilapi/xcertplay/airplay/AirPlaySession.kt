@@ -171,7 +171,10 @@ class AirPlaySession(
             "Content-Type: $PLIST_CONTENT_TYPE\r\n" +
             "Content-Length: ${body.size}\r\n" +
             "CSeq: $eventCseq\r\n\r\n"
-        trace("airplay event tx headers=$head bodyHex=${body.toHex()}")
+        // No bodyHex here even though trace() is a no-op in production: building the hex costs one
+        // Formatter per byte on every touch, and DiagnosticRedactor drops the whole line anyway. The
+        // headers are kept — small, and CSeq alone is enough to correlate a stuck exchange.
+        trace("airplay event tx cseq=$eventCseq bytes=${body.size} type=${command["type"]}")
         return try {
             val bytes = cipher.encrypt(head.toByteArray(Charsets.US_ASCII) + body)
             val output = socket.getOutputStream()
@@ -739,11 +742,9 @@ class AirPlaySession(
                         "airplay event rx ${message.method} ${message.path} cseq=${message.headers["cseq"] ?: "-"} bodyBytes=${message.body.size}",
                     )
                     val response = RtspMessage.buildResponse(message, RtspMessage.Response(status = 200))
-                    trace(
-                        "airplay event rx headers=${message.headers} " +
-                            "bodyHex=${message.body.toHex()}",
-                    )
-                    trace("airplay event tx wireHex=${response.toHex()}")
+                    // Same reasoning as the tx trace above: the hex costs one Formatter per byte and
+                    // never survives the redactor. The debugLog above already carries what matters.
+                    trace("airplay event rx ${message.method} bytes=${message.body.size}")
                     synchronized(eventWriteLock) {
                         output.write(cipher.encrypt(response))
                         output.flush()
