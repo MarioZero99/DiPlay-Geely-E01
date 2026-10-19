@@ -1,6 +1,8 @@
 package com.shilapi.xcertplay.media
 
 import com.shilapi.xcertplay.DiagLog
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /** Five-second video counters that separate network/iPhone gaps from decoder throughput. */
 internal class VideoStats(
@@ -8,33 +10,35 @@ internal class VideoStats(
     private val nanoTime: () -> Long = System::nanoTime,
 ) {
     private var windowStartNs = nanoTime()
-    private var lastArrivalNs = 0L
-    private var received = 0
-    private var rendered = 0
-    private var recoveries = 0
-    private var bytes = 0L
-    private var maxArrivalGapNs = 0L
-    private var touchSamples = 0
-    private var touchLatencySumNs = 0L
-    private var maxTouchLatencyNs = 0L
+    private val lastArrivalNs = AtomicLong(0L)
+    private val received = AtomicInteger(0)
+    private val rendered = AtomicInteger(0)
+    private val recoveries = AtomicInteger(0)
+    private val bytes = AtomicLong(0L)
+    private val maxArrivalGapNs = AtomicLong(0L)
+    private val touchSamples = AtomicInteger(0)
+    private val touchLatencySumNs = AtomicLong(0L)
+    private val maxTouchLatencyNs = AtomicLong(0L)
     private var renderSamples = 0
     private var renderLatencySumNs = 0L
     private var maxRenderLatencyNs = 0L
 
-    @Synchronized fun onReceived(size: Int) {
+    fun onReceived(size: Int) {
         val now = nanoTime()
-        val gap = now - lastArrivalNs
-        if (lastArrivalNs != 0L && gap < IDLE_GAP_NS) maxArrivalGapNs = maxOf(maxArrivalGapNs, gap)
-        lastArrivalNs = now
+        val prevArrival = lastArrivalNs.getAndSet(now)
+        val gap = now - prevArrival
+        if (prevArrival != 0L && gap < IDLE_GAP_NS) {
+            maxArrivalGapNs.updateAndGet { current -> maxOf(current, gap) }
+        }
         // Touches only change the main screen; a second stream must not consume their samples.
         val touchLatency = if (label.isEmpty()) TouchLatencyProbe.onFrame(now) else -1L
         if (touchLatency >= 0) {
-            touchSamples++
-            touchLatencySumNs += touchLatency
-            maxTouchLatencyNs = maxOf(maxTouchLatencyNs, touchLatency)
+            touchSamples.incrementAndGet()
+            touchLatencySumNs.addAndGet(touchLatency)
+            maxTouchLatencyNs.updateAndGet { current -> maxOf(current, touchLatency) }
         }
-        received++
-        bytes += size
+        received.incrementAndGet()
+        bytes.addAndGet(size.toLong())
     }
 
     /**
@@ -42,8 +46,8 @@ internal class VideoStats(
      * surface — not when the pixel lights up. It is still one composite plus one vsync short, which
      * is why it compares versions rather than claiming an absolute number.
      */
-    @Synchronized fun onRendered(nowNs: Long) {
-        rendered++
+    fun onRendered(nowNs: Long) {
+        rendered.incrementAndGet()
         // Only the main screen carries touches; a second stream must not consume their samples.
         if (label.isNotEmpty()) return
         val latency = TouchLatencyProbe.onRendered(nowNs)
@@ -54,33 +58,41 @@ internal class VideoStats(
         }
     }
 
-    @Synchronized fun onRecovery() { recoveries++ }
+    fun onRecovery() { recoveries.incrementAndGet() }
 
     @Synchronized fun logIfDue(): String? {
         val now = nanoTime()
         val elapsedNs = now - windowStartNs
         if (elapsedNs < WINDOW_NS) return null
         val seconds = elapsedNs / 1e9
-        if (received == 0 && touchSamples == 0) { windowStartNs = now; return null }
-        val touchAvgMs = if (touchSamples == 0) -1 else touchLatencySumNs / touchSamples / 1_000_000
+        val rcv = received.getAndSet(0)
+        val tSamples = touchSamples.getAndSet(0)
+        if (rcv == 0 && tSamples == 0) { windowStartNs = now; return null }
+        val rnd = rendered.getAndSet(0)
+        val rec = recoveries.getAndSet(0)
+        val b = bytes.getAndSet(0L)
+        val maxGap = maxArrivalGapNs.getAndSet(0L)
+        val tLatencySum = touchLatencySumNs.getAndSet(0L)
+        val maxTouch = maxTouchLatencyNs.getAndSet(0L)
+
+        val touchAvgMs = if (tSamples == 0) -1 else tLatencySum / tSamples / 1_000_000
         val renderAvgMs = if (renderSamples == 0) -1 else renderLatencySumNs / renderSamples / 1_000_000
         val line = ("video stats$label rx=%.1ffps shown=%.1ffps maxGap=%dms kbps=%d recoveries=%d " +
             "touch2frame avg=%dms max=%dms n=%d touch2render avg=%dms max=%dms n=%d " +
             "touchSendMax=%dms").format(
-            received / seconds, rendered / seconds, maxArrivalGapNs / 1_000_000,
-            (bytes * 8 / 1000 / seconds).toLong(), recoveries,
-            touchAvgMs, maxTouchLatencyNs / 1_000_000, touchSamples,
+            rcv / seconds, rnd / seconds, maxGap / 1_000_000,
+            (b * 8 / 1000 / seconds).toLong(), rec,
+            touchAvgMs, maxTouch / 1_000_000, tSamples,
             renderAvgMs, maxRenderLatencyNs / 1_000_000, renderSamples,
             TouchLatencyProbe.maxSendNs / 1_000_000,
         ) + (if (label.isEmpty()) TouchLatencyProbe.queueSummary() else "")
         TouchLatencyProbe.maxSendNs = 0
         DiagLog.i(TAG, line)
         windowStartNs = now
-        received = 0; rendered = 0; recoveries = 0; bytes = 0; maxArrivalGapNs = 0
-        touchSamples = 0; touchLatencySumNs = 0; maxTouchLatencyNs = 0
         renderSamples = 0; renderLatencySumNs = 0; maxRenderLatencyNs = 0
         return line
     }
+
 
     private companion object {
         const val TAG = "DiPlay-VideoStats"

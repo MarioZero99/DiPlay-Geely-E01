@@ -241,6 +241,7 @@ private class VideoDecoder(
     private val decodeSeries = if (streamType == 110) "video/decode" else "video/decode[$streamType]"
     /** Kept from the constructor argument, which is not a property and cannot be read from a method. */
     private val streamLabel = if (streamType == 110) "" else "[$streamType]"
+    private val videoBufferInfo = MediaCodec.BufferInfo()
     private val thread = Thread(::run, "carplay-video").apply { isDaemon = true; start() }
 
     fun configure(codec: VideoCodec, codecData: ByteArray) {
@@ -490,7 +491,7 @@ private class VideoDecoder(
     private fun videoMarkName(suffix: String): String = "video/$suffix$streamLabel"
 
     private fun drainOutput(codec: MediaCodec) {
-        val info = MediaCodec.BufferInfo()
+        val info = videoBufferInfo
         while (running) {
             val index = codec.dequeueOutputBuffer(info, 0)
             when {
@@ -620,6 +621,7 @@ private class AudioRenderer(
     private var rebufferCount = 0
     private val gainLock = Any()
     @Volatile private var mediaGain = 1f
+    private val audioBufferInfo = MediaCodec.BufferInfo()
     private val thread = Thread(::run, "carplay-audio").apply { isDaemon = true }
 
     /** Music tracks only. The gain is kept if the [AudioTrack] does not exist yet. */
@@ -982,7 +984,7 @@ private class AudioRenderer(
     }
 
     private fun drainCodec(codec: MediaCodec) {
-        val info = MediaCodec.BufferInfo()
+        val info = audioBufferInfo
         while (running) {
             val index = codec.dequeueOutputBuffer(info, 0)
             when {

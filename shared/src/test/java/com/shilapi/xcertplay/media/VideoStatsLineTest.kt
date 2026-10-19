@@ -54,4 +54,24 @@ class VideoStatsLineTest {
         // 如果它被吃掉，这里会得到 -1。
         assertEquals(200_000_000L, TouchLatencyProbe.onRendered(now))
     }
+
+    @Test fun concurrentReceivedAndRenderedDoNotDeadlockOrCorrupt() {
+        var clock = 10_000_000_000L
+        val stats = VideoStats(nanoTime = { clock })
+        val threads = (1..4).map {
+            Thread {
+                repeat(100) {
+                    stats.onReceived(100)
+                    stats.onRendered(clock)
+                }
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        clock += 6_000_000_000L
+        val line = stats.logIfDue()
+        assertNotNull(line)
+        assertTrue(line!!.contains("rx="))
+    }
 }
+
