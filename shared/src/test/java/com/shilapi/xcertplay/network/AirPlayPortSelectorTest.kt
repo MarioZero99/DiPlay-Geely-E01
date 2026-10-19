@@ -15,6 +15,7 @@ class AirPlayPortSelectorTest {
         var fallback: Pair<Int, Int>? = null
         AirPlayPortSelector.bind(loopback, preferred, emptyList()) { busy, bound -> fallback = busy to bound }.use {
             assertEquals(preferred, it.localPort)
+            assertTrue("ServerSocket must have reuseAddress enabled", it.reuseAddress)
         }
         assertNull(fallback)
     }

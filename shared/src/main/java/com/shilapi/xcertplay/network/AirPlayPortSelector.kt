@@ -73,6 +73,7 @@ object AirPlayPortSelector {
     private fun bindPort(address: InetAddress, port: Int): ServerSocket {
         val server = ServerSocket()
         return try {
+            server.reuseAddress = true
             server.bind(InetSocketAddress(address, port))
             server
         } catch (error: Throwable) {
