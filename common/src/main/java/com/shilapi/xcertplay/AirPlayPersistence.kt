@@ -399,19 +399,24 @@ object AirPlayPersistence {
      * the network the driver typed a password for last.
      */
     fun saveExistingWifiNetwork(context: Context, ssid: String, passphrase: String) {
+        val cleanSsid = ssid.trim()
+        val cleanPassphrase = passphrase.trim()
+        require(cleanPassphrase.isEmpty() || cleanPassphrase.length in 8..63) {
+            "Wi-Fi password must be 8–63 characters"
+        }
         val stored = loadExistingWifiNetworks(context)
-        val held = stored.indexOfFirst { sameWifiNetworkName(it.ssid, ssid) }
+        val held = stored.indexOfFirst { sameWifiNetworkName(it.ssid, cleanSsid) }
         val updated = if (held >= 0) {
             stored.toMutableList().apply {
-                this[held] = ExistingWifiDriverCredentials(ssid, passphrase)
+                this[held] = ExistingWifiDriverCredentials(cleanSsid, cleanPassphrase)
             }
         } else {
-            stored + ExistingWifiDriverCredentials(ssid, passphrase)
+            stored + ExistingWifiDriverCredentials(cleanSsid, cleanPassphrase)
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_EXISTING_WIFI_NETWORKS, encodeExistingWifiNetworks(updated))
-            .putString(KEY_EXISTING_WIFI_SSID, ssid)
-            .putString(KEY_EXISTING_WIFI_PASSPHRASE, passphrase)
+            .putString(KEY_EXISTING_WIFI_SSID, cleanSsid)
+            .putString(KEY_EXISTING_WIFI_PASSPHRASE, cleanPassphrase)
             .apply()
     }
 

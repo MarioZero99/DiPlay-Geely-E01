@@ -1986,7 +1986,7 @@ class DiPlayActivity : ComponentActivity() {
      * the router's, or the other phone's, and it is not the driver's to choose.
      */
     private fun existingWifiError(ssid: String, password: String): String? =
-        com.shilapi.xcertplay.orchestration.ManualHotspotValidation.error(ssid, password)?.let { problem ->
+        com.shilapi.xcertplay.orchestration.ManualHotspotValidation.error(ssid.trim(), password.trim())?.let { problem ->
             getString(
                 when (problem) {
                     com.shilapi.xcertplay.orchestration.ManualHotspotValidation.Error.EMPTY_NAME ->

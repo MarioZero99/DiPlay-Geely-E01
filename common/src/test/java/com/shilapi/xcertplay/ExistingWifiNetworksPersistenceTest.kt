@@ -63,6 +63,19 @@ class ExistingWifiNetworksPersistenceTest {
         )
     }
 
+    @Test
+    fun saveExistingWifiNetworkTrimsLeadingAndTrailingWhitespace() {
+        AirPlayPersistence.saveExistingWifiNetwork(context, "  Home Wi-Fi  ", "  pass1234  ")
+        val stored = AirPlayPersistence.loadExistingWifiNetworks(context)
+        assertEquals("Home Wi-Fi", stored.first().ssid)
+        assertEquals("pass1234", stored.first().passphrase)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun saveExistingWifiNetworkRejectsPassphraseShorterThanEightCharacters() {
+        AirPlayPersistence.saveExistingWifiNetwork(context, "Home Wi-Fi", "1234567")
+    }
+
     /**
      * The single pair a build from before the list wrote, which is where an existing driver's saved
      * password is sitting on the head unit the list arrives on.
