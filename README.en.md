@@ -30,7 +30,7 @@ The cockpit is laid out for the 1920×720 panel: a Slim Dock on the left, the co
 
 - **Wired CarPlay** over a USB data cable; it has shown a picture on the reference car.
 - **Wireless · car hotspot**: the head unit makes the hotspot, the iPhone joins it, paired over Bluetooth.
-- **Wireless · same Wi-Fi (experimental, local package only)**: the head unit joins an existing network (phone hotspot, router, iPhone Personal Hotspot) and the iPhone joins the same one. Credentials are read from the head unit; a password can be entered by hand when the head unit will not hand it over. It has not carried a session on the car yet, and the official package does not offer it.
+- **Wireless · same Wi-Fi (withdrawn for now)**: this route is still being worked on and is not offered in this version. A head unit that had it selected comes up on the car hotspot after the update.
 - **Steering wheel** previous/next works. There is no play/pause key — that position is the head unit's screen-mirroring button.
 - **Three-finger quick bar** over the CarPlay picture: disconnect, navigation audio stream, day/night, exit.
 - **Diagnostic report**: saved to a USB stick first, then Downloads/private storage. The official package never uploads on its own.
@@ -66,13 +66,13 @@ Without ADB, copy the APK to a USB stick and install it from the head unit's fil
 
 ### Which package
 
-Use `DiPlay-Legacy-Geely-V043.apk` for normal installation. The `-local` build in the repository is an internal test package and may be unstable; it is not meant for daily use.
+Use `DiPlay-Legacy-Geely-V043.apk` for normal installation.
 
 ## After it opens
 
 **Car hotspot.** Turn on Bluetooth and Wi-Fi on the phone, pair it with the car, keep the car hotspot on, then tap **Connect phone**. DiPlay reads the saved hotspot name and password; 5 GHz is used when the radio allows it.
 
-**Same Wi-Fi (experimental, local package only).** Join the head unit and the iPhone to the same network in the head unit's own Wi-Fi settings, pick **Same Wi-Fi network**, enter the password only if the head unit will not hand it over, then connect. The car hotspot is switched off for this mode. The official package offers the car hotspot alone; a selection made in a local package reads back as the car hotspot there.
+**Same Wi-Fi (withdrawn for now).** Not offered in this version; it is still being worked on. Use the car hotspot for wireless until it is back.
 
 **Wired.** Tap **Connect with USB**, use a data cable in a data port. On the reference car an iPhone 17 Pro Max draws more current than the port supplies and reconnects; a powered hub avoids that.
 
@@ -89,7 +89,7 @@ Use `DiPlay-Legacy-Geely-V043.apk` for normal installation. The `-local` build i
 | Steering wheel previous/next | ✅ Verified on the reference car |
 | Wired USB picture | ✅ Shown on the reference car; power-related reconnects |
 | Built-in Bluetooth wireless | 🟡 One pass on the car on 2026-10-14; latest cockpit changes not re-tested |
-| Same Wi-Fi mode | 🟡 Experimental, local package only; not yet working on the car |
+| Same Wi-Fi mode | ❌ Withdrawn for now; still being worked on |
 | Cockpit UI / drawer / quick bar | 🟡 AVD 1920×720 screenshots; no long drive on the car |
 | USB diagnostic export | 🟡 Code and tests; real stick on the car still to verify |
 | Calls / Bluetooth music after wireless takeover | ❌ Not tested on the car |
@@ -97,7 +97,7 @@ Use `DiPlay-Legacy-Geely-V043.apk` for normal installation. The `-local` build i
 
 Reference car: software **5068** (factory batch 5066), build `SWFS11G0706H5181.00600`. Check **Settings → About the smart platform → Version**. A different version can still be installed, but the risk may differ.
 
-**Memory is the binding constraint:** free memory is often only **26–33 MB**. The cockpit is kept light and updated in place rather than rebuilt every second. The build also runs on **Android 4.4** head units; the car used is 5.1. The official package offers the car hotspot only; the same-Wi-Fi route is experimental and lives in the local package.
+**Memory is the binding constraint:** free memory is often only **26–33 MB**. The cockpit is kept light and updated in place rather than rebuilt every second. The build also runs on **Android 4.4** head units; the car used is 5.1. Wireless currently offers the car hotspot only; the same-Wi-Fi route is withdrawn for now.
 
 ## Origin
 
