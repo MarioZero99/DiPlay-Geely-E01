@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.airplay
 
 import android.util.Log
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
+import com.shilapi.xcertplay.media.TouchLatencyProbe
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import com.shilapi.xcertplay.transport.WiredLinkReport
 import java.io.BufferedInputStream
@@ -184,14 +185,18 @@ class AirPlaySession(
         }
     }
 
-    fun sendTouch(contacts: List<AirPlayContact>): Boolean {
+    /**
+     * [originNs] is when the finger went down (`eventTime`), or 0 when the caller does not know.
+     * It is the sample's origin; the send's own duration is recorded from [sendStartNs] either way.
+     */
+    fun sendTouch(contacts: List<AirPlayContact>, originNs: Long = 0L): Boolean {
         val scaled = contacts.map {
             it.copy(x = it.x * config.main.widthPixels, y = it.y * config.main.heightPixels)
         }
         val report = AirPlayHid.touchReport(scaled)
         val sendStartNs = System.nanoTime()
         val sent = sendHidReport(AirPlayHid.TOUCH_HID_UID, report)
-        if (sent) com.shilapi.xcertplay.media.TouchLatencyProbe.onTouchSent(sendStartNs, System.nanoTime() - sendStartNs)
+        if (sent) TouchLatencyProbe.onTouchSent(if (originNs != 0L) originNs else sendStartNs, System.nanoTime() - sendStartNs)
         if (sent && firstTouchSendLogged.compareAndSet(false, true)) {
             val first = scaled.firstOrNull()
             Log.i(

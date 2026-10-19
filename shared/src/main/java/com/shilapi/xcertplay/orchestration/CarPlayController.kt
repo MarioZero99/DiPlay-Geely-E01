@@ -23,6 +23,8 @@ import com.shilapi.xcertplay.airplay.AirPlaySession
 import com.shilapi.xcertplay.airplay.AirPlaySessionListener
 import com.shilapi.xcertplay.airplay.PairingStore
 import com.shilapi.xcertplay.iap2.session.Iap2Session
+import com.shilapi.xcertplay.media.TouchDispatchQueue
+import com.shilapi.xcertplay.media.TouchLatencyProbe
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationException
 import com.shilapi.xcertplay.mfi.MfiAuthenticationClient
@@ -363,6 +365,35 @@ class CarPlayController(
     @Volatile private var activeSession: AirPlaySession? = null
     private val playbackStatus = com.shilapi.xcertplay.media.CarPlayPlaybackStatus()
 
+    private class PendingTouch(
+        val session: AirPlaySession,
+        val contacts: List<AirPlayContact>,
+        val originNs: Long,
+    )
+
+    /**
+     * The touch uplink's only gate: at most one unsent MOVE per session, everything else in order.
+     *
+     * Runs on [touchExecutor], the same single thread the old path used, so ordering is unchanged —
+     * what changes is that a drag no longer queues one task per MotionEvent behind a busy sender.
+     */
+    private val touchDispatch = TouchDispatchQueue<PendingTouch>(
+        touchExecutor,
+        onCoalesced = TouchLatencyProbe::onMoveCoalesced,
+    ) { next, waitNs ->
+        // A packet queued for a session that has since ended must not reach the new one.
+        if (!closed && activeSession === next.session) {
+            TouchLatencyProbe.onQueueDelay(waitNs)
+            // Same number as touchQueue, but in the on-device report next to video/decode, where it
+            // can be read without pulling a log. 40ms is one send; above that is backlog.
+            PerfTrace.record("touch/queue", waitNs / 1_000_000, warnAboveMs = 40L)
+            next.session.sendTouch(next.contacts, next.originNs)
+        } else {
+            // Worth counting: a dropped press is a gesture that dies with no other symptom.
+            TouchLatencyProbe.onDropped()
+        }
+    }
+
     /** Told when the iPhone starts or stops playing media; may run on any thread. */
     @Volatile var playbackListener: ((Boolean) -> Unit)? = null
     @Volatile private var hotspot: WirelessHotspotManager? = null
@@ -437,6 +468,10 @@ class CarPlayController(
 
     private val sessionListener = object : AirPlaySessionListener {
         override fun onSessionActive(session: AirPlaySession) {
+            // Clear *before* publishing the session. This runs on the session thread while touches
+            // arrive on the UI thread; assigning first would let a DOWN slip in between and be wiped
+            // by the clear, and a drag without its DOWN is ignored by the phone — the gesture dies.
+            touchDispatch.clear()
             activeSession = session
             debugLog(
                 "AirPlay session active controller=${session.controllerId ?: "unknown"} " +
@@ -447,7 +482,10 @@ class CarPlayController(
 
         override fun onSessionEnded(session: AirPlaySession) {
             if (activeSession === session) {
+                // Null first, clear second — the reverse order would let the drain see a session
+                // that is already over and count a perfectly good packet as dropped.
                 activeSession = null
+                touchDispatch.clear()
                 synchronized(playbackStatus) { playbackStatus.clear() }?.let { playing -> playbackListener?.invoke(playing) }
             }
             debugLog("AirPlay session ended peer=${session.host}")
@@ -563,15 +601,30 @@ class CarPlayController(
         }
     }
 
-    fun sendTouch(contacts: List<AirPlayContact>): Boolean {
+    /**
+     * [move] marks the events a coalescing queue may drop — only `ACTION_MOVE`. [originNs] is the
+     * finger's own instant (`eventTime`), 0 when the caller has none.
+     */
+    fun sendTouch(
+        contacts: List<AirPlayContact>,
+        move: Boolean = false,
+        originNs: Long = 0L,
+    ): Boolean {
         if (closed) return false
         val session = activeSession ?: return false
-        return try {
-            touchExecutor.execute { session.sendTouch(contacts) }
-            true
-        } catch (_: Exception) {
-            false
+        // The finger's instant, minus the moment we got the event. This is the only place it can be
+        // measured: TouchLatencyProbe is internal to :shared, so :common cannot record it itself.
+        if (originNs != 0L) TouchLatencyProbe.onInputDelay(System.nanoTime() - originNs)
+        if (!config.coalesceTouchMoves) {
+            return try {
+                touchExecutor.execute { session.sendTouch(contacts, originNs) }
+                true
+            } catch (_: Exception) {
+                false
+            }
         }
+        // Copied because the caller reuses its list on the next event.
+        return touchDispatch.offer(PendingTouch(session, contacts.toList(), originNs), session, move)
     }
 
     /** Sends one CarPlay media-button press (an [com.shilapi.xcertplay.airplay.AirPlayHid] media index). */
@@ -607,6 +660,7 @@ class CarPlayController(
         availabilityPollGeneration.incrementAndGet()
         wirelessGeneration.incrementAndGet()
         permissionPollGeneration += 1
+        touchDispatch.clear()
         touchExecutor.shutdownNow()
         tunnelExecutor.shutdownNow()
         val service = vpnService

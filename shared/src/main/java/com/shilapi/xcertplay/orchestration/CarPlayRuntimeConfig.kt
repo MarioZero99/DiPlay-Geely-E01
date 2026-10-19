@@ -80,6 +80,15 @@ class CarPlayRuntimeConfig(
     val wirelessBluetoothDeviceAddress: String? = null,
     val locationReportingEnabled: Boolean = false,
     val wirelessBluetoothHop: WirelessBluetoothHop = WirelessBluetoothHop.CAR,
+    /**
+     * Keeps one unsent MOVE per session instead of one queued task per MotionEvent.
+     *
+     * On this head unit the single-thread sender falls behind a drag, and an unbounded queue turns
+     * "slightly behind" into "seconds behind". Dropping intermediate trajectory points is the only
+     * loss this link can afford; presses and releases are never dropped. Off restores the old
+     * one-task-per-event path verbatim.
+     */
+    val coalesceTouchMoves: Boolean = true,
 ) {
     init {
         require(iphoneDevices.all { it.vendorId == APPLE_VENDOR_ID }) {
