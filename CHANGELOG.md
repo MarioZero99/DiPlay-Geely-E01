@@ -14,6 +14,20 @@ alignment line, not the base line, is what says how current a release is.
 
 ---
 
+## 0.4.4-geely — 2026-10-19
+
+**Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
+
+**Same Wi-Fi is back and fully verified.** Joining an existing network (such as an Android phone hotspot or home Wi-Fi) is now fully working on Geely E01. Fixed a core ARP diagnostic flaw where the router gateway was mistaken for an attached iPhone, which previously masked missing or incorrect credentials under first-TCP timeouts.
+- **Fast failure for missing credentials:** If connected to a secured Wi-Fi without a password configured in DiPlay, the app now warns immediately rather than stalling for 30 seconds.
+- **Accurate failure guidance:** When an iPhone fails to join due to a wrong password or network mismatch, the screen clearly advises checking the password and stops futile retry loops.
+- **Input safety:** Wi-Fi passwords now automatically trim leading/trailing whitespace and enforce the standard 8–63 character length for WPA2 networks.
+
+**Lower touch latency and smoother dragging.** Replaced unthrottled touch dispatching with `TouchDispatchQueue`, co-developed for the constrained MT6735 platform:
+- Queued touch events dynamically merge high-frequency `MOVE` events while preserving exact finger timestamps, avoiding event backlog during rapid panning or scrolling.
+- Stripped redundant byte-by-byte hex conversions from AirPlay event hot paths, reducing GC pressure and UI hitching.
+- Added per-attempt `touch2render` latency metrics to help diagnose input lag on the car screen.
+
 ## 0.4.3-geely — 2026-10-19
 
 **Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
