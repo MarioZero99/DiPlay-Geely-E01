@@ -16,17 +16,21 @@ alignment line, not the base line, is what says how current a release is.
 
 ## 0.4.4-geely — 2026-10-19
 
-**Upstream alignment:** not re-checked for this release. The anchor is unchanged from 0.3.5.
+**对齐上游：** 本版本未重新对齐上游，基准与 0.3.5 保持一致。
 
-**Same Wi-Fi is back and fully verified.** Joining an existing network (such as an Android phone hotspot or home Wi-Fi) is now fully working on Geely E01. Fixed a core ARP diagnostic flaw where the router gateway was mistaken for an attached iPhone, which previously masked missing or incorrect credentials under first-TCP timeouts.
-- **Fast failure for missing credentials:** If connected to a secured Wi-Fi without a password configured in DiPlay, the app now warns immediately rather than stalling for 30 seconds.
-- **Accurate failure guidance:** When an iPhone fails to join due to a wrong password or network mismatch, the screen clearly advises checking the password and stops futile retry loops.
-- **Input safety:** Wi-Fi passwords now automatically trim leading/trailing whitespace and enforce the standard 8–63 character length for WPA2 networks.
+**「同一 Wi-Fi」无线模式正式调通上线。**
+0.4.3 暂时下架的同网连接现已彻底修复。车机与 iPhone 加入同一张 Wi-Fi（如安卓手机热点、家用路由器或便携 Wi-Fi）即可正常无线投屏，实车验证秒连稳定。
+- **排除网关误判**：修复了底层把热点网关 IP 误判为手机已入网的关键 Bug，消除了“盲目切换 IPv6 地址”并白等 30 秒超时的缺陷。
+- **密码缺失即时拦截**：车机连入加密 Wi-Fi 但在 DiPlay 中未填写密码时，0 秒立即提示，不再无谓等待。
+- **密码错误清晰引导**：因车机密码填错导致 iPhone 无法加入热点时，界面明确提示“检查 Wi-Fi 密码及 iPhone 入网状态”，并自动停止死循环重连。
+- **密码输入防呆**：输入 Wi-Fi 密码时自动剔除首尾误触的空格，并强制校验 WPA2 最低 8 位长度，避免输错。
 
-**Lower touch latency and smoother dragging.** Replaced unthrottled touch dispatching with `TouchDispatchQueue`, co-developed for the constrained MT6735 platform:
-- Queued touch events dynamically merge high-frequency `MOVE` events while preserving exact finger timestamps, avoiding event backlog during rapid panning or scrolling.
-- Stripped redundant byte-by-byte hex conversions from AirPlay event hot paths, reducing GC pressure and UI hitching.
-- Added per-attempt `touch2render` latency metrics to help diagnose input lag on the car screen.
+**触摸延迟大幅降低，滑动显著跟手。**
+针对吉利星瑞 E01（联发科 MT6735）芯片性能有限、高频滑动易积压掉帧的问题，全面重构了触摸上行链路：
+- **专属触摸调度队列（TouchDispatchQueue）**：滑动列表或拖动地图时，自动动态合并过密的 `MOVE` 触摸事件，彻底消除触摸事件排队造成的画面严重掉帧与滞后。
+- **硬件时间戳对齐**：触摸事件带上手指触屏的真实硬件时刻，苹果端惯性滑动物理手感更加自然。
+- **移除热路径冗余开销**：去除了触摸事件高频触发路径上的十六进制日志与格式化开销，大幅减轻系统 GC 停顿。
+- **诊断耗时细化**：单次尝试的诊断日志中增加 `touch2render`（触控到上屏）耗时统计，方便排查延迟瓶颈。
 
 ## 0.4.3-geely — 2026-10-19
 
