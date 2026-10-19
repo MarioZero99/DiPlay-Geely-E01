@@ -67,12 +67,14 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     private fun accept(bound: ServerSocket) {
         try {
             val accepted = bound.accept()
+            configureSocket(accepted)
             socket = accepted
             run(accepted)
         } catch (error: Exception) {
             if (!closed.get()) listener.onClosed(error)
         }
     }
+
 
     private fun run(sock: Socket) {
         var failure: Throwable? = null
@@ -164,13 +166,19 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         return true
     }
 
-    private companion object {
+    companion object {
         const val TAG = "xcertplay-usb"
         const val HEADER_LEN = 128
         const val OPCODE_OFFSET = 4
         const val OP_VIDEO_FRAME = 0
         const val OP_VIDEO_CONFIG = 1
         const val MAX_BODY = 8 * 1024 * 1024
+        const val VIDEO_RECEIVE_BUFFER_BYTES = 1024 * 1024
+
+        fun configureSocket(sock: Socket) {
+            runCatching { sock.tcpNoDelay = true }
+            runCatching { sock.receiveBufferSize = VIDEO_RECEIVE_BUFFER_BYTES }
+        }
 
         /**
          * Ceiling for the reused body buffer. Real frames are far smaller; above this the frame

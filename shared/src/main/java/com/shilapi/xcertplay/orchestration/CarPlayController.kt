@@ -3,6 +3,7 @@ package com.shilapi.xcertplay.orchestration
 import android.bluetooth.BluetoothManager
 import android.content.ComponentName
 import android.content.Context
+import android.net.wifi.WifiManager
 import android.content.Intent
 import android.content.ServiceConnection
 import android.hardware.usb.UsbDevice
@@ -456,6 +457,30 @@ class CarPlayController(
     private val wirelessTunnelReady = AtomicBoolean(false)
     private val wirelessActiveReported = AtomicBoolean(false)
     private val wirelessGeneration = AtomicInteger(0)
+    @Volatile private var wifiLock: WifiManager.WifiLock? = null
+
+    private fun acquireWifiLock() {
+        if (wifiLock?.isHeld == true) return
+        runCatching {
+            val wm = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            val lock = wm?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "CarPlay-HighPerf")
+            lock?.setReferenceCounted(false)
+            lock?.acquire()
+            wifiLock = lock
+            debugLog("Wi-Fi high-perf lock acquired")
+        }
+    }
+
+    private fun releaseWifiLock() {
+        runCatching {
+            wifiLock?.let {
+                if (it.isHeld) it.release()
+                debugLog("Wi-Fi high-perf lock released")
+            }
+        }
+        wifiLock = null
+    }
+
 
     /**
      * How many bring-ups have already ended with the phone taking the certificate and never answering it.
@@ -1183,6 +1208,8 @@ class CarPlayController(
             ) {
                 return
             }
+            acquireWifiLock()
+
 
             val mfi = mfiSession?.client
                 ?: throw IOException("MFi coprocessor client is unavailable")
@@ -2516,7 +2543,9 @@ class CarPlayController(
         wirelessActiveReported.set(false)
 
         if (service != null) closeBestEffort("AirPlay service") { service.detach() }
+        closeBestEffort("wifi lock") { releaseWifiLock() }
     }
+
 
     private fun hostAddressText(address: InetAddress): String {
         val text = address.hostAddress?.substringBefore('%')
