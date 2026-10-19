@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.media
 
 import com.shilapi.xcertplay.airplay.VideoCodec
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 
 /**
  * Pure byte helpers that convert the CarPlay screen/audio payloads into the
@@ -94,6 +95,68 @@ object MediaCodecSupport {
         return output
     }
 
+    /** Direct zero-allocation write of Annex B stream into a target ByteBuffer. Returns bytes written, or -1 on overflow/malformed. */
+    fun writeAnnexB(lengthPrefixed: ByteArray, target: ByteBuffer): Int {
+        if (lengthPrefixed.size >= 4 &&
+            lengthPrefixed[0] == 0.toByte() &&
+            lengthPrefixed[1] == 0.toByte() &&
+            lengthPrefixed[2] == 0.toByte() &&
+            lengthPrefixed[3] == 1.toByte()
+        ) {
+            if (lengthPrefixed.size > target.remaining()) return -1
+            target.put(lengthPrefixed)
+            return lengthPrefixed.size
+        }
+
+        var inputOffset = 0
+        var outputSize = 0
+        while (inputOffset + 4 <= lengthPrefixed.size) {
+            val length = readU32Be(lengthPrefixed, inputOffset)
+            inputOffset += 4
+            if (length <= 0 || length > lengthPrefixed.size - inputOffset) return -1
+            if (length > Int.MAX_VALUE - outputSize - START_CODE.size) return -1
+            outputSize += START_CODE.size + length
+            inputOffset += length
+        }
+        if (outputSize == 0 || inputOffset != lengthPrefixed.size) return -1
+        if (outputSize > target.remaining()) return -1
+
+        var offset = 0
+        while (offset + 4 <= lengthPrefixed.size) {
+            val length = readU32Be(lengthPrefixed, offset)
+            offset += 4
+            if (length <= 0 || offset + length > lengthPrefixed.size) break
+            target.put(START_CODE)
+            target.put(lengthPrefixed, offset, length)
+            offset += length
+        }
+        return outputSize
+    }
+
+    /** IDR (AVC) or IRAP (HEVC) starts an independently decodable reference chain on length-prefixed bytes without intermediate conversion. */
+    fun isRandomAccessLengthPrefixed(nalus: ByteArray, codec: VideoCodec): Boolean {
+        if (nalus.size >= 4 &&
+            nalus[0] == 0.toByte() &&
+            nalus[1] == 0.toByte() &&
+            nalus[2] == 0.toByte() &&
+            nalus[3] == 1.toByte()
+        ) {
+            return isRandomAccess(nalus, codec)
+        }
+        var offset = 0
+        while (offset + 4 <= nalus.size) {
+            val length = readU32Be(nalus, offset)
+            offset += 4
+            if (length <= 0 || offset + length > nalus.size) break
+            val header = nalus[offset].toInt() and 255
+            if (codec == VideoCodec.H264 && header and 31 == 5) return true
+            if (codec == VideoCodec.H265 && length >= 2 &&
+                ((header shr 1) and 63) in 16..21) return true
+            offset += length
+        }
+        return false
+    }
+
     /** IDR (AVC) or IRAP (HEVC) starts an independently decodable reference chain. */
     fun isRandomAccess(annexB: ByteArray, codec: VideoCodec): Boolean {
         var cursor = 0
@@ -114,6 +177,7 @@ object MediaCodecSupport {
         }
         return false
     }
+
 
     /** Wraps one raw AAC-LC access unit in an MPEG-4 ADTS frame. */
     fun adtsFrame(accessUnit: ByteArray, sampleRate: Int, channels: Int): ByteArray {

@@ -408,11 +408,10 @@ private class VideoDecoder(
     }
 
     private fun feed(nalus: ByteArray) {
-        val annexB = MediaCodecSupport.toAnnexB(nalus)
         val config = lastConfig ?: return
         if (outputSurface == null) return
-        if (annexB.isEmpty()) { recover("invalid video access unit"); return }
-        if (!referenceChain.accepts(annexB, config.codec)) {
+        if (nalus.isEmpty()) { recover("invalid video access unit"); return }
+        if (!referenceChain.accepts(nalus, config.codec)) {
             requestKeyFrameIfDue()
             return
         }
@@ -428,8 +427,8 @@ private class VideoDecoder(
             }
             DiagLog.i(
                 TAG,
-                "video decoder first input avcc=${nalus.size} annexB=${annexB.size} " +
-                    "head=${annexB.take(16).joinToString("") { "%02x".format(it.toInt() and 0xff) }}",
+                "video decoder first input avcc=${nalus.size} " +
+                    "head=${nalus.take(16).joinToString("") { "%02x".format(it.toInt() and 0xff) }}",
             )
         }
         val index = VideoInputPump.acquire(
@@ -441,10 +440,13 @@ private class VideoDecoder(
         val input = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) codec.getInputBuffer(index) else codec.inputBuffers[index]
         checkNotNull(input) { "Decoder input buffer unavailable" }
         input.clear()
-        if (annexB.size <= input.remaining()) {
-            input.put(annexB)
-            codec.queueInputBuffer(index, 0, annexB.size, System.nanoTime() / 1000, 0)
+        val written = MediaCodecSupport.writeAnnexB(nalus, input)
+        if (written > 0) {
+            codec.queueInputBuffer(index, 0, written, System.nanoTime() / 1000, 0)
             referenceChain.onQueued()
+        } else if (written == 0) {
+            recover("invalid video access unit")
+            return
         } else {
             recover("video frame exceeded codec input capacity")
             return
