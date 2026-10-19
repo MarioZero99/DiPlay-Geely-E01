@@ -8,6 +8,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.view.Gravity
 import android.view.View
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -65,10 +66,11 @@ class SettingsScreenView(
         }
 
         // 返回按钮
-        val backBtn = TextView(context).apply {
+        val backBtn = Button(context).apply {
             tag = "settings_back_btn"
-            text = "← " + context.getString(R.string.back)
+            text = context.getString(R.string.back)
             textSize = 17f
+            isAllCaps = false
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setTextColor(palette.textMain)
             gravity = Gravity.CENTER

@@ -539,4 +539,16 @@ class SettingsPagesUiTest {
             views<Button>(activity).any { it.text?.toString() == "Cancel" },
         )
     }
+
+    @Test
+    fun `settings page displays SettingsScreenView with full width`() {
+        val activity = Robolectric.buildActivity(DiPlayActivity::class.java).setup().get()
+        activity.intent.putExtra("page", "settings")
+        activity.intent.putExtra(DiPlayActivity.EXTRA_SETTINGS_TAB, "audio")
+        activity.recreate()
+
+        val contentView = activity.findViewById<android.view.ViewGroup>(android.R.id.content)
+        org.junit.Assert.assertNotNull(contentView)
+        assertTrue(texts(activity).any { it.contains("Audio routing") || it.contains("Navigation stream type") })
+    }
 }

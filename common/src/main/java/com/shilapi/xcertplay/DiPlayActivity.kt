@@ -72,7 +72,8 @@ import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
 import com.shilapi.xcertplay.ui.component.ConfirmSheetView
 import com.shilapi.xcertplay.ui.component.HeroStageCard
 import com.shilapi.xcertplay.ui.component.QuickWidgetsView
-import com.shilapi.xcertplay.ui.component.SettingsDrawerView
+import com.shilapi.xcertplay.ui.component.SettingsScreenView
+import com.shilapi.xcertplay.ui.component.SettingsTab
 import com.shilapi.xcertplay.ui.component.SlimDockView
 import com.shilapi.xcertplay.ui.theme.AppSkin
 import com.shilapi.xcertplay.ui.theme.CockpitThemeManager
@@ -100,13 +101,7 @@ class DiPlayActivity : ComponentActivity() {
     private var hero: HeroStageCard? = null
     private var widgets: QuickWidgetsView? = null
     private var cockpitHost: FrameLayout? = null
-    private var drawer: SettingsDrawerView? = null
-    private var drawerOpen = false
-    /**
-     * Set by an intent that wants the settings shown on arrival — the three-finger swipe on the
-     * CarPlay picture. Consumed by the next redraw, which opens the drawer with the page.
-     */
-    private var drawerRequested = false
+    private var activeSettingsTab: SettingsTab = SettingsTab.AUDIO
     /** The exit question, while it is up: one instance, so a second press cannot stack a second sheet. */
     private var exitSheet: ConfirmSheetView? = null
     /** The palette this redraw resolved to; the cockpit's views are built from it. */
@@ -278,8 +273,14 @@ class DiPlayActivity : ComponentActivity() {
             getString(R.string.setup_error_auth)
         }
         pendingCarHotspotSetup = savedInstanceState?.getBoolean("pending_car_hotspot") ?: false
-        page = savedInstanceState?.getString("page") ?: intent.getStringExtra("page") ?: "home"
-        drawerRequested = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS_DRAWER, false)
+        val openDrawerExtra = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS_DRAWER, false)
+        page = savedInstanceState?.getString("page") ?: intent.getStringExtra("page") ?: if (openDrawerExtra) "settings" else "home"
+        savedInstanceState?.getString(KEY_SETTINGS_TAB)?.let {
+            activeSettingsTab = SettingsTab.fromKey(it)
+        }
+        intent.getStringExtra(EXTRA_SETTINGS_TAB)?.let {
+            activeSettingsTab = SettingsTab.fromKey(it)
+        }
         // The selector must open on what is actually stored, or the user cannot tell what is in effect.
         navigationStreamType = AirPlayPersistence.loadNavigationStreamType(this)
         loadConnectionSettings()
@@ -292,14 +293,6 @@ class DiPlayActivity : ComponentActivity() {
                 // The exit question is drawn over everything else, so it is answered or dismissed
                 // before back is allowed to mean anything about pages.
                 exitSheet?.let { it.dismiss(); return }
-                // The drawer is drawn over the page, so back closes it before it changes page: a key
-                // that took the driver off the page behind an open panel would look like a jump.
-                // Asked of the drawer's own state, not of its visibility: for the 180 ms it takes to
-                // slide out it is still drawn, and back during that window used to be swallowed.
-                if (drawerOpen) {
-                    closeSettingsDrawer()
-                    return
-                }
                 // The firmware page is left by its own control and by nothing else while a write is in
                 // flight: back would take the driver off the one screen that says what is happening.
                 if (page == PAGE_FIRMWARE && firmwareRunning()) return
@@ -347,12 +340,28 @@ class DiPlayActivity : ComponentActivity() {
         // back within a beat, which is a page that flickers away and back under their hands; not
         // moving is better, and it is what the page is for.
         if (!firmwareRunning()) {
-            page = intent.getStringExtra("page") ?: "home"
-            drawerRequested = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS_DRAWER, false)
+            val requestedPage = intent.getStringExtra("page")
+            val openDrawerExtra = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS_DRAWER, false)
+            page = when {
+                requestedPage != null -> requestedPage
+                openDrawerExtra -> "settings"
+                else -> "home"
+            }
+            val tabExtra = intent.getStringExtra(EXTRA_SETTINGS_TAB)
+            if (tabExtra != null) {
+                activeSettingsTab = SettingsTab.fromKey(tabExtra)
+            } else if (openDrawerExtra && requestedPage == null) {
+                activeSettingsTab = SettingsTab.CONNECTION
+            }
             render()
         }
     }
-    override fun onSaveInstanceState(outState: Bundle) { outState.putString("page", page); outState.putBoolean("pending_car_hotspot", pendingCarHotspotSetup); super.onSaveInstanceState(outState) }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("page", page)
+        outState.putString(KEY_SETTINGS_TAB, activeSettingsTab.key)
+        outState.putBoolean("pending_car_hotspot", pendingCarHotspotSetup)
+        super.onSaveInstanceState(outState)
+    }
     override fun onConfigurationChanged(newConfig: Configuration) { super.onConfigurationChanged(newConfig); render() }
     override fun onResume() {
         super.onResume()
@@ -415,21 +424,7 @@ class DiPlayActivity : ComponentActivity() {
         // A route that no longer exists — "wireless" and "wired" were pages once — lands on the home
         // page rather than on a header with nothing under it.
         if (page !in KNOWN_PAGES) page = "home"
-        // The cockpit is rebuilt on every redraw, so the drawer is dropped with it and built again on
-        // the next open — except when it was open a moment ago, in which case it is put straight back
-        // where it was: a setting changed inside the drawer must not close it, slide it in again, or
-        // throw the driver back to the top of a list they had scrolled down to reach that setting.
-        //
-        // Two different reasons to draw it again, and they are not the same animation. `drawerOpen`
-        // is a redraw around a drawer that never went away, so it comes back without a slide.
-        // `drawerRequested` is somebody *asking* for it — the connection page's settings chip, or an
-        // outside intent — and that is a drawer arriving, which has to slide in like every other
-        // open. Folding the two together is what made that request appear with a jump.
-        val restoreDrawer = drawerOpen
-        val restoreOffset = if (drawerOpen) drawer?.scrollOffset() ?: 0 else 0
-        val openRequested = !drawerOpen && drawerRequested
-        drawerRequested = false
-        hero = null; widgets = null; cockpitHost = null; drawer = null; drawerOpen = false; exitSheet = null
+        hero = null; widgets = null; cockpitHost = null; exitSheet = null
         // Read here rather than per view: the car's own day/night signal arrives as a configuration
         // change, which calls render(), so one read per redraw is exactly one read per signal.
         themeScheduleAtRender = AirPlayPersistence.loadThemeSchedule(this)
@@ -446,7 +441,12 @@ class DiPlayActivity : ComponentActivity() {
         // and then replacing it with the cockpit cost a header, a column and a dozen views per
         // redraw on a head unit that runs with 26 MB free.
         if (page == "home") {
-            setContentView(cockpitRoot(restoreDrawer, restoreOffset, openRequested))
+            setContentView(cockpitRoot())
+            refreshStatus()
+            return
+        }
+        if (page == "settings") {
+            setContentView(settingsScreen())
             refreshStatus()
             return
         }
@@ -520,7 +520,7 @@ class DiPlayActivity : ComponentActivity() {
      * Everything the old stack carried is still here rather than dropped for the wider shape: the
      * stage holds the readiness card's notes and the gap lines, and the drawer holds every setting.
      */
-    private fun cockpitRoot(restoreDrawer: Boolean, restoreOffset: Int, openRequested: Boolean): View {
+    private fun cockpitRoot(): View {
         val root = FrameLayout(this).apply { setBackgroundColor(palette.screenBg) }
         val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
@@ -528,8 +528,8 @@ class DiPlayActivity : ComponentActivity() {
             this,
             palette,
             onHomeClick = { if (page != "home") { page = "home"; render() } },
-            onAudioClick = { openSettingsDrawer(getString(R.string.audio_routing)) },
-            onSettingsClick = { if (drawerOpen) closeSettingsDrawer() else openSettingsDrawer() },
+            onAudioClick = { openSettings(SettingsTab.AUDIO) },
+            onSettingsClick = { openSettings(SettingsTab.CONNECTION) },
             onLauncherClick = { leaveToLauncher() },
             onExitClick = { confirmExit() },
         )
@@ -565,7 +565,7 @@ class DiPlayActivity : ComponentActivity() {
                     }
                 }
             },
-            onOpenSettings = { openSettingsDrawer() },
+            onOpenSettings = { openSettings(SettingsTab.CONNECTION) },
             initialConnectionMode = AirPlayPersistence.loadConnectionMode(this),
             // Remember the choice, and nothing else: the card repaints itself in place, and the tap
             // that made this choice is already starting a connection — rebuilding the page here
@@ -595,8 +595,8 @@ class DiPlayActivity : ComponentActivity() {
                     toast(getString(R.string.saved_for_your_next_connection))
                 }
             },
-            onAudioSelect = { openSettingsDrawer(getString(R.string.audio_routing)) },
-            onOpenDrawer = { openSettingsDrawer() },
+            onAudioSelect = { openSettings(SettingsTab.AUDIO) },
+            onOpenDrawer = { openSettings(SettingsTab.CONNECTION) },
             sameWifiOffered = ExperimentalFeatures.enabled,
         )
         widgets = quick
@@ -618,10 +618,6 @@ class DiPlayActivity : ComponentActivity() {
         }
         root.addView(horizontal, FrameLayout.LayoutParams(-1, -1))
         cockpitHost = root
-        // A drawer that was open before the redraw comes back without its slide and at the place it
-        // was left: it never went away, and a setting changed inside it must not look like a reopen.
-        // A drawer that was *asked for* slides in, because it is arriving.
-        if (restoreDrawer) restoreSettingsDrawer(restoreOffset) else if (openRequested) openSettingsDrawer()
         return root
     }
 
@@ -644,59 +640,58 @@ class DiPlayActivity : ComponentActivity() {
             "${getString(R.string.navigation_stream_type)} · $navigationStreamType"
         }
 
-    private fun openSettingsDrawer(scrollTo: String? = null, animate: Boolean = true) {
-        val host = cockpitHost ?: return
-        // Already open: a second press scrolls to the section asked for and does not restart the
-        // slide. Reopening an open drawer is how it used to flash on every press of the gear.
-        if (drawerOpen) {
-            scrollTo?.let { drawer?.scrollToText(it) }
-            return
-        }
-        val view = drawer ?: buildSettingsDrawer().also {
-            drawer = it
-            host.addView(it, FrameLayout.LayoutParams(-1, -1))
-        }
-        drawerOpen = true
-        view.open(animate = animate)
-        scrollTo?.let { view.scrollToText(it) }
+    private fun openSettings(tab: SettingsTab = SettingsTab.AUDIO) {
+        page = "settings"
+        activeSettingsTab = tab
+        render()
     }
 
-    /** Puts an already-open drawer back after a redraw: no slide, and the offset it was left at. */
-    private fun restoreSettingsDrawer(offset: Int) {
-        openSettingsDrawer(animate = false)
-        if (offset > 0) drawer?.scrollToOffset(offset)
+    private fun settingsScreen(): View {
+        return SettingsScreenView(
+            this,
+            palette,
+            initialTab = activeSettingsTab,
+            hasExperimental = ExperimentalFeatures.enabled,
+            onBack = { page = "home"; render() },
+            buildAudioSection = { col ->
+                val columns = CardColumns(col)
+                audioRoutingCard(columns)
+            },
+            buildConnectionSection = { col ->
+                val columns = CardColumns(col)
+                val readiness = pageState().readiness
+                if (!hasWirelessRadio()) {
+                    columns.line(
+                        label(getString(R.string.this_head_unit_is_not_supported_for_wireless_carplay), 16, WARNING)
+                            .apply { setPadding(0, 0, 0, dp(8)) },
+                    )
+                }
+                if (wirelessBlocked && readiness.blocking.isNotEmpty()) gapsCard(columns.raw(), readiness)
+                bucket(columns, R.string.wireless_settings, R.string.set_up_once_your_details_stay_saved_for_the_next_drive_cha)
+                wirelessCards(columns, readiness)
+                bucket(columns, R.string.wired_settings, R.string.wired_settings_hint)
+                wiredCards(columns)
+            },
+            buildDisplaySection = { col ->
+                val columns = CardColumns(col)
+                bucket(columns, R.string.display_and_audio, R.string.display_and_audio_hint, R.string.apply_reconnects_carplay_for_size_resolution_music_buffer)
+                displayPerformanceCard(columns)
+            },
+            buildSystemSection = { col ->
+                val columns = CardColumns(col)
+                bucket(columns, R.string.system_settings, R.string.system_settings_hint)
+                buildThemeSection(col)
+                systemCards(columns)
+            },
+            buildExperimentalSection = if (ExperimentalFeatures.enabled) {
+                { col ->
+                    val columns = CardColumns(col)
+                    bucket(columns, R.string.experimental_features, R.string.experimental_features_hint)
+                    experimentalCards(columns)
+                }
+            } else null,
+        )
     }
-
-    private fun closeSettingsDrawer() {
-        if (!drawerOpen) return
-        drawerOpen = false
-        drawer?.close()
-    }
-
-    /**
-     * The drawer's sections are the settings page's own builders, handed in as lambdas: the same
-     * controls, in the same order, rather than a second set that could drift from them.
-     */
-    private fun buildSettingsDrawer(): SettingsDrawerView = SettingsDrawerView(
-        this,
-        palette,
-        buildThemeSection = { buildThemeSection(it) },
-        buildConnectionSection = { column ->
-            // One column: the drawer is 520dp wide whatever the screen is, and the page's two-column
-            // pairing measures the screen, not the panel it is drawn in.
-            val readiness = pageState().readiness
-            wirelessCards(CardColumns(column, forceNarrow = true), readiness)
-            wiredCards(CardColumns(column, forceNarrow = true))
-        },
-        buildDisplaySection = { displayCards(CardColumns(it, forceNarrow = true)) },
-        buildSystemSection = { systemCards(CardColumns(it, forceNarrow = true)) },
-        buildExperimentalSection = if (ExperimentalFeatures.enabled) {
-            { experimentalCards(CardColumns(it, forceNarrow = true)) }
-        } else {
-            null
-        },
-        onClose = { closeSettingsDrawer() },
-    )
 
     /**
      * Skin and day/night, which belong to this page's chrome rather than to a connection. Written
@@ -803,7 +798,6 @@ class DiPlayActivity : ComponentActivity() {
      * [closeTheApp] is the one that ends them.
      */
     private fun leaveToLauncher() {
-        if (drawerOpen) closeSettingsDrawer()
         startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
     }
 
@@ -3393,6 +3387,9 @@ class DiPlayActivity : ComponentActivity() {
     private fun space(height: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(height)) }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     companion object {
+        const val EXTRA_SETTINGS_TAB = "settings_tab"
+        private const val KEY_SETTINGS_TAB = "key_settings_tab"
+
         /**
          * Asks for the home page with its settings drawer already open.
          *
