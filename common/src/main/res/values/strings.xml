@@ -168,6 +168,14 @@
     <string name="check_and_enable">Check and enable</string>
     <string name="choose_iphone">Choose iPhone</string>
     <string name="choose_your_iphone">Choose your iPhone</string>
+    <string name="carplay_title">CARPLAY</string>
+    <string name="choose_connection_mode">Choose connection mode: wired or wireless</string>
+    <string name="connect_wired">Wired</string>
+    <string name="connect_wireless">Wireless</string>
+    <string name="switch_to_wired">Switch to wired</string>
+    <string name="switch_to_wireless">Switch to wireless</string>
+    <string name="usb_host_not_supported">This head unit has no USB host mode, so a cable cannot carry CarPlay here. Use wireless.</string>
+    <string name="wired_carplay">USB CARPLAY</string>
     <string name="close">Close</string>
     <string name="cluster_map_size">Dashboard map size</string>
     <string name="connect_phone">Connect phone</string>

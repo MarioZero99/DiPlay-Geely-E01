@@ -40,11 +40,15 @@ class HeroStageCard(
     supportedConnectionView: TextView?,
     adapterStatusView: TextView?,
     hotspotOffNote: String?,
-    onConnectWireless: () -> Unit,
-    onConnectUsb: () -> Unit,
-    onOpenProjection: () -> Unit,
-    onDisconnect: () -> Unit,
+    private val onConnectWireless: () -> Unit,
+    private val onConnectUsb: () -> Unit,
+    private val onOpenProjection: () -> Unit,
+    private val onDisconnect: () -> Unit,
     private val onOpenSettings: () -> Unit,
+    /** The transport the driver picked last time, or null when they never picked one. */
+    initialConnectionMode: Boolean? = null,
+    /** Called with `true` for wireless and `false` for wired, before the connection starts. */
+    private val onModeSelected: ((Boolean) -> Unit)? = null,
 ) : LinearLayout(context) {
 
     private val pill: TextView
@@ -53,7 +57,27 @@ class HeroStageCard(
     private val emblem: ImageView
     private val mainBtn: Button
     private val disconnectBtn: Button
-    private var usbBtn: Button? = null
+
+    /**
+     * The other transport, and — before the driver has chosen once — the two halves of that choice.
+     *
+     * Both are built here and shown or hidden by [paintActions]: [updateState] runs once a second,
+     * and adding and removing buttons on that tick is exactly the churn this card exists to avoid.
+     */
+    private val wiredBtn: Button
+    private val wirelessBtn: Button
+
+    /** What the wired mode needs said: plug the cable in, or why the choice is not available here. */
+    private val wiredNote: TextView
+
+    /** The car-hotspot reminder, kept as a field so a wired choice can put it away. */
+    private val hotspotNoteView: TextView?
+
+    private var currentMode: Boolean? = initialConnectionMode
+    private var paintedPhase: SessionPhase? = null
+    private var paintedMode: Boolean? = null
+    private var paintedUsbHost = false
+    private var painted = false
     private var pulseAnim: android.animation.ObjectAnimator? = null
 
     /**
@@ -92,7 +116,6 @@ class HeroStageCard(
         addView(pill, LayoutParams(-2, -2))
 
         title = TextView(context).apply {
-            text = context.getString(R.string.wireless_carplay)
             textSize = 30f
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setTextColor(palette.textMain)
@@ -125,12 +148,19 @@ class HeroStageCard(
         notes.addView(gapsBox, LayoutParams(-1, -2))
         supportedConnectionView?.let { notes.addView(it, LayoutParams(-1, -2)) }
         adapterStatusView?.let { notes.addView(it, LayoutParams(-1, -2)) }
-        hotspotOffNote?.let {
-            notes.addView(label(it, 15, palette.accent), LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        hotspotNoteView = hotspotOffNote?.let { note ->
+            label(note, 15, palette.accent).also {
+                notes.addView(it, LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            }
         }
         setupError?.let {
             notes.addView(label(it, 15, palette.accent), LayoutParams(-1, -2).apply { topMargin = dp(6) })
         }
+        // Built here, coloured and worded by paintActions: the wired branch has something to say that
+        // the readiness list does not cover — either "plug the cable in" or "this head unit has no
+        // USB host at all", and the second one is the reason the button beside it is greyed out.
+        wiredNote = label("", 15, palette.accent).apply { visibility = View.GONE }
+        notes.addView(wiredNote, LayoutParams(-1, -2).apply { topMargin = dp(6) })
         addView(notes, LayoutParams(-1, -2))
 
         val buttonRow = row().apply { setPadding(0, dp(14), 0, 0) }
@@ -145,7 +175,14 @@ class HeroStageCard(
             setOnClickListener {
                 when (currentPhase) {
                     SessionPhase.Live -> onOpenProjection()
-                    SessionPhase.Idle -> onConnectWireless()
+                    // Idle disconnects nothing, it starts the transport the driver chose. Before that
+                    // choice exists the two buttons beside this one are the question and the answer,
+                    // so there is nothing here to press.
+                    SessionPhase.Idle -> when (currentMode) {
+                        true -> onConnectWireless()
+                        false -> if (hasUsbHost) onConnectUsb()
+                        null -> Unit
+                    }
                     SessionPhase.Connecting -> Unit
                 }
             }
@@ -153,29 +190,31 @@ class HeroStageCard(
         buttonRow.addView(mainBtn, LayoutParams(0, dp(52), 1f))
 
         disconnectBtn = Button(context).apply {
-            text = context.getString(R.string.disconnect)
             textSize = 14f
             isAllCaps = false
             setTextColor(palette.textMuted)
             background = pressable(palette.cardInner, dp(10).toFloat(), dp(1), palette.cardBorder)
-            setOnClickListener { onDisconnect() }
             visibility = View.GONE
+            // The listener is set once, here: [updateState] runs every second, and a lambda handed
+            // to setOnClickListener on that tick would be one allocation per tick for nothing.
+            setOnClickListener {
+                if (!isEnabled) return@setOnClickListener
+                // A second tap while the attempt is unwinding must not queue a second stop. The
+                // button re-arms itself: a failed attempt never changes phase, so there is no
+                // phase change to hang the re-enable on, and it would stay grey forever.
+                isEnabled = false
+                onDisconnect()
+                postDelayed({ isEnabled = true }, 1200)
+            }
         }
         buttonRow.addView(disconnectBtn, LayoutParams(-2, dp(52)).apply { marginStart = dp(12) })
 
-        if (hasUsbHost) {
-            val uBtn = Button(context).apply {
-                text = context.getString(R.string.connect_with_usb)
-                textSize = 13.5f
-                isAllCaps = false
-                setTextColor(palette.textMain)
-                background = pressable(palette.cardInner, dp(10).toFloat(), dp(1), palette.cardBorder)
-                setOnClickListener { onConnectUsb() }
-                visibility = View.GONE
-            }
-            usbBtn = uBtn
-            buttonRow.addView(uBtn, LayoutParams(-2, dp(52)).apply { marginStart = dp(12) })
-        }
+        // The two transports are peers: before a choice there is one button each, after it the
+        // chosen one becomes the main button and the other stays here as a way to switch.
+        wiredBtn = secondaryButton { chooseMode(false) }
+        buttonRow.addView(wiredBtn, LayoutParams(-2, dp(52)).apply { marginStart = dp(12) })
+        wirelessBtn = secondaryButton { chooseMode(true) }
+        buttonRow.addView(wirelessBtn, LayoutParams(-2, dp(52)).apply { marginStart = dp(12) })
         addView(buttonRow, LayoutParams(-1, -2))
 
         updateState(sessionPhase, pairedPhoneName, null, false)
@@ -192,15 +231,22 @@ class HeroStageCard(
         }
         pill.setTextColor(if (phase == SessionPhase.Connecting) palette.accent else palette.statusReady)
 
+        // A wired choice is not a wireless one, and the readiness list the Activity hands in is the
+        // wireless route's: "turn on the car's Bluetooth" beside a cable nobody has plugged in is
+        // advice for the other transport. The wired line under the emblem says what this one needs.
+        val wirelessRoute = currentMode != false
+        val gaps = if (wirelessRoute) readinessGaps else null
+        val blocked = wirelessRoute && isBlocked
+
         // A blocked or unready route leads with its own reason; a ready one names the phone.
         sub.visibility = View.VISIBLE
-        if (isBlocked && !readinessGaps.isNullOrEmpty()) {
-            sub.text = "● " + readinessGaps.first()
+        if (blocked && !gaps.isNullOrEmpty()) {
+            sub.text = "● " + gaps.first()
             sub.setTextColor(palette.accent)
         } else if (pairedPhone != null) {
             sub.text = "${context.getString(R.string.paired_device)}: $pairedPhone"
             sub.setTextColor(palette.textMuted)
-        } else if (phase == SessionPhase.Idle) {
+        } else if (phase == SessionPhase.Idle && wirelessRoute) {
             // The pill already says the page is ready; saying it again underneath was the same
             // sentence twice. What the idle page can usefully add is what is still missing: a phone.
             sub.text = context.getString(R.string.pair_iphone_to_connect)
@@ -210,7 +256,9 @@ class HeroStageCard(
             sub.visibility = View.GONE
         }
 
-        paintGaps(readinessGaps, isBlocked)
+        paintGaps(gaps, blocked)
+        // The hotspot is the wireless route's business; a wired session never asks about one.
+        hotspotNoteView?.visibility = if (wirelessRoute) View.VISIBLE else View.GONE
 
         // The pulse and the static alpha are exclusive: the animator drives this property every
         // frame, so writing 0.65 underneath it was a value that could only ever be overwritten —
@@ -227,23 +275,121 @@ class HeroStageCard(
         // under the settings that a running session locks, and lives there (see DiPlayActivity's
         // liveSessionNote). It was copied here with the readiness card and read as nonsense: on the
         // stage there is nothing to change and the Disconnect button is right beside it.
-        mainBtn.text = when (phase) {
-            SessionPhase.Live -> context.getString(R.string.open_carplay)
-            SessionPhase.Connecting -> context.getString(R.string.connecting_to_your_iphone)
-            SessionPhase.Idle -> context.getString(R.string.connect_phone)
-        }
-        mainBtn.isEnabled = phase != SessionPhase.Connecting
-        // The fill and the label move together: the attempt in flight paints the button in
-        // `accentSoft`, and leaving the label in `btnMainFg` drew white on a 12% peach — a button
-        // that said nothing at all in the two light skins, exactly when it was saying the most.
+        //
+        // Labels, enablement, the headline and the two transport buttons are repainted by
+        // [paintActions] only when the phase or the choice moves. The fill is different: it has to be
+        // written every tick, because it is what says an attempt is in flight, and it is two
+        // `setColor` calls rather than two new drawables. The fill and the label move together — the
+        // label stayed white in `btnMainFg` on the 12% `accentSoft` wash, which is a button that says
+        // nothing at all in the two light skins, exactly when it is saying the most.
+        paintActions(phase)
         val connecting = phase == SessionPhase.Connecting
         val fill = if (connecting) palette.accentSoft else palette.btnMainBg
         mainBtnFill.setColor(fill)
         mainBtnPressedFill.setColor(shade(fill))
         mainBtn.setTextColor(if (connecting) palette.accent else palette.btnMainFg)
 
-        disconnectBtn.visibility = if (phase == SessionPhase.Live) View.VISIBLE else View.GONE
-        usbBtn?.visibility = if (phase == SessionPhase.Idle && hasUsbHost) View.VISIBLE else View.GONE
+        // Disconnecting is allowed the moment a session exists, not only once it is live: an attempt
+        // that is not going to land left the driver with no way out of it but the car's own launcher.
+        // Visibility is a plain flag write, so it can be set on every tick safely.
+        disconnectBtn.visibility = if (phase == SessionPhase.Idle) View.GONE else View.VISIBLE
+    }
+
+    /**
+     * Everything the card says about the transport and what its buttons will do.
+     *
+     * Guarded on the inputs rather than rebuilt: [updateState] runs once a second, and five
+     * `getString` calls plus six `setText` per second is the churn the class comment rules out on a
+     * head unit with 26 MB free. A transport change goes through [chooseMode], which repaints.
+     */
+    private fun paintActions(phase: SessionPhase) {
+        if (painted && phase == paintedPhase && currentMode == paintedMode && hasUsbHost == paintedUsbHost) return
+        painted = true
+        paintedPhase = phase
+        paintedMode = currentMode
+        paintedUsbHost = hasUsbHost
+
+        val idle = phase == SessionPhase.Idle
+        val wiredChosen = currentMode == false
+        val choosing = currentMode == null
+
+        title.text = when {
+            wiredChosen -> context.getString(R.string.wired_carplay)
+            choosing -> context.getString(R.string.carplay_title)
+            else -> context.getString(R.string.wireless_carplay)
+        }
+
+        mainBtn.text = when {
+            phase == SessionPhase.Live -> context.getString(R.string.open_carplay)
+            phase == SessionPhase.Connecting -> context.getString(R.string.connecting_to_your_iphone)
+            choosing -> context.getString(R.string.choose_connection_mode)
+            wiredChosen -> context.getString(R.string.connect_wired)
+            else -> context.getString(R.string.connect_wireless)
+        }
+        // A live session's button always works; an idle one only once there is something to start;
+        // an attempt in flight is already running and the button beside it is the way out.
+        mainBtn.isEnabled = when {
+            phase == SessionPhase.Live -> true
+            !idle || choosing -> false
+            wiredChosen -> hasUsbHost
+            else -> true
+        }
+        mainBtn.alpha = if (idle && !mainBtn.isEnabled) 0.4f else 1f
+
+        // Before a choice both are offered; after it, only the one that would switch.
+        wiredBtn.visibility = if (idle && !wiredChosen) View.VISIBLE else View.GONE
+        wirelessBtn.visibility = if (idle && wiredChosen) View.VISIBLE else View.GONE
+        wiredBtn.text = context.getString(if (choosing) R.string.connect_wired else R.string.switch_to_wired)
+        wirelessBtn.text = context.getString(if (choosing) R.string.connect_wireless else R.string.switch_to_wireless)
+
+        // A button that is drawn but cannot be pressed says the wrong thing twice; grey it out and
+        // let [wiredNote] say why.
+        wiredBtn.isEnabled = hasUsbHost
+        wiredBtn.alpha = if (hasUsbHost) 1f else 0.4f
+
+        // Wired needs one more line than wireless does: the cable, or the missing host controller.
+        // It replaces the hotspot note rather than joining it — a wired session never asks about one.
+        wiredNote.visibility = if (idle && wiredChosen) View.VISIBLE else View.GONE
+        if (idle && wiredChosen) {
+            wiredNote.text = context.getString(
+                if (hasUsbHost) R.string.connect_your_iphone_with_a_usb_cable else R.string.usb_host_not_supported,
+            )
+            wiredNote.setTextColor(if (hasUsbHost) palette.textMuted else palette.accent)
+        }
+
+        // "Cancel" while the attempt is still in flight, "Disconnect" once it is up: the same exit,
+        // named for what it actually does at that moment.
+        disconnectBtn.text = if (phase == SessionPhase.Connecting) {
+            context.getString(R.string.cancel)
+        } else {
+            context.getString(R.string.disconnect)
+        }
+    }
+
+    /**
+     * Picking a transport starts it. The two buttons on the choosing card exist to answer one
+     * question, and asking the driver to answer it and then press "connect" is the extra tap this
+     * card is here to remove. The switch button after a choice does the same thing for the other
+     * transport, because that is the only reason to press it.
+     */
+    private fun chooseMode(mode: Boolean) {
+        if (!mode && !hasUsbHost) return
+        if (currentMode == mode) return
+        currentMode = mode
+        paintActions(currentPhase)
+        onModeSelected?.invoke(mode)
+        if (currentPhase == SessionPhase.Idle) {
+            if (mode) onConnectWireless() else onConnectUsb()
+        }
+    }
+
+    private fun secondaryButton(onClick: () -> Unit) = Button(context).apply {
+        textSize = 13.5f
+        isAllCaps = false
+        setTextColor(palette.textMain)
+        background = pressable(palette.cardInner, dp(10).toFloat(), dp(1), palette.cardBorder)
+        setOnClickListener { onClick() }
+        visibility = View.GONE
     }
 
     /**

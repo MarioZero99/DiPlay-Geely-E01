@@ -175,10 +175,21 @@ object AirPlayPersistence {
             .apply()
     }
 
-    /** Last transport the user actually started. The connection plan may override this at launch. */
-    fun loadWirelessEnabled(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_WIRELESS_ENABLED, true)
+    /**
+     * The transport the driver picked, or null when they never did.
+     *
+     * `wireless_enabled` used to answer both questions at once — "what did you use last time" and
+     * "what should we do at launch" — and a boolean cannot say "nobody has chosen". The home page
+     * needs that third answer to ask instead of opening a wireless attempt nobody requested.
+     * Readers that only want a decision keep using [loadWirelessEnabled].
+     */
+    fun loadConnectionMode(context: Context): Boolean? {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return if (prefs.contains(KEY_WIRELESS_ENABLED)) prefs.getBoolean(KEY_WIRELESS_ENABLED, true) else null
+    }
+
+    /** Last transport the user actually started. Defaults to wireless when nothing was chosen. */
+    fun loadWirelessEnabled(context: Context): Boolean = loadConnectionMode(context) ?: true
 
     fun saveWirelessEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()

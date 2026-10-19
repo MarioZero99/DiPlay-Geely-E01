@@ -68,6 +68,12 @@ class SettingsDrawerUiTest {
     /** The drawer's own words: its header, and the first section in it. */
     private val drawerWords = listOf("System settings", "Appearance")
 
+    /**
+     * The cockpit, recognised by its main button. It used to say "Connect phone"; now that wired and
+     * wireless are a choice rather than a default, a fresh page asks which one.
+     */
+    private val cockpitWord = "Choose connection mode: wired or wireless"
+
     @Test
     fun theSwipeOpensTheDrawerOnTheCockpit() {
         val shown = visibleTexts(activity(openDrawer = true))
@@ -85,7 +91,7 @@ class SettingsDrawerUiTest {
     fun aPlainHomeIntentLeavesTheDrawerClosed() {
         val shown = visibleTexts(activity(openDrawer = false))
         drawerWords.forEach { assertFalse("'$it' is not on the home page", it in shown) }
-        assertTrue("the cockpit is what is drawn", "Connect phone" in buttons(activity(openDrawer = false)))
+        assertTrue("the cockpit is what is drawn", cockpitWord in buttons(activity(openDrawer = false)))
     }
 
     /**
@@ -99,7 +105,7 @@ class SettingsDrawerUiTest {
         settle()
         val shown = visibleTexts(activity)
         drawerWords.forEach { assertFalse("'$it' was closed with the drawer", it in shown) }
-        assertTrue("the driver is still on the cockpit", "Connect phone" in buttons(activity))
+        assertTrue("the driver is still on the cockpit", cockpitWord in buttons(activity))
         assertFalse("back did not leave the app", activity.isFinishing)
     }
 

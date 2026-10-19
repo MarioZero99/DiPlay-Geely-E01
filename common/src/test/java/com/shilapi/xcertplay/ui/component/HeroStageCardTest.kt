@@ -10,6 +10,7 @@ import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.ui.theme.CockpitThemeManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,12 +42,14 @@ class HeroStageCardTest {
         phase: SessionPhase,
         gaps: List<String>? = null,
         blocked: Boolean = false,
+        mode: Boolean? = null,
+        hasUsbHost: Boolean = false,
     ): HeroStageCard = HeroStageCard(
         context = context,
         palette = palette,
         sessionPhase = phase,
         pairedPhoneName = null,
-        hasUsbHost = false,
+        hasUsbHost = hasUsbHost,
         setupError = null,
         supportedConnectionView = null,
         adapterStatusView = null,
@@ -56,6 +59,7 @@ class HeroStageCardTest {
         onOpenProjection = {},
         onDisconnect = {},
         onOpenSettings = {},
+        initialConnectionMode = mode,
     ).also { it.updateState(phase, null, gaps, blocked) }
 
     @Test
@@ -126,12 +130,98 @@ class HeroStageCardTest {
         assertTrue("and so is the way to the settings", "Open settings" in texts)
     }
 
+    /**
+     * An attempt that is not going to land used to leave the driver with no way out of it: the exit
+     * existed, was drawn only once the session was live, and the only other door was the car's own
+     * launcher. While the attempt is in flight the button carries the word for what it does then.
+     */
+    @Test
+    fun `the cancel button is on the card while an attempt is in flight`() {
+        val connecting = card(SessionPhase.Connecting)
+        val cancel = buttons(connecting)
+            .firstOrNull { it.text?.toString() == context.getString(R.string.cancel) }
+
+        assertNotNull("连接中必须能退出这次尝试", cancel)
+        assertEquals(View.VISIBLE, cancel?.visibility)
+        assertTrue("连接中它得能按", cancel?.isEnabled == true)
+    }
+
+    /** A live session still says Disconnect, which is the same exit under the honest name. */
+    @Test
+    fun `a live session says disconnect and not cancel`() {
+        val live = card(SessionPhase.Live)
+        val disconnect = buttons(live)
+            .firstOrNull { it.text?.toString() == context.getString(R.string.disconnect) }
+
+        assertEquals(View.VISIBLE, disconnect?.visibility)
+        assertTrue(
+            "取消是给还没连上的尝试用的",
+            buttons(live).none { it.text?.toString() == context.getString(R.string.cancel) },
+        )
+    }
+
+    /**
+     * Nobody has chosen a transport yet, so the card asks instead of assuming wireless — the old
+     * main button started a wireless attempt the driver never picked.
+     */
+    @Test
+    fun `the first card offers both transports instead of assuming wireless`() {
+        val idle = card(SessionPhase.Idle, mode = null, hasUsbHost = true)
+        val texts = texts(idle)
+
+        assertTrue("无线要有按钮", context.getString(R.string.connect_wireless) in texts)
+        assertTrue("有线也要有按钮", context.getString(R.string.connect_wired) in texts)
+        assertTrue(
+            "主按钮只说该做选择",
+            context.getString(R.string.choose_connection_mode) in texts,
+        )
+    }
+
+    /** A wired choice on a head unit with no USB host is a choice that cannot run, and it says so. */
+    @Test
+    fun `wired without a usb host greys its button out and says why`() {
+        val wired = card(SessionPhase.Idle, mode = false, hasUsbHost = false)
+        val texts = texts(wired)
+
+        assertTrue(
+            "必须说明这台车机没有 USB 主机模式",
+            context.getString(R.string.usb_host_not_supported) in texts,
+        )
+        val wiredBtn = buttons(wired).first { it.text?.toString() == context.getString(R.string.connect_wired) }
+        assertFalse("不能用就不能按", wiredBtn.isEnabled)
+    }
+
+    /**
+     * The readiness list is the wireless route's. Under a wired choice it would tell the driver to
+     * turn on a Bluetooth radio that this attempt does not use.
+     */
+    @Test
+    fun `a wired choice drops the wireless readiness lines`() {
+        val wired = card(
+            SessionPhase.Idle,
+            gaps = listOf("Turn on the car's Bluetooth", "Save the car hotspot name and password"),
+            blocked = true,
+            mode = false,
+            hasUsbHost = true,
+        )
+        val texts = texts(wired)
+
+        assertFalse("有线不该念无线的话", "● Turn on the car's Bluetooth" in texts)
+        assertTrue(
+            "有线该说的是插线",
+            context.getString(R.string.connect_your_iphone_with_a_usb_cable) in texts,
+        )
+    }
+
     /** The three labels the main control can carry, so it can be found whatever phase it is in. */
     private fun mainButton(card: HeroStageCard): Button {
         val labels = listOf(
             context.getString(R.string.connect_phone),
             context.getString(R.string.connecting_to_your_iphone),
             context.getString(R.string.open_carplay),
+            context.getString(R.string.choose_connection_mode),
+            context.getString(R.string.connect_wired),
+            context.getString(R.string.connect_wireless),
         )
         return buttons(card).first { it.text?.toString() in labels }
     }

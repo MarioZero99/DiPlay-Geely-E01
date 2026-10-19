@@ -71,6 +71,15 @@ class SettingsPagesUiTest {
      */
     private val bucketRoute = listOf("display", "system")
 
+    /**
+     * How these tests recognise the cockpit from a settings page: its main button.
+     *
+     * "Connect phone" was that marker until the transport became an explicit choice — nobody has
+     * chosen on a fresh install, so the button now asks which one instead of quietly starting a
+     * wireless attempt. It is still one button on the home page and nowhere else.
+     */
+    private val homeMarker = "Choose connection mode: wired or wireless"
+
     private fun open(page: String): DiPlayActivity {
         val intent = Intent(RuntimeEnvironment.getApplication(), DiPlayActivity::class.java)
             .putExtra("page", page)
@@ -150,7 +159,7 @@ class SettingsPagesUiTest {
         listOf("wireless", "wired").forEach { route ->
             val shown = texts(open(route))
             assertFalse("'$route' is no longer a page of its own", "Wireless settings" in shown)
-            assertTrue("'$route' falls through to the home page", "Connect phone" in shown)
+            assertTrue("'$route' falls through to the home page", homeMarker in shown)
         }
     }
 
@@ -162,7 +171,7 @@ class SettingsPagesUiTest {
             activity.onBackPressedDispatcher.onBackPressed()
             assertTrue(
                 "'$page' goes back to the home page",
-                views<Button>(activity).any { it.text?.toString() == "Connect phone" },
+                views<Button>(activity).any { it.text?.toString() == homeMarker },
             )
             assertFalse("back from '$page' does not leave the app", activity.isFinishing)
         }
@@ -178,7 +187,7 @@ class SettingsPagesUiTest {
         activity.onBackPressedDispatcher.onBackPressed()
         assertTrue(
             "the home page is shown",
-            views<Button>(activity).any { it.text?.toString() == "Connect phone" },
+            views<Button>(activity).any { it.text?.toString() == homeMarker },
         )
         assertFalse("the settings page is behind us", "Wireless settings" in texts(activity))
         assertFalse("back from the settings page does not leave the app", activity.isFinishing)

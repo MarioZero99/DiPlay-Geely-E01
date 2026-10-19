@@ -161,6 +161,14 @@
     <string name="check_and_enable">检查并启用</string>
     <string name="choose_iphone">选择 iPhone</string>
     <string name="choose_your_iphone">选择 iPhone</string>
+    <string name="carplay_title">CARPLAY</string>
+    <string name="choose_connection_mode">请选择连接方式：有线或无线</string>
+    <string name="connect_wired">有线连接</string>
+    <string name="connect_wireless">无线连接</string>
+    <string name="switch_to_wired">切换为有线</string>
+    <string name="switch_to_wireless">切换为无线</string>
+    <string name="usb_host_not_supported">这台车机没有 USB 主机模式，数据线传不了 CarPlay，请用无线连接。</string>
+    <string name="wired_carplay">有线 CARPLAY</string>
     <string name="close">关闭</string>
     <string name="cluster_map_size">仪表盘地图大小</string>
     <string name="common_cancel">取消</string>

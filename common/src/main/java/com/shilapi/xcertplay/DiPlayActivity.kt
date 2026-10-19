@@ -173,6 +173,8 @@ class DiPlayActivity : ComponentActivity() {
     private var uploadInProgress = false
     private var navigationStreamType = NavigationAudioStream.deviceDefault
     private var testToneTrack: AudioTrack? = null
+    /** The 4.4s test tone, read from assets once. It is 384 KB; re-reading it per tap is disk I/O on the UI thread. */
+    private var cachedTestTonePcm: ByteArray? = null
     private var toneStop: Runnable? = null
     private var exportButton: Button? = null
     private var uploadButton: Button? = null
@@ -384,6 +386,13 @@ class DiPlayActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         handler.removeCallbacks(maintenanceTick)
+        // The tone outlives the page it was started from otherwise: a 4.5s release callback holds a
+        // native AudioTrack, and an Activity destroyed inside those 4.5 seconds used to leave it
+        // playing against a dead window — and the callback queued on a Handler that never ran.
+        toneStop?.let { handler.removeCallbacks(it) }
+        toneStop = null
+        testToneTrack?.let { runCatching { it.stop(); it.release() } }
+        testToneTrack = null
         releaseAdapterPage()
         super.onDestroy()
     }
@@ -546,8 +555,22 @@ class DiPlayActivity : ComponentActivity() {
             onConnectWireless = { connect(true) },
             onConnectUsb = { connect(false) },
             onOpenProjection = { openProjection() },
-            onDisconnect = { CarPlayBackgroundSession.stop { runOnUiThread { refreshStatus() } } },
+            onDisconnect = {
+                CarPlayBackgroundSession.stop {
+                    runOnUiThread {
+                        // The attempt can outlive the page: the driver leaves the app while the
+                        // session is tearing down, and refreshStatus() on a destroyed Activity is a
+                        // window that is already gone.
+                        if (!isFinishing && !isDestroyed) refreshStatus()
+                    }
+                }
+            },
             onOpenSettings = { openSettingsDrawer() },
+            initialConnectionMode = AirPlayPersistence.loadConnectionMode(this),
+            // Remember the choice, and nothing else: the card repaints itself in place, and the tap
+            // that made this choice is already starting a connection — rebuilding the page here
+            // would throw away the tree the driver is looking at and then paint the same state again.
+            onModeSelected = { mode -> AirPlayPersistence.saveWirelessEnabled(this, mode) },
         )
         hero = stageCard
 
@@ -1002,10 +1025,9 @@ class DiPlayActivity : ComponentActivity() {
                 AirPlayPersistence.saveWidthPhysicalMm(this, widthPhysicalMm)
             }
         }
-        // Full width by necessity, not by rank: the stream-type grid measures each of its seven cells
-        // against the screen rather than against the card it is in, so half a row would push it out of
-        // its own card. Nothing else here is that wide.
-        columns.card(R.string.audio_routing, fullWidth = true) { card ->
+        // The stream types sit in a row of equal shares now, not in cells measured against the
+        // screen, so this card no longer has to claim the whole width to keep them inside itself.
+        columns.card(R.string.audio_routing) { card ->
             val channelTitle = label(getString(R.string.navigation_stream_type), 18, TEXT, true)
             val channelHint = label(getString(R.string.tap_a_number_to_test_14_driver_speaker_on_byd), 14, MUTED)
             val grid = channelSelector()
@@ -1019,11 +1041,12 @@ class DiPlayActivity : ComponentActivity() {
                     it.isEnabled = enabled
                     it.alpha = alpha
                 }
-                for (i in 0 until grid.childCount) {
-                    grid.getChildAt(i).let { child ->
-                        child.isEnabled = enabled
-                        child.alpha = alpha
-                    }
+                // Through the buttons themselves, not the container: the cells are now grandchildren
+                // of a column of rows, and walking `grid.childCount` would have dimmed three rows
+                // and left all 21 buttons live inside them.
+                channelButtons.forEach {
+                    it.isEnabled = enabled
+                    it.alpha = alpha
                 }
             }
             val aaosSupported = resources.getBoolean(R.bool.config_advanced_audio_channel_mapping)
@@ -3081,7 +3104,10 @@ class DiPlayActivity : ComponentActivity() {
         testToneTrack = null
         var candidate: AudioTrack? = null
         val track = try {
-            val pcm = assets.open("navigation_test.pcm").use { it.readBytes() }
+            // Read once. The file is 384 KB and every tap used to open and read it again on the UI
+            // thread, which is a few milliseconds of disk on the one thread that must not wait.
+            val pcm = cachedTestTonePcm
+                ?: assets.open("navigation_test.pcm").use { it.readBytes() }.also { cachedTestTonePcm = it }
             AudioTrack(streamType, 44100, AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT, pcm.size, AudioTrack.MODE_STREAM).also {
                 candidate = it
@@ -3105,8 +3131,20 @@ class DiPlayActivity : ComponentActivity() {
             toneStop = null
         }
         toneStop = stop
+        // 4.5s: the clip is 192,226 samples at 44.1 kHz, which is 4.36s. Anything shorter cuts the
+        // tone off mid-beep, which sounds like a broken stream rather than a test.
         handler.postDelayed(stop, 4500)
     }
+
+    /** The stream-type cells, for the test that pins them to the card rather than to the screen. */
+    internal fun channelButtonsForTest(): List<Button> = channelButtons.toList()
+
+    /** Play the test tone from a test without reaching into the private members around it. */
+    internal fun playTestToneForTest(streamType: Int) = playTestTone(streamType)
+
+    internal fun testToneTrackForTest(): AudioTrack? = testToneTrack
+
+    internal fun testToneStopForTest(): Runnable? = toneStop
 
     private val channelButtons = mutableListOf<Button>()
 
@@ -3120,19 +3158,39 @@ class DiPlayActivity : ComponentActivity() {
         } else content
     }
 
+    /**
+     * The 21 stream types, three rows of seven, each cell an equal share of the card it is in.
+     *
+     * The cells used to be sized `(screenWidthPixels - 80) / 7`: seven of those plus their margins
+     * came to about 1890 px on this 1920 px head unit, which is wider than the drawer or the card
+     * that has to hold them. Everything past the second column was clipped away and could not be
+     * tapped — the row was drawn against the screen, not against its own parent. A row of
+     * `layout_weight = 1f` cells is measured against that parent and cannot overflow it.
+     */
     private fun channelSelector(): ViewGroup {
         channelButtons.clear()
-        val grid = GridLayout(this).apply {
-            columnCount = 7
-            rowCount = 3
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(0, dp(8), 0, dp(8))
         }
+        val cols = 7
+        var row: LinearLayout? = null
         for (i in 0..20) {
+            if (i % cols == 0) {
+                row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
+                        if (i > 0) topMargin = dp(6)
+                    }
+                }
+                container.addView(row)
+            }
             val btn = Button(this).apply {
                 text = i.toString()
                 isAllCaps = false
                 textSize = 16f
                 minHeight = dp(48)
+                setPadding(0, 0, 0, 0)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) stateListAnimator = null
                 setOnClickListener {
                     val previous = navigationStreamType
@@ -3144,18 +3202,18 @@ class DiPlayActivity : ComponentActivity() {
                     playTestTone(i)
                 }
             }
-            val params = GridLayout.LayoutParams().apply {
-                width = 0
-                height = dp(48)
-                width = (resources.displayMetrics.widthPixels - dp(80)) / 7
-                setMargins(dp(4), dp(4), dp(4), dp(4))
+            val col = i % cols
+            val params = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                marginStart = if (col > 0) dp(3) else 0
+                marginEnd = if (col < cols - 1) dp(3) else 0
             }
-            grid.addView(btn, params)
+            row?.addView(btn, params)
             channelButtons.add(btn)
             paintChannel(i, i == navigationStreamType)
         }
-        return grid
+        return container
     }
+
     private fun version() = packageManager.getPackageInfo(packageName, 0).versionName ?: "0.1.0-beta.1"
 
     private fun languageCards(columns: CardColumns) {

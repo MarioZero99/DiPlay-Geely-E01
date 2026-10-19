@@ -58,7 +58,7 @@ class SettingsDrawerView(
             isClickable = true
             isFocusable = true
             setPadding(dp(24), dp(20), dp(24), dp(20))
-            layoutParams = LayoutParams(dp(PANEL_WIDTH_DP), -1).apply { gravity = Gravity.END }
+            layoutParams = LayoutParams(panelWidthPx(), -1).apply { gravity = Gravity.END }
         }
 
         val header = LinearLayout(context).apply {
@@ -132,7 +132,7 @@ class SettingsDrawerView(
         // landing mid-page because that is where it was closed reads as the drawer opening on the
         // wrong section. A caller that wants a section asks for it afterwards with [scrollToText].
         scroll.scrollTo(0, 0)
-        panel.translationX = panel.width.takeIf { it > 0 }?.toFloat() ?: dp(PANEL_WIDTH_DP).toFloat()
+        panel.translationX = panel.width.takeIf { it > 0 }?.toFloat() ?: panelWidthPx().toFloat()
         alpha = 0f
         panel.setLayerType(LAYER_TYPE_HARDWARE, null)
         animate().alpha(1f).setDuration(200).start()
@@ -161,7 +161,7 @@ class SettingsDrawerView(
         panel.setLayerType(LAYER_TYPE_HARDWARE, null)
         animate().alpha(0f).setDuration(180).start()
         panel.animate()
-            .translationX(panel.width.takeIf { it > 0 }?.toFloat() ?: dp(PANEL_WIDTH_DP).toFloat())
+            .translationX(panel.width.takeIf { it > 0 }?.toFloat() ?: panelWidthPx().toFloat())
             .setDuration(180)
             .setInterpolator(android.view.animation.AccelerateInterpolator())
             .withEndAction {
@@ -256,9 +256,30 @@ class SettingsDrawerView(
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
+    /**
+     * How wide the panel opens.
+     *
+     * It was a flat 520dp, which is about a quarter of this head unit: the E01 is 1920×720 at
+     * 160dpi, so its usable width is 1920dp and the drawer covered 27% of it while the settings
+     * inside kept their desktop-sized cards. On a screen that wide the panel can afford close to
+     * half; the stage behind it still shows, which is what makes it a drawer rather than a page.
+     */
+    internal fun computePanelWidthDp(): Int {
+        val widthDp = resources.configuration.screenWidthDp
+        return if (widthDp >= 1000) {
+            (widthDp * 0.42).toInt().coerceIn(680, 800)
+        } else {
+            // Narrow: never wider than the screen minus its margins, and not smaller than 320dp —
+            // a 320dp Robolectric default lands here, and so would a phone-sized head unit.
+            PANEL_WIDTH_DP.coerceAtMost((widthDp - 40).coerceAtLeast(320))
+        }
+    }
+
+    private fun panelWidthPx(): Int = dp(computePanelWidthDp())
+
     companion object {
-        /** The panel's width. 520dp is about 43% of a 1200dp head unit — the stage stays visible. */
-        const val PANEL_WIDTH_DP = 520
+        /** The floor for narrow screens; widescreen units are sized by [computePanelWidthDp]. */
+        const val PANEL_WIDTH_DP = 800
 
         private const val SCRIM = 0x55000000
 
