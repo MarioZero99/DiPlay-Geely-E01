@@ -17,15 +17,15 @@ import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.ui.theme.ThemePalette
 
 enum class SettingsTab(val key: String) {
-    AUDIO("audio"),
     CONNECTION("connection"),
+    AUDIO("audio"),
     DISPLAY("display"),
     SYSTEM("system"),
     EXPERIMENTAL("experimental");
 
     companion object {
         fun fromKey(key: String?): SettingsTab =
-            entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: AUDIO
+            entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: CONNECTION
     }
 }
 
@@ -35,9 +35,10 @@ enum class SettingsTab(val key: String) {
 class SettingsScreenView(
     context: Context,
     private val palette: ThemePalette,
-    initialTab: SettingsTab = SettingsTab.AUDIO,
+    initialTab: SettingsTab = SettingsTab.CONNECTION,
     hasExperimental: Boolean = false,
     private val onBack: () -> Unit,
+    private val onCloseApp: (() -> Unit)? = null,
     buildAudioSection: (LinearLayout) -> Unit,
     buildConnectionSection: (LinearLayout) -> Unit,
     buildDisplaySection: (LinearLayout) -> Unit,
@@ -75,15 +76,15 @@ class SettingsScreenView(
             setTextColor(palette.textMain)
             gravity = Gravity.CENTER
             background = pressable(wash(palette.textMain), dp(12).toFloat())
-            layoutParams = LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(20) }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(16) }
             setOnClickListener { onBack() }
         }
         rail.addView(backBtn)
 
         // Tab 项列表
         val tabDefinitions = mutableListOf(
-            SettingsTab.AUDIO to context.getString(R.string.audio_routing),
             SettingsTab.CONNECTION to context.getString(R.string.connection),
+            SettingsTab.AUDIO to context.getString(R.string.audio_routing),
             SettingsTab.DISPLAY to context.getString(R.string.display_and_performance),
             SettingsTab.SYSTEM to context.getString(R.string.system_settings),
         )
@@ -103,6 +104,24 @@ class SettingsScreenView(
             }
             tabButtons[tab] = tabBtn
             rail.addView(tabBtn)
+        }
+
+        if (onCloseApp != null) {
+            val space = View(context).apply { layoutParams = LinearLayout.LayoutParams(1, 0, 1f) }
+            rail.addView(space)
+            val closeBtn = Button(context).apply {
+                tag = "settings_close_btn"
+                text = context.getString(R.string.close_app)
+                textSize = 14f
+                isAllCaps = false
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(palette.textMuted)
+                gravity = Gravity.CENTER
+                background = pressable(wash(palette.textMain), dp(10).toFloat())
+                layoutParams = LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(8) }
+                setOnClickListener { onCloseApp() }
+            }
+            rail.addView(closeBtn)
         }
 
         root.addView(rail)
@@ -128,8 +147,8 @@ class SettingsScreenView(
             return scroll
         }
 
-        contentContainers[SettingsTab.AUDIO] = wrapSection(buildAudioSection).also { contentStage.addView(it) }
         contentContainers[SettingsTab.CONNECTION] = wrapSection(buildConnectionSection).also { contentStage.addView(it) }
+        contentContainers[SettingsTab.AUDIO] = wrapSection(buildAudioSection).also { contentStage.addView(it) }
         contentContainers[SettingsTab.DISPLAY] = wrapSection(buildDisplaySection).also { contentStage.addView(it) }
         contentContainers[SettingsTab.SYSTEM] = wrapSection(buildSystemSection).also { contentStage.addView(it) }
         if (hasExperimental && buildExperimentalSection != null) {
@@ -142,10 +161,14 @@ class SettingsScreenView(
         selectTab(initialTab)
     }
 
+    var onTabChanged: ((SettingsTab) -> Unit)? = null
+
     fun currentTab(): SettingsTab = activeTab
 
+    fun activeScrollView(): ScrollView? = contentContainers[activeTab] as? ScrollView
+
     fun selectTab(tab: SettingsTab) {
-        val target = if (tab in tabButtons) tab else SettingsTab.AUDIO
+        val target = if (tab in tabButtons) tab else SettingsTab.CONNECTION
         activeTab = target
         for ((t, btn) in tabButtons) {
             val isSelected = (t == target)
@@ -164,6 +187,7 @@ class SettingsScreenView(
         for ((t, container) in contentContainers) {
             container.visibility = if (t == target) View.VISIBLE else View.GONE
         }
+        onTabChanged?.invoke(target)
     }
 
     private fun dp(v: Int) = (v * context.resources.displayMetrics.density).toInt()

@@ -101,7 +101,7 @@ class DiPlayActivity : ComponentActivity() {
     private var hero: HeroStageCard? = null
     private var widgets: QuickWidgetsView? = null
     private var cockpitHost: FrameLayout? = null
-    private var activeSettingsTab: SettingsTab = SettingsTab.AUDIO
+    private var activeSettingsTab: SettingsTab = SettingsTab.CONNECTION
     /** The exit question, while it is up: one instance, so a second press cannot stack a second sheet. */
     private var exitSheet: ConfirmSheetView? = null
     /** The palette this redraw resolved to; the cockpit's views are built from it. */
@@ -274,7 +274,8 @@ class DiPlayActivity : ComponentActivity() {
         }
         pendingCarHotspotSetup = savedInstanceState?.getBoolean("pending_car_hotspot") ?: false
         val openDrawerExtra = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS_DRAWER, false)
-        page = savedInstanceState?.getString("page") ?: intent.getStringExtra("page") ?: if (openDrawerExtra) "settings" else "home"
+        page = savedInstanceState?.getString("page")
+            ?: if (openDrawerExtra) "settings" else (intent.getStringExtra("page") ?: "home")
         savedInstanceState?.getString(KEY_SETTINGS_TAB)?.let {
             activeSettingsTab = SettingsTab.fromKey(it)
         }
@@ -343,14 +344,14 @@ class DiPlayActivity : ComponentActivity() {
             val requestedPage = intent.getStringExtra("page")
             val openDrawerExtra = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS_DRAWER, false)
             page = when {
-                requestedPage != null -> requestedPage
                 openDrawerExtra -> "settings"
+                requestedPage != null -> requestedPage
                 else -> "home"
             }
             val tabExtra = intent.getStringExtra(EXTRA_SETTINGS_TAB)
             if (tabExtra != null) {
                 activeSettingsTab = SettingsTab.fromKey(tabExtra)
-            } else if (openDrawerExtra && requestedPage == null) {
+            } else if (openDrawerExtra) {
                 activeSettingsTab = SettingsTab.CONNECTION
             }
             render()
@@ -446,7 +447,11 @@ class DiPlayActivity : ComponentActivity() {
             return
         }
         if (page == "settings") {
-            setContentView(settingsScreen())
+            val screen = settingsScreen()
+            setContentView(screen)
+            val scroll = (screen as? SettingsScreenView)?.activeScrollView()
+            pageScroll = scroll
+            if (scroll != null) restoreScroll(scroll, pageScrollY)
             refreshStatus()
             return
         }
@@ -640,19 +645,20 @@ class DiPlayActivity : ComponentActivity() {
             "${getString(R.string.navigation_stream_type)} · $navigationStreamType"
         }
 
-    private fun openSettings(tab: SettingsTab = SettingsTab.AUDIO) {
+    private fun openSettings(tab: SettingsTab = SettingsTab.CONNECTION) {
         page = "settings"
         activeSettingsTab = tab
         render()
     }
 
     private fun settingsScreen(): View {
-        return SettingsScreenView(
+        val screen = SettingsScreenView(
             this,
             palette,
             initialTab = activeSettingsTab,
             hasExperimental = ExperimentalFeatures.enabled,
             onBack = { page = "home"; render() },
+            onCloseApp = { confirmExit() },
             buildAudioSection = { col ->
                 val columns = CardColumns(col)
                 audioRoutingCard(columns)
@@ -691,6 +697,11 @@ class DiPlayActivity : ComponentActivity() {
                 }
             } else null,
         )
+        screen.onTabChanged = { tab ->
+            activeSettingsTab = tab
+            pageScroll = screen.activeScrollView()
+        }
+        return screen
     }
 
     /**

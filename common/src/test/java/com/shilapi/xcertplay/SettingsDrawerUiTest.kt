@@ -65,8 +65,8 @@ class SettingsDrawerUiTest {
         return found
     }
 
-    /** The drawer's own words: its header, and the first section in it. */
-    private val drawerWords = listOf("System settings", "Appearance")
+    /** The settings screen's own words: a rail tab title, and the active content section. */
+    private val drawerWords = listOf("System settings", "Wireless settings")
 
     /**
      * The cockpit, recognised by its main button. It used to say "Connect phone"; now that wired and
