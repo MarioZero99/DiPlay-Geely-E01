@@ -422,6 +422,7 @@ class DiPlayActivity : ComponentActivity() {
         cachedReport = null
         cachedHotspot = null
         cachedPageState = null
+        invalidateNetworkCache()
         // A route that no longer exists — "wireless" and "wired" were pages once — lands on the home
         // page rather than on a header with nothing under it.
         if (page !in KNOWN_PAGES) page = "home"
@@ -1400,7 +1401,7 @@ class DiPlayActivity : ComponentActivity() {
                 if (isFinishing) return@runOnUiThread
                 hopPhones = devices
                 hopPhonesAt = SystemClock.elapsedRealtime()
-                if (page == "home") render()
+                if (page == "home") refreshStatus() else render()
             }
         }, "car-hop-phones").apply { isDaemon = true }.start()
     }
@@ -1753,7 +1754,7 @@ class DiPlayActivity : ComponentActivity() {
             DiagLog.i(TAG_CAR_HOTSPOT, "app-start hotspot ${result.name.lowercase()} detail=${result.reason}")
             runOnUiThread {
                 if (isFinishing) return@runOnUiThread
-                if (page == "home") render()
+                if (page == "home") refreshStatus() else render()
             }
         }, "car-hotspot-start").apply { isDaemon = true }.start()
     }
@@ -1780,7 +1781,7 @@ class DiPlayActivity : ComponentActivity() {
             runOnUiThread {
                 hopStartInFlight = false
                 if (isFinishing) return@runOnUiThread
-                if (page == "home") render()
+                if (page == "home") refreshStatus() else render()
             }
         }, "car-hop-start").apply { isDaemon = true }.start()
     }
@@ -1972,6 +1973,18 @@ class DiPlayActivity : ComponentActivity() {
         }
     }
 
+    private var lastNetworkCheckElapsed = 0L
+    private var cachedJoinedWifiName: String? = null
+    private var cachedHotspotOn: Boolean? = null
+    private var cachedCanReleaseHotspot: Boolean = false
+    private var cachedCarBluetoothOn: Boolean = false
+
+    private fun invalidateNetworkCache() {
+        lastNetworkCheckElapsed = 0L
+        cachedJoinedWifiName = null
+        cachedHotspotOn = null
+    }
+
     /**
      * The Wi-Fi network the car is on right now, or null when it is on none.
      *
@@ -1979,10 +1992,16 @@ class DiPlayActivity : ComponentActivity() {
      * they just did in the car's settings took.
      */
     private fun joinedWifiName(): String? {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastNetworkCheckElapsed < NETWORK_STATUS_TTL_MILLIS) {
+            return cachedJoinedWifiName
+        }
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
         @Suppress("DEPRECATION")
         val ssid = runCatching { wifi.connectionInfo?.ssid }.getOrNull()?.removeSurrounding("\"")
-        return ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
+        val result = ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
+        cachedJoinedWifiName = result
+        return result
     }
 
     private fun hotspotSsid() = hotspot().first
@@ -2729,6 +2748,27 @@ class DiPlayActivity : ComponentActivity() {
             WirelessBluetoothHop.CAR -> saved != null
             null -> false
         }
+        val now = SystemClock.elapsedRealtime()
+        val hotspotOn: Boolean?
+        val hotspotCanBeReleased: Boolean
+        val carBtOn: Boolean
+        val carWifi: String?
+        if (now - lastNetworkCheckElapsed < NETWORK_STATUS_TTL_MILLIS) {
+            hotspotOn = cachedHotspotOn
+            hotspotCanBeReleased = cachedCanReleaseHotspot
+            carBtOn = cachedCarBluetoothOn
+            carWifi = cachedJoinedWifiName
+        } else {
+            hotspotOn = com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this)
+            hotspotCanBeReleased = com.shilapi.xcertplay.network.CarHotspotController(this).canReleaseHotspot()
+            carBtOn = carBluetoothOn()
+            carWifi = joinedWifiName()
+            cachedHotspotOn = hotspotOn
+            cachedCanReleaseHotspot = hotspotCanBeReleased
+            cachedCarBluetoothOn = carBtOn
+            cachedJoinedWifiName = carWifi
+            lastNetworkCheckElapsed = now
+        }
         return WirelessReadinessCheck.assess(
             WirelessReadinessInput(
                 credentialsSaved = hotspotError(hotspotSsid(), hotspotPassword()) == null,
@@ -2736,21 +2776,21 @@ class DiPlayActivity : ComponentActivity() {
                 // say. Not `!carHotspotOff()`: that is a car-hotspot-mode notion, false for every other
                 // mode whatever the hotspot is doing, so reading it here said the hotspot was running
                 // on a head unit that had never been asked — and refused the same-network route over it.
-                hotspotOn = com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this),
+                hotspotOn = hotspotOn,
                 // Asked rather than assumed: where the firmware exposes the AP switch, the same-network
                 // route is allowed to start with the hotspot on and the connect path releases it. Where
                 // it does not, the gap is the driver's to close and is reported as such.
-                hotspotCanBeReleased = com.shilapi.xcertplay.network.CarHotspotController(this).canReleaseHotspot(),
+                hotspotCanBeReleased = hotspotCanBeReleased,
                 hop = hop,
                 phoneChosen = phoneChosen,
-                carBluetoothOn = carBluetoothOn(),
+                carBluetoothOn = carBtOn,
                 adapterPlugged = plugged,
                 adapter = if (plugged || hop == WirelessBluetoothHop.USB_ADAPTER) seen else null,
                 mode = mode,
                 // The same-network route is the only one that asks the car to be a station, and the
                 // only one whose gap list reads this. Answered from the same read the page already
                 // uses to show the driver which network the car joined.
-                carWifiAssociated = joinedWifiName() != null,
+                carWifiAssociated = carWifi != null,
             ),
         )
     }
@@ -3428,6 +3468,9 @@ class DiPlayActivity : ComponentActivity() {
         private const val PAGE_FIRMWARE = "firmware"
 
         private const val HOP_DEVICES_TTL_MILLIS = 10_000L
+
+        /** How long network status (Wi-Fi, hotspot, BT) is reused during periodic ticks to prevent binder churn. */
+        private const val NETWORK_STATUS_TTL_MILLIS = 2000L
 
         /** How long a hop's maintenance answer is reused before it is asked for again. */
         private const val HOP_MAINTENANCE_TTL_MILLIS = 10_000L
