@@ -47,7 +47,10 @@ class FirmwarePageUiTest {
 
     @Before fun thisBuildHasThisHop() = CarBluetoothHops.override(hop)
 
-    @After fun giveTheBuildItsOwnAnswerBack() = CarBluetoothHops.resetOverride()
+    @After fun giveTheBuildItsOwnAnswerBack() {
+        CarBluetoothHops.resetOverride()
+        ExperimentalFeatures.resetOverride()
+    }
 
     private val heading = "Changing the head unit's firmware"
 
@@ -249,6 +252,33 @@ class FirmwarePageUiTest {
         assertTrue("and the reason is the script's own word", "remount-rw-failed" in shown)
     }
 
+    /**
+     * The permanent install is a local-package feature: an official package does not offer it.
+     *
+     * It is the one action here that leaves something a reboot does not undo, which is exactly why
+     * the package decides it. The two an official package still offers are the ones that change
+     * nothing on `/system` — and the restore in particular, because it is the way back out of an
+     * install a local package made, and a package that could not undo one would strand the car.
+     */
+    @Test fun anOfficialPackageDoesNotOfferThePermanentInstall() {
+        ExperimentalFeatures.override(false)
+        val activity = open("system")
+        val shown = settle(activity) { "Head unit firmware" in texts(activity) }
+        assertTrue("the card is still drawn", "Head unit firmware" in shown)
+        val labels = buttonLabels(activity)
+        assertFalse("no write to /system on offer", "Install the patched firmware" in labels)
+        assertTrue("the payload swap stays", "Use the new payload" in labels)
+        assertTrue("and so does the way back out", "Put the head unit's own firmware back" in labels)
+    }
+
+    /** The local package is the one that offers it, and it offers it unconditionally. */
+    @Test fun theLocalPackageOffersThePermanentInstall() {
+        ExperimentalFeatures.override(true)
+        val activity = open("system")
+        settle(activity) { "Head unit firmware" in texts(activity) }
+        assertTrue("the write is on offer", "Install the patched firmware" in buttonLabels(activity))
+    }
+
     /** A hop whose one operation is the one under test, answering from fields the test sets. */
     private class FirmwareHop : CarBluetoothHop {
         @Volatile var running = false
@@ -278,6 +308,7 @@ class FirmwarePageUiTest {
             title = "Head unit firmware",
             state = "This app's patched firmware is in place · SPP listening",
             detail = detail,
+            actions = ACTIONS,
             steps = STEPS,
             currentStep = currentStep,
             status = status,
@@ -302,6 +333,32 @@ class FirmwarePageUiTest {
             "Checking what was written",
             "Mounting /system read-only again",
             "Starting the gocsdk service",
+        )
+
+        /**
+         * The hop's three actions, with the one that writes `/system` marked as such.
+         *
+         * Literal for the same reason [STEPS] is. What is under test is which of them the page offers
+         * in a given package, so they have to be fixed here rather than read off the page.
+         */
+        val ACTIONS = listOf(
+            CarBluetoothMaintenance.Action(
+                id = "payload",
+                label = "Use the new payload",
+                confirmation = "This restarts only the process this app put in place.",
+                primary = true,
+            ),
+            CarBluetoothMaintenance.Action(
+                id = "install",
+                label = "Install the patched firmware",
+                confirmation = "This replaces /system/bin/gocsdk on the head unit.",
+                permanent = true,
+            ),
+            CarBluetoothMaintenance.Action(
+                id = "restore",
+                label = "Put the head unit's own firmware back",
+                confirmation = "This puts the copy taken before the first install back.",
+            ),
         )
     }
 }

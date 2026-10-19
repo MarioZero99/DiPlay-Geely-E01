@@ -206,7 +206,12 @@ class DiPlayActivity : ComponentActivity() {
         connect(notificationTransport)
     }
     private val tick = object : Runnable {
-        override fun run() { refreshStatus(); handler.postDelayed(this, 1000) }
+        override fun run() {
+            // Eight milliseconds is half a frame at 60 Hz: a tick that takes longer than this one
+            // second in three is a page that stutters while nothing is being touched.
+            PerfTrace.span("ui/tick", warnAboveMs = 8) { refreshStatus() }
+            handler.postDelayed(this, 1000)
+        }
     }
 
     /**
@@ -261,7 +266,11 @@ class DiPlayActivity : ComponentActivity() {
             isAppearanceLightStatusBars = false
             hide(WindowInsetsCompat.Type.statusBars())
         }
-        setupError = runCatching { DiPlayBootstrap.ensure(this) }.exceptionOrNull()?.let {
+        setupError = runCatching {
+            // Loading the CarPlay identity is crypto and file I/O on the drawing thread, so its cost
+            // belongs in the report next to the rest of the cold start rather than in a guess.
+            PerfTrace.span("startup/bootstrap", warnAboveMs = 200) { DiPlayBootstrap.ensure(this) }
+        }.exceptionOrNull()?.let {
             setupErrorDetail = "${it.javaClass.simpleName}: ${it.message}"
             DiagLog.e("DiPlaySetup", "CarPlay authentication could not be loaded", it)
             getString(R.string.setup_error_auth)
@@ -293,6 +302,37 @@ class DiPlayActivity : ComponentActivity() {
                 // flight: back would take the driver off the one screen that says what is happening.
                 if (page == PAGE_FIRMWARE && firmwareRunning()) return
                 goBack()
+            }
+        })
+        PerfTrace.mark("startup", "startup/create-done")
+        reportFirstDraw()
+    }
+
+    /**
+     * The moment the page is actually on screen — not the moment its view tree exists.
+     *
+     * The end of `onCreate` says the views were built; the first pre-draw says the driver can see
+     * them, and the gap between the two is layout, which is where a heavy page shows up. The process
+     * figure is recorded only where the platform can answer it: `getStartElapsedRealtime` is API 24,
+     * and a vendor ROM that answers 0 would otherwise turn it into a plausible-looking uptime.
+     */
+    private fun reportFirstDraw() {
+        val decor = window.decorView
+        decor.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (decor.viewTreeObserver.isAlive) decor.viewTreeObserver.removeOnPreDrawListener(this)
+                PerfTrace.mark("startup", "startup/first-draw")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    val processStart = android.os.Process.getStartElapsedRealtime()
+                    if (processStart > 0L) {
+                        PerfTrace.record(
+                            "startup/process-to-frame",
+                            SystemClock.elapsedRealtime() - processStart,
+                            warnAboveMs = 2_000,
+                        )
+                    }
+                }
+                return true
             }
         })
     }
@@ -348,7 +388,16 @@ class DiPlayActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun render() {
+    /**
+     * A whole page, built again.
+     *
+     * Timing it is the point: this throws away every view and rebuilds the tree, which is right for a
+     * page change and expensive for anything that happens on a timer. The report says which of the two
+     * it is costing, per sample, instead of leaving it to a reviewer to count widgets.
+     */
+    private fun render() = PerfTrace.span("ui/render", warnAboveMs = 32) { renderPage() }
+
+    private fun renderPage() {
         status = null; connectButton = null; disconnectButton = null; lastRunning = null; adapterStatus = null
         // One probe per redraw: laying the page out asks what the head unit supports several times over.
         cachedReport = null
@@ -1494,7 +1543,18 @@ class DiPlayActivity : ComponentActivity() {
                         .apply { setPadding(0, dp(12), 0, 0) },
                 )
             }
-            maintenance.actions.forEach { action ->
+            // The write that survives a reboot is a local-package feature. What is withheld here is
+            // the offer, not the hop's ability to do it — the same split `PERMANENT_INSTALL_OFFERED`
+            // makes inside the hop, and the same one the experimental bucket makes with the report
+            // upload: the code is in both packages, the control is in one. The other two actions stay
+            // in both, because the payload swap changes nothing on `/system` and the restore is the
+            // way back out of an install a local package made.
+            val offered = if (ExperimentalFeatures.enabled) {
+                maintenance.actions
+            } else {
+                maintenance.actions.filterNot { it.permanent }
+            }
+            offered.forEach { action ->
                 if (sessionLive) return@forEach
                 val running = hopMaintenanceRunning == action.id
                 card.addView(
@@ -2852,6 +2912,10 @@ class DiPlayActivity : ComponentActivity() {
         appendLine("Session: ${if (CarPlayBackgroundSession.active) "active" else if (CarPlayBackgroundSession.hasSession()) "connecting" else "stopped"}")
         appendLine("Head-unit board: ${Build.BOARD}; hardware: ${Build.HARDWARE}; build: ${Build.DISPLAY}")
         appendLine(DiagnosticCounters.summary())
+        // Directly under the loss counters, and in the header rather than in a log section: the byte
+        // budget always keeps the header, and a reader looking for "why is it slow" should not have
+        // to scroll through a bring-up that ended three runs ago to find the numbers.
+        appendLine(PerfTrace.summary())
         appendLine()
         appendLine("--- Connection attempts (newest last) ---")
         appendLine(recentAttempts(appContext))

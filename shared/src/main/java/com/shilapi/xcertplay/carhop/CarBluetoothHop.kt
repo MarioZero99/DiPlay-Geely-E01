@@ -49,6 +49,17 @@ data class CarBluetoothMaintenance(
         val confirmation: String,
         /** The one to offer most prominently. At most one action should carry it. */
         val primary: Boolean = false,
+        /**
+         * Whether what this leaves on the head unit outlives a reboot.
+         *
+         * Said by the hop because only the hop knows what its action does, and read by the page
+         * because whether it may be offered is not the hop's question: the permanent install writes
+         * `/system`, a package handed to a driver does not carry it, and the page is what decides
+         * that. The other two do not: the payload swap restarts a process, and the restore puts the
+         * original back, which is the way out of a permanent install and has to stay reachable from
+         * the package that no longer makes one.
+         */
+        val permanent: Boolean = false,
     )
 
     companion object {
