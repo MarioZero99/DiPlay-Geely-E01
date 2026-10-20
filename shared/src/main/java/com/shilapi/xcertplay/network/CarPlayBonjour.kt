@@ -187,11 +187,27 @@ internal fun <T> bindAvailableMdnsFamilies(
     return bound
 }
 
+internal enum class NsdPublishResult { REGISTERED, REFUSED, TIMED_OUT }
+
+/**
+ * Whether this run may bind its own responder on 5353.
+ *
+ * A record the system daemon accepted stays there. A refusal means the daemon did not take it, so
+ * the bundled responder is the remaining way to publish. A timeout is neither: the register may
+ * still land, and binding beside it gives the phone two AirPlay answers. The bundled responder
+ * waits until that register is confirmed gone.
+ */
+internal fun bundledMdnsAfterNsd(result: NsdPublishResult, unregistered: Boolean): Boolean = when (result) {
+    NsdPublishResult.REGISTERED -> false
+    NsdPublishResult.REFUSED -> true
+    NsdPublishResult.TIMED_OUT -> unregistered
+}
+
 /**
  * Publishes the accessory AirPlay service and discovers the iPhone's CarPlay control service.
  *
- * The NSD callbacks only enqueue work. Resolution, probing, and [onEvent] all run on the worker
- * started by [start], so a blocking consumer callback never runs on the caller or main thread.
+ * [start] only launches the worker. Publication, the NSD wait, resolution, probing, and [onEvent]
+ * all run there, so the wireless bring-up can open iAP2 without waiting on mDNS.
  */
 class CarPlayBonjour(
     context: Context,
@@ -279,9 +295,14 @@ class CarPlayBonjour(
     private var registrationResult = REGISTRATION_PENDING
     private val registrationLatch = CountDownLatch(1)
 
-    /** Set when the run stops waiting for NSD, so a callback that arrives afterwards changes nothing. */
+    /** Set when the run stops waiting for NSD, so a late success withdraws the record it just added. */
     @Volatile
     private var registrationAbandoned = false
+    @Volatile
+    private var unregistrationLatch = CountDownLatch(1)
+    @Volatile
+    private var unregistrationFailed = false
+    private val nsdUnregisterAttempts = AtomicInteger()
     private var discoveryRequested = false
     @Volatile
     private var worker: Thread? = null
@@ -330,24 +351,39 @@ class CarPlayBonjour(
 
     private val registrationListener = object : NsdManager.RegistrationListener {
         override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
-            // The fallback has already been taken and this registration given up: a late success must not
-            // leave this run believing it holds a record it has handed back.
-            if (registrationAbandoned) return
+            // The register landed after this run stopped waiting. Leaving it up publishes an AirPlay
+            // record the fallback must not sit beside, so it is withdrawn off this callback.
+            if (registrationAbandoned) {
+                DiagLog.w(TAG, "AirPlay NSD registered after the run gave it up; withdrawing the record")
+                Thread(::withdrawNsdRegistration, "carplay-nsd-withdraw").apply {
+                    isDaemon = true
+                    start()
+                }
+                return
+            }
             registrationResult = REGISTRATION_OK
             registrationLatch.countDown()
         }
 
         override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
             DiagLog.w(TAG, "AirPlay NSD registration failed code=$errorCode")
-            if (registrationAbandoned) return
+            if (registrationAbandoned) {
+                // The daemon refused it, so there is no record left to withdraw.
+                unregistrationLatch.countDown()
+                return
+            }
             registrationResult = errorCode
             registrationLatch.countDown()
         }
 
-        override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) = Unit
+        override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {
+            unregistrationLatch.countDown()
+        }
 
         override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
             DiagLog.w(TAG, "AirPlay NSD unregistration failed code=$errorCode")
+            unregistrationFailed = true
+            unregistrationLatch.countDown()
         }
     }
 
@@ -395,76 +431,131 @@ class CarPlayBonjour(
             started = true
             try {
                 multicastLock.acquire()
-                // The system's own responder first, and the bundled one only if it will not take the
-                // service. 5353 has one owner on this head unit — the firmware's `mdnsd`, which sets
-                // `SO_REUSEADDR` before binding — so a bundled socket bound first is refused outright
-                // and the advertisement never goes out at all: every wireless report before 2026-10-20
-                // reads `bonjourAdded=0`. The NSD service talks to that daemon instead of competing with
-                // it, which is why it is asked first now that the port question is understood.
-                nsdAvailable = runCatching {
-                    registerAirPlay()
-                    registrationRequested = true
-                    // Bounded, and only to learn the answer: a platform that never calls back must not
-                    // hold the bring-up, so a timeout counts as a refusal and the bundled path is tried.
-                    registrationLatch.await(NSD_REGISTRATION_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) &&
-                        registrationResult == REGISTRATION_OK
-                }.getOrElse { error ->
-                    DiagLog.w(TAG, "AirPlay NSD registration threw: ${error.message}")
-                    false
-                }
-                if (nsdAvailable) {
-                    publishedFamilies = "nsd"
-                    nsdManager.discoverServices(
-                        CARPLAY_CONTROL_SERVICE_TYPE,
-                        NsdManager.PROTOCOL_DNS_SD,
-                        discoveryListener,
-                    )
-                    discoveryRequested = true
-                } else {
-                    // The daemon would not take it. The bundled responder is the last way to publish at
-                    // all. Registration is given up before that, so a callback arriving late cannot leave
-                    // this run claiming a record it has already unregistered.
-                    if (registrationRequested) {
-                        registrationRequested = false
-                        registrationAbandoned = true
-                        runCatching { nsdManager.unregisterService(registrationListener) }
-                    }
-                    // The same condition the bundled path always had, not a narrower one: with the
-                    // caller asking for it, a missing advertised host is a configuration error the
-                    // constructor has already refused, not a reason to publish nothing.
-                    val mayUseBundled = useInterfaceMdns ||
-                        (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP && localAdvertisedAddress != null)
-                    if (mayUseBundled) {
-                        requireNotNull(localAdvertisedAddress) {
-                            "Interface mDNS requires a local advertised address"
-                        }
-                        DiagLog.w(TAG, "NSD did not publish the AirPlay record; falling back to bundled mDNS")
-                        interfaceMdnsActive = startInterfaceMdns()
-                    } else {
-                        DiagLog.w(TAG, "no mDNS path published the AirPlay record; continuing without discovery")
-                    }
-                }
+                // Publication waits on the system daemon for up to a few seconds. That wait stays on
+                // the worker: the caller goes on to open iAP2, which has to start as soon as RFCOMM is up.
                 worker = Thread(::runWorker, WORKER_NAME).apply {
                     isDaemon = true
                     start()
                 }
             } catch (error: Exception) {
                 closed = true
-                if (registrationRequested) {
-                    registrationRequested = false
-                    runCatching { nsdManager.unregisterService(registrationListener) }
-                }
-                if (discoveryRequested) {
-                    discoveryRequested = false
-                    runCatching { nsdManager.stopServiceDiscovery(discoveryListener) }
-                }
                 worker?.interrupt()
                 worker = null
-                releaseInterfaceMdns()
-                publishedFamilies = "none"
                 if (multicastLock.isHeld) multicastLock.release()
                 throw error
             }
+        }
+    }
+
+    /**
+     * Asks the system daemon to publish, and binds the bundled responder only when that daemon has
+     * answered and is not holding the record.
+     *
+     * Runs on the worker. [start] has already returned, so the few seconds this may spend waiting are
+     * not seconds the iAP2 session spends waiting with it.
+     *
+     * @return false when this run was closed or interrupted and the worker should stop.
+     */
+    private fun publishAirPlay(): Boolean {
+        if (closed) return false
+        val result = try {
+            synchronized(lifecycleLock) {
+                if (closed) return false
+                registerAirPlay()
+                registrationRequested = true
+            }
+            val answered = registrationLatch.await(NSD_REGISTRATION_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            when {
+                answered && registrationResult == REGISTRATION_OK -> NsdPublishResult.REGISTERED
+                answered -> NsdPublishResult.REFUSED
+                else -> NsdPublishResult.TIMED_OUT
+            }
+        } catch (_: InterruptedException) {
+            return false
+        } catch (error: Exception) {
+            DiagLog.w(TAG, "AirPlay NSD registration threw: ${error.message}")
+            NsdPublishResult.REFUSED
+        }
+        if (closed) return false
+        if (result == NsdPublishResult.REGISTERED) {
+            nsdAvailable = true
+            publishedFamilies = "nsd"
+            synchronized(lifecycleLock) {
+                if (closed) return false
+                nsdManager.discoverServices(
+                    CARPLAY_CONTROL_SERVICE_TYPE,
+                    NsdManager.PROTOCOL_DNS_SD,
+                    discoveryListener,
+                )
+                discoveryRequested = true
+            }
+            return true
+        }
+        val unregistered = when (result) {
+            NsdPublishResult.TIMED_OUT -> withdrawAbandonedRegistration() ?: return false
+            NsdPublishResult.REFUSED -> {
+                synchronized(lifecycleLock) {
+                    if (registrationRequested) {
+                        registrationRequested = false
+                        registrationAbandoned = true
+                        withdrawNsdRegistration()
+                    }
+                }
+                true
+            }
+            NsdPublishResult.REGISTERED -> false
+        }
+        if (closed) return false
+        if (!bundledMdnsAfterNsd(result, unregistered)) {
+            DiagLog.w(TAG, "NSD registration was not confirmed gone; leaving 5353 with the system daemon")
+            return true
+        }
+        val mayUseBundled = useInterfaceMdns ||
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP && localAdvertisedAddress != null)
+        if (!mayUseBundled) {
+            DiagLog.w(TAG, "no mDNS path published the AirPlay record; continuing without discovery")
+            return true
+        }
+        requireNotNull(localAdvertisedAddress) {
+            "Interface mDNS requires a local advertised address"
+        }
+        DiagLog.w(TAG, "NSD did not publish the AirPlay record; falling back to bundled mDNS")
+        interfaceMdnsActive = startInterfaceMdns()
+        return true
+    }
+
+    /**
+     * Drops a registration this run is no longer waiting on, and reports whether the daemon confirmed
+     * the record is gone.
+     *
+     * A timeout has no such confirmation until [NsdManager.RegistrationListener.onServiceUnregistered].
+     * A refusal has nothing published; the bundled responder does not need the confirmation.
+     */
+    private fun withdrawAbandonedRegistration(): Boolean? {
+        val latch = synchronized(lifecycleLock) {
+            if (!registrationRequested) return true
+            registrationRequested = false
+            registrationAbandoned = true
+            armUnregistrationWait()
+        }
+        withdrawNsdRegistration()
+        val confirmed = try {
+            latch.await(NSD_REGISTRATION_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            return null
+        }
+        return confirmed && !unregistrationFailed
+    }
+
+    private fun armUnregistrationWait(): CountDownLatch {
+        unregistrationFailed = false
+        return CountDownLatch(1).also { unregistrationLatch = it }
+    }
+
+    private fun withdrawNsdRegistration() {
+        if (nsdUnregisterAttempts.incrementAndGet() > 2) return
+        runCatching { nsdManager.unregisterService(registrationListener) }.onFailure { error ->
+            DiagLog.w(TAG, "NSD unregister was refused: ${error.message}")
         }
     }
 
@@ -480,14 +571,16 @@ class CarPlayBonjour(
      * A family that will not bind costs that family and nothing else. On this platform the second
      * family's bind is refused with `EADDRINUSE` by our own first socket, not by another process (see
      * [bindAvailableMdnsFamilies]), so letting the refusal escape would close the family that worked and
-     * leave `mdnsFamilies=none`. Returns false only when no address bound at all, which is the caller's
-     * signal to fall back to the system NSD service.
+     * leave `mdnsFamilies=none`. Returns false when no address bound, which means this run published
+     * nothing: the system daemon was already asked.
      *
      * Serialised on [interfaceMdnsLock] rather than [lifecycleLock]: the run being closed is not this
      * one, and it has a lifecycle lock of its own.
      */
     private fun startInterfaceMdns(): Boolean {
         synchronized(interfaceMdnsLock) {
+            // A release queued by the service going away must not close sockets this run has taken.
+            responderGeneration++
             // The socket already bound for these addresses is borrowed, not rebuilt. Closing and
             // re-binding here is the exact race process-wide ownership exists to remove: the port comes
             // back a moment later, and in between any bind — ours included — is refused.
@@ -554,14 +647,12 @@ class CarPlayBonjour(
      *
      * The socket is the process's, not this run's. Closing it here would hand the next attempt the
      * very `EADDRINUSE` the process-wide ownership exists to remove: a port released a moment ago can
-     * still be refused while the kernel finishes with the last listener. The record, unlike the socket,
-     * belongs to the run that published it, so it goes back here — and only if this run is still the
-     * owner, because a run that was already replaced must not take the newer run's record down.
+     * still be refused while the kernel finishes with the last listener. The record belongs to the run
+     * that published it. A run that is no longer the owner still takes its own listener and its own
+     * records off; the records a newer run published are a different list and stay up.
      */
     private fun releaseInterfaceMdns() {
         synchronized(interfaceMdnsLock) {
-            if (interfaceMdnsOwner !== this) return
-            interfaceMdnsOwner = null
             val records = publishedRecords.toList()
             publishedRecords.clear()
             // The sockets stay on the process's list: they are still bound, and clearing them here would
@@ -575,6 +666,7 @@ class CarPlayBonjour(
                 runCatching { dns.removeServiceListener("$CARPLAY_CONTROL_SERVICE_TYPE.local.", interfaceListener) }
                 records.forEach { record -> runCatching { dns.unregisterService(record) } }
             }
+            if (interfaceMdnsOwner === this) interfaceMdnsOwner = null
         }
     }
 
@@ -586,6 +678,7 @@ class CarPlayBonjour(
             closed = true
             if (registrationRequested) {
                 registrationRequested = false
+                registrationAbandoned = true
                 runCatching { nsdManager.unregisterService(registrationListener) }
             }
             if (discoveryRequested) {
@@ -630,6 +723,7 @@ class CarPlayBonjour(
     }
 
     private fun runWorker() {
+        if (!publishAirPlay()) return
         while (!closed) {
             if (interfaceMdnsActive) {
                 try {
@@ -916,6 +1010,12 @@ class CarPlayBonjour(
         private var interfaceMdnsOwner: CarPlayBonjour? = null
 
         /**
+         * Bumped when a run takes the sockets. A release that read an older value is for a service
+         * that has already been replaced, and it must not close the sockets the new run is using.
+         */
+        private var responderGeneration = 0
+
+        /**
          * Caller holds [interfaceMdnsLock]. Closing an instance can block, and that is deliberate: the
          * sockets have to be gone before the next run binds, not merely on their way out.
          */
@@ -937,9 +1037,11 @@ class CarPlayBonjour(
          * `onDestroy` on the main thread, where a blocked socket teardown reads as a frozen screen.
          */
         fun releaseProcessResponder() {
+            val generation = synchronized(interfaceMdnsLock) { responderGeneration }
             Thread(
                 {
                     synchronized(interfaceMdnsLock) {
+                        if (responderGeneration != generation) return@synchronized
                         interfaceMdnsOwner = null
                         closeInterfaceMdnsLocked()
                     }

@@ -177,4 +177,17 @@ class CarPlayBonjourTest {
         // Empty is the caller's signal to fall back to system NSD; it must not see an exception.
         assertTrue(bound.isEmpty())
     }
+
+    @Test fun aRegisteredNsdRecordKeepsTheBundledResponderOff() {
+        assertFalse(bundledMdnsAfterNsd(NsdPublishResult.REGISTERED, unregistered = true))
+    }
+
+    @Test fun aRefusedNsdRecordAllowsTheBundledResponder() {
+        assertTrue(bundledMdnsAfterNsd(NsdPublishResult.REFUSED, unregistered = false))
+    }
+
+    @Test fun aTimedOutNsdRecordAllowsTheBundledResponderOnlyAfterItIsGone() {
+        assertFalse(bundledMdnsAfterNsd(NsdPublishResult.TIMED_OUT, unregistered = false))
+        assertTrue(bundledMdnsAfterNsd(NsdPublishResult.TIMED_OUT, unregistered = true))
+    }
 }
