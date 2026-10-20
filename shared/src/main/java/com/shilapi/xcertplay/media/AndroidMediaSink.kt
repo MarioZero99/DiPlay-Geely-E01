@@ -1082,8 +1082,13 @@ private class AudioRenderer(
 
     private fun maintainPlaybackBuffer() {
         val track = track ?: return
+        val underrunDetected = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            track.compatUnderruns() > underrunsAtPlaybackStart
+        } else {
+            true // On API < 24, underrunCount is unsupported by the platform; rely on bufferProgress.queuedBytes == 0L
+        }
         if (bufferProgress.shouldRebuffer(format.audioType, playbackStarted,
-                track.compatUnderruns() > underrunsAtPlaybackStart, queue.isEmpty(), track.playbackHeadPosition)) {
+                underrunDetected, queue.isEmpty(), track.playbackHeadPosition)) {
             // The hardware buffer has actually drained. Pause without flushing or discarding PCM,
             // then use the configured start threshold again when music resumes.
             track.pause()
