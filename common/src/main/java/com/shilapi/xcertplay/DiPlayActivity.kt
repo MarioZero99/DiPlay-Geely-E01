@@ -1973,37 +1973,45 @@ class DiPlayActivity : ComponentActivity() {
         }
     }
 
-    private var lastNetworkCheckElapsed = 0L
-    private var cachedJoinedWifiName: String? = null
-    private var cachedHotspotOn: Boolean? = null
-    private var cachedCanReleaseHotspot: Boolean = false
-    private var cachedCarBluetoothOn: Boolean = false
+    /**
+     * Joined Wi-Fi, hotspot and Bluetooth, filled by one read.
+     *
+     * Asking for the name while the page is built used to move this clock on its own. Readiness then
+     * treated the snapshot as fresh and kept the empty hotspot and Bluetooth left by the redraw, so
+     * the first two seconds after every home draw could let a connection through a hotspot that was
+     * off, or say Bluetooth was off on a cold start.
+     */
+    private val networkStatus = NetworkStatusSnapshot(
+        ttlMillis = NETWORK_STATUS_TTL_MILLIS,
+        now = SystemClock::elapsedRealtime,
+        read = { readNetworkStatus() },
+    )
 
     private fun invalidateNetworkCache() {
-        lastNetworkCheckElapsed = 0L
-        cachedJoinedWifiName = null
-        cachedHotspotOn = null
+        networkStatus.invalidate()
+    }
+
+    private fun readNetworkStatus(): NetworkStatus {
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        @Suppress("DEPRECATION")
+        val ssid = wifi?.let { runCatching { it.connectionInfo?.ssid }.getOrNull() }?.removeSurrounding("\"")
+        val joined = ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
+        return NetworkStatus(
+            joinedWifiName = joined,
+            hotspotOn = com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this),
+            hotspotCanBeReleased = CarHotspotController(this).canReleaseHotspot(),
+            carBluetoothOn = carBluetoothOn(),
+        )
     }
 
     /**
      * The Wi-Fi network the car is on right now, or null when it is on none.
      *
      * Read only: this page never joins a network. It exists so the driver can see whether the step
-     * they just did in the car's settings took.
+     * they just did in the car's settings took. The name is one field of [networkStatus], so asking
+     * for it fills hotspot and Bluetooth in the same read.
      */
-    private fun joinedWifiName(): String? {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastNetworkCheckElapsed < NETWORK_STATUS_TTL_MILLIS) {
-            return cachedJoinedWifiName
-        }
-        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
-        @Suppress("DEPRECATION")
-        val ssid = runCatching { wifi.connectionInfo?.ssid }.getOrNull()?.removeSurrounding("\"")
-        val result = ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
-        cachedJoinedWifiName = result
-        lastNetworkCheckElapsed = now
-        return result
-    }
+    private fun joinedWifiName(): String? = networkStatus.get().joinedWifiName
 
     private fun hotspotSsid() = hotspot().first
     private fun hotspotPassword() = hotspot().second
@@ -2729,11 +2737,11 @@ class DiPlayActivity : ComponentActivity() {
     /**
      * What a connection would be missing right now.
      *
-     * Read from the head unit on every call — the once-a-second tick calls it too, because a fact
-     * that changed without a redraw is exactly what the tick is for. What that costs here is a
-     * couple of preference reads, the AP state (one reflective call), the vendor radio's ready flag
-     * and the joined SSID; this build has no adapter route, so the USB enumeration below is never
-     * reached. A build that adds one would make this the wrong thing to call every second.
+     * Read from the head unit when the tick or a redraw asks — the tick calls it because a fact
+     * that changed without a redraw is exactly what the tick is for. The four radio facts share
+     * [networkStatus] and are refreshed together, at most once a window; the preference reads below
+     * still happen on every call. This build has no adapter route, so the USB enumeration further
+     * down is never reached. A build that adds one would make this the wrong thing to call every second.
      */
     private fun currentWirelessReadiness(): WirelessReadiness {
         val mode = AirPlayPersistence.loadWirelessHotspotMode(this)
@@ -2749,27 +2757,11 @@ class DiPlayActivity : ComponentActivity() {
             WirelessBluetoothHop.CAR -> saved != null
             null -> false
         }
-        val now = SystemClock.elapsedRealtime()
-        val hotspotOn: Boolean?
-        val hotspotCanBeReleased: Boolean
-        val carBtOn: Boolean
-        val carWifi: String?
-        if (now - lastNetworkCheckElapsed < NETWORK_STATUS_TTL_MILLIS) {
-            hotspotOn = cachedHotspotOn
-            hotspotCanBeReleased = cachedCanReleaseHotspot
-            carBtOn = cachedCarBluetoothOn
-            carWifi = cachedJoinedWifiName
-        } else {
-            hotspotOn = com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this)
-            hotspotCanBeReleased = com.shilapi.xcertplay.network.CarHotspotController(this).canReleaseHotspot()
-            carBtOn = carBluetoothOn()
-            carWifi = joinedWifiName()
-            cachedHotspotOn = hotspotOn
-            cachedCanReleaseHotspot = hotspotCanBeReleased
-            cachedCarBluetoothOn = carBtOn
-            cachedJoinedWifiName = carWifi
-            lastNetworkCheckElapsed = now
-        }
+        val radio = networkStatus.get()
+        val hotspotOn = radio.hotspotOn
+        val hotspotCanBeReleased = radio.hotspotCanBeReleased
+        val carBtOn = radio.carBluetoothOn
+        val carWifi = radio.joinedWifiName
         return WirelessReadinessCheck.assess(
             WirelessReadinessInput(
                 credentialsSaved = hotspotError(hotspotSsid(), hotspotPassword()) == null,
