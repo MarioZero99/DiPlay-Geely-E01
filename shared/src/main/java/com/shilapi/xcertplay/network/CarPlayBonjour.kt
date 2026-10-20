@@ -158,6 +158,36 @@ internal fun advertisedHostAddress(advertisedHost: String?): InetAddress? {
 }
 
 /**
+ * Binds every address it can, keeping the families that worked when one family's bind is refused.
+ *
+ * KitKat's `MulticastSocket` binds 5353 before enabling `SO_REUSEADDR`, so the second address family is
+ * refused with `EADDRINUSE` even though no other process owns the port — the refusal is ours, not
+ * someone else's. Without this the first family takes the port, the second throws, and the caller's
+ * teardown closes both: `mdnsFamilies=none`, no advertisement at all, which on this head unit is what
+ * every wireless run logged before 2026-10-20. One family advertised is worth more than none, and the
+ * address the phone dials comes from 0x4301 either way.
+ *
+ * Taken from the parent repository (`programmerguohuajing/DiPlay-Legacy-Android`), which fixed this
+ * for Android 4.x; the grandparent keeps the unguarded loop because it ships to Android 8 and above,
+ * where the platform enables `SO_REUSEADDR` before binding.
+ */
+internal fun <T> bindAvailableMdnsFamilies(
+    addresses: List<InetAddress>,
+    bind: (InetAddress) -> T,
+    onFailure: (InetAddress, IOException) -> Unit,
+): List<Pair<InetAddress, T>> {
+    val bound = mutableListOf<Pair<InetAddress, T>>()
+    for (address in addresses) {
+        try {
+            bound += address to bind(address)
+        } catch (error: IOException) {
+            onFailure(address, error)
+        }
+    }
+    return bound
+}
+
+/**
  * Publishes the accessory AirPlay service and discovers the iPhone's CarPlay control service.
  *
  * The NSD callbacks only enqueue work. Resolution, probing, and [onEvent] all run on the worker
@@ -197,6 +227,25 @@ class CarPlayBonjour(
         (listOfNotNull(localAdvertisedAddress) + additionalAddresses).distinct()
     @Volatile
     private var publishedFamilies = "none"
+
+    /**
+     * Whether the bundled responder is the discovery path this run actually got.
+     *
+     * Starts false and only [start] sets it, because which path ran is the registration's answer and not
+     * the caller's wish: the caller says the bundled responder may be used (`useInterfaceMdns`), NSD is
+     * asked first regardless, and this flag says whether the fallback ended up being taken. A value that
+     * began as the caller's preference would send the worker down the bundled path while NSD was the one
+     * publishing.
+     */
+    @Volatile
+    private var interfaceMdnsActive = false
+
+    /** Whether the system NSD service published the record this run, which is the normal answer. */
+    @Volatile
+    private var nsdAvailable = false
+
+    /** The records this run published, so [releaseInterfaceMdns] gives back these and no one else's. */
+    private val publishedRecords = mutableListOf<ServiceInfo>()
     private val addedCount = AtomicInteger()
     private val resolvedCount = AtomicInteger()
     private val addressMismatchCount = AtomicInteger()
@@ -220,6 +269,19 @@ class CarPlayBonjour(
      */
     private var released = false
     private var registrationRequested = false
+
+    /**
+     * The outcome of the NSD registration, so [start] can tell a service that got published from one the
+     * platform refused. Registration is asynchronous and its callback is the only word on it; without
+     * this, "NSD first, bundled mDNS as the fallback" would fall back on a failure it could not see.
+     */
+    @Volatile
+    private var registrationResult = REGISTRATION_PENDING
+    private val registrationLatch = CountDownLatch(1)
+
+    /** Set when the run stops waiting for NSD, so a callback that arrives afterwards changes nothing. */
+    @Volatile
+    private var registrationAbandoned = false
     private var discoveryRequested = false
     @Volatile
     private var worker: Thread? = null
@@ -267,10 +329,19 @@ class CarPlayBonjour(
     }
 
     private val registrationListener = object : NsdManager.RegistrationListener {
-        override fun onServiceRegistered(serviceInfo: NsdServiceInfo) = Unit
+        override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
+            // The fallback has already been taken and this registration given up: a late success must not
+            // leave this run believing it holds a record it has handed back.
+            if (registrationAbandoned) return
+            registrationResult = REGISTRATION_OK
+            registrationLatch.countDown()
+        }
 
         override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
             DiagLog.w(TAG, "AirPlay NSD registration failed code=$errorCode")
+            if (registrationAbandoned) return
+            registrationResult = errorCode
+            registrationLatch.countDown()
         }
 
         override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) = Unit
@@ -324,20 +395,54 @@ class CarPlayBonjour(
             started = true
             try {
                 multicastLock.acquire()
-                if (useInterfaceMdns || (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP && localAdvertisedAddress != null)) {
-                    requireNotNull(localAdvertisedAddress) {
-                        "Interface mDNS requires a local advertised address"
-                    }
-                    startInterfaceMdns()
-                } else {
+                // The system's own responder first, and the bundled one only if it will not take the
+                // service. 5353 has one owner on this head unit — the firmware's `mdnsd`, which sets
+                // `SO_REUSEADDR` before binding — so a bundled socket bound first is refused outright
+                // and the advertisement never goes out at all: every wireless report before 2026-10-20
+                // reads `bonjourAdded=0`. The NSD service talks to that daemon instead of competing with
+                // it, which is why it is asked first now that the port question is understood.
+                nsdAvailable = runCatching {
                     registerAirPlay()
                     registrationRequested = true
+                    // Bounded, and only to learn the answer: a platform that never calls back must not
+                    // hold the bring-up, so a timeout counts as a refusal and the bundled path is tried.
+                    registrationLatch.await(NSD_REGISTRATION_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) &&
+                        registrationResult == REGISTRATION_OK
+                }.getOrElse { error ->
+                    DiagLog.w(TAG, "AirPlay NSD registration threw: ${error.message}")
+                    false
+                }
+                if (nsdAvailable) {
+                    publishedFamilies = "nsd"
                     nsdManager.discoverServices(
                         CARPLAY_CONTROL_SERVICE_TYPE,
                         NsdManager.PROTOCOL_DNS_SD,
                         discoveryListener,
                     )
                     discoveryRequested = true
+                } else {
+                    // The daemon would not take it. The bundled responder is the last way to publish at
+                    // all. Registration is given up before that, so a callback arriving late cannot leave
+                    // this run claiming a record it has already unregistered.
+                    if (registrationRequested) {
+                        registrationRequested = false
+                        registrationAbandoned = true
+                        runCatching { nsdManager.unregisterService(registrationListener) }
+                    }
+                    // The same condition the bundled path always had, not a narrower one: with the
+                    // caller asking for it, a missing advertised host is a configuration error the
+                    // constructor has already refused, not a reason to publish nothing.
+                    val mayUseBundled = useInterfaceMdns ||
+                        (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP && localAdvertisedAddress != null)
+                    if (mayUseBundled) {
+                        requireNotNull(localAdvertisedAddress) {
+                            "Interface mDNS requires a local advertised address"
+                        }
+                        DiagLog.w(TAG, "NSD did not publish the AirPlay record; falling back to bundled mDNS")
+                        interfaceMdnsActive = startInterfaceMdns()
+                    } else {
+                        DiagLog.w(TAG, "no mDNS path published the AirPlay record; continuing without discovery")
+                    }
                 }
                 worker = Thread(::runWorker, WORKER_NAME).apply {
                     isDaemon = true
@@ -364,8 +469,7 @@ class CarPlayBonjour(
     }
 
     /**
-     * Publishes the AirPlay record and listens for the phone on every advertised address, taking 5353
-     * for this run.
+     * Publishes the AirPlay record and listens for the phone, taking 5353 for this run where it can.
      *
      * One instance per address, because a JmDNS instance joins only its own family's multicast group.
      * The port, though, is one for the whole process, and an earlier run may still be holding it: a
@@ -373,44 +477,104 @@ class CarPlayBonjour(
      * instances are taken down here, before ours are created, because a retry ladder waits for nobody —
      * and an advertisement that never appears reads exactly like a phone that never looked.
      *
+     * A family that will not bind costs that family and nothing else. On this platform the second
+     * family's bind is refused with `EADDRINUSE` by our own first socket, not by another process (see
+     * [bindAvailableMdnsFamilies]), so letting the refusal escape would close the family that worked and
+     * leave `mdnsFamilies=none`. Returns false only when no address bound at all, which is the caller's
+     * signal to fall back to the system NSD service.
+     *
      * Serialised on [interfaceMdnsLock] rather than [lifecycleLock]: the run being closed is not this
      * one, and it has a lifecycle lock of its own.
      */
-    private fun startInterfaceMdns() {
+    private fun startInterfaceMdns(): Boolean {
         synchronized(interfaceMdnsLock) {
-            if (interfaceMdns.isNotEmpty()) {
-                DiagLog.w(TAG, "mDNS $MDNS_PORT was still held by an earlier run; closing it before listening")
+            // The socket already bound for these addresses is borrowed, not rebuilt. Closing and
+            // re-binding here is the exact race process-wide ownership exists to remove: the port comes
+            // back a moment later, and in between any bind — ours included — is refused.
+            val reusable = interfaceMdns
+                .filter { dns -> interfaceAddresses[dns]?.let { it in advertisedAddresses } == true }
+            val haveAddresses = interfaceAddresses
+                .filterValues { address -> address in advertisedAddresses }
+                .values
+                .toSet()
+            val missing = advertisedAddresses.filter { it !in haveAddresses }
+            if (interfaceMdns.isNotEmpty() && missing.isEmpty()) {
+                if (interfaceMdnsOwner === this) return true
+                DiagLog.w(TAG, "mDNS $MDNS_PORT reused from the process; registering this run's record")
+            } else if (interfaceMdns.isNotEmpty()) {
+                DiagLog.w(TAG, "mDNS $MDNS_PORT kept for ${haveAddresses.size} address(es); binding ${missing.size} more")
             }
-            closeInterfaceMdnsLocked()
             interfaceMdnsOwner = this
-            for (address in advertisedAddresses) {
-                val dns = JmDNS.create(address, "carplay-${config.deviceId.replace(":", "")}")
-                interfaceMdns.add(dns)
+            // Taken before the first service is registered: a registration that throws must leave every
+            // socket this run opened on the owner's list, or the caller's teardown closes a port it
+            // cannot see and the next run inherits the refusal.
+            val bindings = bindAvailableMdnsFamilies(
+                missing,
+                bind = { address -> JmDNS.create(address, "carplay-${config.deviceId.replace(":", "")}") },
+                onFailure = { address, failure ->
+                    val family = if (address is Inet4Address) "IPv4" else "IPv6"
+                    // Whoever holds 5353 decides the fix, and the kernel table is the only place that
+                    // says so — on this platform the answer is usually our own earlier socket. The uid
+                    // is reported without resolving it to a package: this class has no Context-backed
+                    // resolver, and the caller logs the same table with names before this one runs.
+                    DiagLog.w(
+                        TAG,
+                        "mDNS bind failed for $family on ${address.hostAddress}; preserving other " +
+                            "advertised families: ${failure.message}; " +
+                            "5353 held by ${PortHolders.udp(MDNS_PORT)}",
+                    )
+                },
+            )
+            interfaceMdns.addAll(bindings.map { it.second })
+            bindings.forEach { (address, dns) -> interfaceAddresses[dns] = address }
+            // Borrowed sockets carry this run's record too: they are already bound for an address this
+            // run advertises, and a record registered only on the new ones would leave the reused family
+            // publishing nothing at all.
+            val publishing = reusable.map { dns -> interfaceAddresses.getValue(dns) to dns } + bindings
+            val boundFamilies = mutableListOf<String>()
+            for ((address, dns) in publishing) {
                 dns.addServiceListener("$CARPLAY_CONTROL_SERVICE_TYPE.local.", interfaceListener)
-                dns.registerService(
-                    ServiceInfo.create(
-                        "$AIRPLAY_SERVICE_TYPE.local.", config.deviceName, config.port,
-                        0, 0, CarPlayBonjourProtocol.airPlayTxtRecords(config, identity),
-                    ),
+                val info = ServiceInfo.create(
+                    "$AIRPLAY_SERVICE_TYPE.local.", config.deviceName, config.port,
+                    0, 0, CarPlayBonjourProtocol.airPlayTxtRecords(config, identity),
                 )
+                dns.registerService(info)
+                // Kept beside the socket so this run gives back exactly the record it published, and
+                // only while it is still the record: after a newer run publishes, this one owns nothing.
+                publishedRecords += info
+                boundFamilies += if (address is Inet4Address) "IPv4" else "IPv6"
             }
-        }
-        publishedFamilies = advertisedAddresses.joinToString(",") {
-            if (it is Inet4Address) "IPv4" else "IPv6"
+            publishedFamilies = if (boundFamilies.isEmpty()) "none" else boundFamilies.joinToString(",")
+            return boundFamilies.isNotEmpty()
         }
     }
 
     /**
-     * Gives the port up, if this run is the one holding it.
+     * Gives this run's record and listener back and leaves the socket where it is.
      *
-     * A run that was already replaced leaves the newer run's instances alone: closing those would be
-     * the older run shutting the port the newer one advertises on.
+     * The socket is the process's, not this run's. Closing it here would hand the next attempt the
+     * very `EADDRINUSE` the process-wide ownership exists to remove: a port released a moment ago can
+     * still be refused while the kernel finishes with the last listener. The record, unlike the socket,
+     * belongs to the run that published it, so it goes back here — and only if this run is still the
+     * owner, because a run that was already replaced must not take the newer run's record down.
      */
     private fun releaseInterfaceMdns() {
         synchronized(interfaceMdnsLock) {
             if (interfaceMdnsOwner !== this) return
             interfaceMdnsOwner = null
-            closeInterfaceMdnsLocked()
+            val records = publishedRecords.toList()
+            publishedRecords.clear()
+            // The sockets stay on the process's list: they are still bound, and clearing them here would
+            // hide a live listener from the next run, which would then bind the same port again and be
+            // refused for it. Only this run's record and listener come off.
+            val sockets = interfaceMdns.toList()
+            // The socket outlives the run, so this run's listener has to come off it: left attached, every
+            // bring-up would add one more to the same socket and a later discovery would be reported by
+            // runs that are already closed.
+            sockets.forEach { dns ->
+                runCatching { dns.removeServiceListener("$CARPLAY_CONTROL_SERVICE_TYPE.local.", interfaceListener) }
+                records.forEach { record -> runCatching { dns.unregisterService(record) } }
+            }
         }
     }
 
@@ -467,7 +631,7 @@ class CarPlayBonjour(
 
     private fun runWorker() {
         while (!closed) {
-            if (useInterfaceMdns) {
+            if (interfaceMdnsActive) {
                 try {
                     while (true) emit(discoveryEvents.poll() ?: break)
                     val (endpoint, address) = interfaceServices.poll(
@@ -725,6 +889,13 @@ class CarPlayBonjour(
         const val JOIN_TIMEOUT_MILLIS = 2_000L
         const val FAILURE_NONE = -1
 
+        /** How long a registration may take before it is read as a refusal and the fallback is tried. */
+        const val NSD_REGISTRATION_TIMEOUT_MILLIS = 3_000L
+
+        /** No answer from the platform yet; registered and failed both count down [registrationLatch]. */
+        const val REGISTRATION_PENDING = -1
+        const val REGISTRATION_OK = 0
+
         /**
          * The instances this process is holding on [MDNS_PORT], and the run that put them there.
          *
@@ -733,6 +904,15 @@ class CarPlayBonjour(
          */
         private val interfaceMdnsLock = Any()
         private val interfaceMdns = mutableListOf<JmDNS>()
+
+        /**
+         * Which address each held socket was bound for.
+         *
+         * The socket list alone cannot say whether the one already open is the one this run needs: an
+         * instance bound to a different address is another multicast group, so it has to be kept apart
+         * from the ones this run can borrow.
+         */
+        private val interfaceAddresses = mutableMapOf<JmDNS, InetAddress>()
         private var interfaceMdnsOwner: CarPlayBonjour? = null
 
         /**
@@ -742,7 +922,33 @@ class CarPlayBonjour(
         private fun closeInterfaceMdnsLocked() {
             val closing = interfaceMdns.toList()
             interfaceMdns.clear()
+            interfaceAddresses.clear()
             closing.forEach { dns -> runCatching { dns.close() } }
+        }
+
+        /**
+         * Gives 5353 back to the head unit for good.
+         *
+         * The socket outlives every run (see [releaseInterfaceMdns]), so nothing inside a bring-up ever
+         * closes it. This is where it goes back: when the app is done with wireless discovery, not when
+         * one attempt ends. Safe to call with nothing held, and the next bring-up simply binds again.
+         *
+         * Runs on its own thread: closing a JmDNS instance blocks, and the caller is a service's
+         * `onDestroy` on the main thread, where a blocked socket teardown reads as a frozen screen.
+         */
+        fun releaseProcessResponder() {
+            Thread(
+                {
+                    synchronized(interfaceMdnsLock) {
+                        interfaceMdnsOwner = null
+                        closeInterfaceMdnsLocked()
+                    }
+                },
+                "carplay-mdns-release",
+            ).apply {
+                isDaemon = true
+                start()
+            }
         }
     }
 }

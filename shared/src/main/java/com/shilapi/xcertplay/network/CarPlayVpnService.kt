@@ -188,6 +188,9 @@ class CarPlayVpnService : VpnService() {
 
     override fun onDestroy() {
         detach()
+        // The mDNS socket outlives every bring-up so a retry never meets its own earlier socket; with
+        // the service gone there is nothing left to advertise, so 5353 goes back to the head unit.
+        CarPlayBonjour.releaseProcessResponder()
         super.onDestroy()
     }
 

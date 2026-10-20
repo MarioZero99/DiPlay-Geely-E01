@@ -119,4 +119,62 @@ class CarPlayBonjourTest {
             ),
         )
     }
+
+    /**
+     * The second family's refusal must cost that family and nothing else.
+     *
+     * This is the shape the head unit produced on 2026-10-20: the first address bound 5353, the second
+     * threw `EADDRINUSE` from KitKat's `MulticastSocket` binding the port before it enables
+     * `SO_REUSEADDR`, and the unguarded loop let that escape — the caller's teardown then closed the
+     * first socket too, and the report read `mdnsFamilies=none` while 5353 had been free. One family
+     * advertised is worth more than none, so the failure is reported and the survivors are kept.
+     */
+    @Test
+    fun aFamilyThatCannotBindIsReportedAndTheOtherIsKept() {
+        val ipv4 = InetAddress.getByName("192.168.31.51")
+        val ipv6 = InetAddress.getByName("fe80::1")
+        val failures = mutableListOf<Pair<InetAddress, java.io.IOException>>()
+
+        val bound = bindAvailableMdnsFamilies(
+            listOf(ipv4, ipv6),
+            bind = { address ->
+                if (address == ipv6) throw java.io.IOException("bind failed: EADDRINUSE (Address already in use)")
+                "dns-$address"
+            },
+            onFailure = { address, error -> failures += address to error },
+        )
+
+        assertEquals(1, bound.size)
+        assertEquals(ipv4, bound.single().first)
+        assertEquals(ipv6, failures.single().first)
+    }
+
+    @Test
+    fun aFamilyThatCannotBindFirstDoesNotStopTheNextOne() {
+        val ipv4 = InetAddress.getByName("192.168.31.51")
+        val ipv6 = InetAddress.getByName("fe80::1")
+
+        val bound = bindAvailableMdnsFamilies(
+            listOf(ipv6, ipv4),
+            bind = { address ->
+                if (address == ipv6) throw java.io.IOException("bind failed: EADDRINUSE (Address already in use)")
+                "dns-$address"
+            },
+            onFailure = { _, _ -> },
+        )
+
+        assertEquals(listOf(ipv4), bound.map { it.first })
+    }
+
+    @Test
+    fun noAddressBindingMeansNoFamiliesRatherThanAThrow() {
+        val bound = bindAvailableMdnsFamilies(
+            listOf(InetAddress.getByName("192.168.31.51")),
+            bind = { throw java.io.IOException("bind failed: EADDRINUSE (Address already in use)") },
+            onFailure = { _, _ -> },
+        )
+
+        // Empty is the caller's signal to fall back to system NSD; it must not see an exception.
+        assertTrue(bound.isEmpty())
+    }
 }
