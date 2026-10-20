@@ -37,6 +37,7 @@ class UpdateCardController(
     private val onStateChanged: (State) -> Unit,
     private val onInstall: (File) -> Unit,
     private val needsInstallerConfirmation: () -> Boolean = { true },
+    private val sessionActive: () -> Boolean = { false },
 ) : AutoCloseable {
 
     /** What the page shows. [Idle] is everything before the driver has asked for anything. */
@@ -114,7 +115,12 @@ class UpdateCardController(
 
     val state: State get() = current
 
-    /** The driver pressed "check for updates". The only thing in this class that reaches the network. */
+    /**
+     * The driver pressed "check for updates". The only thing in this class that reaches the network.
+     *
+     * Allowed while a session is running: it fetches nothing but a small JSON and changes nothing on
+     * the car. Everything that does is refused, for the reason the firmware card's own writes are.
+     */
     fun check() {
         val state = current
         if (state is State.Checking || state is State.Downloading) return
@@ -129,7 +135,7 @@ class UpdateCardController(
             }
             when (result) {
                 is UpdateChecker.CheckResult.Error -> finish(ticket) {
-                    fail(Step.CHECK, null, ERROR_NETWORK, result.message)
+                    fail(Step.CHECK, null, if (result.busy) ERROR_BUSY else ERROR_NETWORK, result.message)
                 }
                 is UpdateChecker.CheckResult.UpToDate -> finish(ticket) {
                     publish(State.UpToDate(currentVersionCode, result.info.versionName))
@@ -176,8 +182,15 @@ class UpdateCardController(
         // Only the release a check found is ever fetched. After "up to date" there is nothing to
         // fetch, and [offered] still names the release from before -- downloading that one would be
         // putting a package on the car that is older than the one it is running.
-        if (current !is State.UpdateAvailable) return
+        val state = current
+        if (state !is State.UpdateAvailable) return
         val info = offered ?: return
+        // The install that follows lands while CarPlay is running otherwise, which restarts the app
+        // under a live session. The firmware card refuses its writes for the same reason.
+        if (sessionActive()) {
+            fail(Step.DOWNLOAD, info, ERROR_SESSION, "")
+            return
+        }
         val ticket = generation.incrementAndGet()
         publish(State.Downloading(currentVersionCode, info, 0, info.apkAsset.sizeBytes))
         // A flag from the previous attempt -- including one set by a cancel that landed before that
@@ -189,6 +202,9 @@ class UpdateCardController(
                 finish(ticket) { fail(Step.DOWNLOAD, info, ERROR_STORAGE, "") }
                 return@execute
             }
+            // One package at a time: what the folder holds for another version goes before this
+            // download writes another 6 MB beside it.
+            cleaner.prepareForDownload(info.versionCode)
             val apkFile = File(cleaner.updateDir, info.apkAsset.name)
             // The checksum is asked for again here rather than kept from the check: the copy that
             // decides the install is the one fetched beside the download.
@@ -212,7 +228,7 @@ class UpdateCardController(
                 when (result) {
                     is UpdateDownloader.DownloadResult.Success -> publish(State.ReadyToInstall(currentVersionCode, info, result.file))
                     UpdateDownloader.DownloadResult.Cancelled -> publish(State.UpdateAvailable(currentVersionCode, info))
-                    is UpdateDownloader.DownloadResult.Failure -> fail(Step.DOWNLOAD, info, ERROR_DOWNLOAD, result.error)
+                    is UpdateDownloader.DownloadResult.Failure -> fail(Step.DOWNLOAD, info, errorKeyFor(result), result.error)
                 }
             }
         }
@@ -244,6 +260,10 @@ class UpdateCardController(
      */
     fun install() {
         val ready = current as? State.ReadyToInstall ?: return
+        if (sessionActive()) {
+            fail(Step.INSTALL, ready.info, ERROR_SESSION, "")
+            return
+        }
         if (!cleaner.isInstallable(ready.file)) {
             fail(Step.DOWNLOAD, ready.info, ERROR_DOWNLOAD, "the package is gone")
             return
@@ -255,13 +275,23 @@ class UpdateCardController(
             startInstaller(ready)
             return
         }
-        AlertDialog.Builder(context)
+        installerQuestion = AlertDialog.Builder(context)
             .setTitle(R.string.install_now)
             .setMessage(context.getString(R.string.update_install_confirm, ready.info?.versionName.orEmpty()))
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.install_now) { _, _ -> startInstaller(ready) }
             .show()
     }
+
+    /**
+     * The question that is up, while it is up. Null before any is asked and after one is dismissed.
+     *
+     * Kept so a test can answer it: a dialog is the only thing between a press on "install now" and
+     * the installer on the car, and a test that could not press it would be testing everything but
+     * that.
+     */
+    var installerQuestion: AlertDialog? = null
+        private set
 
     private fun startInstaller(ready: State.ReadyToInstall) {
         try {
@@ -304,6 +334,15 @@ class UpdateCardController(
                 }
             }
         }
+    }
+
+    /** The page's sentence for the way a download failed. */
+    private fun errorKeyFor(result: UpdateDownloader.DownloadResult.Failure): String = when (result.kind) {
+        UpdateDownloader.DownloadResult.Failure.Kind.CHECKSUM -> ERROR_CHECKSUM
+        UpdateDownloader.DownloadResult.Failure.Kind.INSECURE -> ERROR_INSECURE
+        UpdateDownloader.DownloadResult.Failure.Kind.NO_SPACE -> ERROR_STORAGE
+        UpdateDownloader.DownloadResult.Failure.Kind.NETWORK -> ERROR_DOWNLOAD
+        UpdateDownloader.DownloadResult.Failure.Kind.OTHER -> ERROR_DOWNLOAD
     }
 
     /** Records what failed and says so. Main thread only: [retry] reads what this writes. */
@@ -356,6 +395,18 @@ class UpdateCardController(
     companion object {
         /** Could not reach GitHub, or GitHub did not answer with a release. */
         const val ERROR_NETWORK = "update_error_network"
+
+        /** GitHub refused the request: a rate limit, or a private release. Waiting is the answer. */
+        const val ERROR_BUSY = "update_error_busy"
+
+        /** The bytes did not match the sums file, and were not kept. */
+        const val ERROR_CHECKSUM = "update_error_checksum"
+
+        /** The release points somewhere this link does not download from. */
+        const val ERROR_INSECURE = "update_error_insecure"
+
+        /** CarPlay is running; the update is offered again once it is not. */
+        const val ERROR_SESSION = "update_session_active"
 
         /** The car has no room for the package. */
         const val ERROR_STORAGE = "update_error_storage"

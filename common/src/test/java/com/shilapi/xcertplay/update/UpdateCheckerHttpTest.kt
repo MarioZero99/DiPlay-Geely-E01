@@ -10,6 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
@@ -74,6 +75,63 @@ class UpdateCheckerHttpTest {
         // The same request the check makes, against an address nothing answers on.
         val result = runCatching { checker.fetch("http://127.0.0.1:$port/releases/latest", timeoutMs = 1_000) }
         assertTrue("a refused connection surfaces as a thrown IOException from fetch", result.exceptionOrNull() is IOException)
+    }
+
+    @Test fun aForbiddenAnswerIsGitHubRefusingRatherThanTheCarHavingNoNetwork() {
+        // Rate limits and a request with no name both arrive as 403, and the next move for the driver
+        // is to wait rather than to look at the car's connection.
+        assertTrue(UpdateChecker.isRefusal(403))
+        assertTrue(UpdateChecker.isRefusal(404))
+        assertTrue(!UpdateChecker.isRefusal(200))
+        assertTrue(!UpdateChecker.isRefusal(500))
+        assertTrue("a connection that was never made is not a refusal", !UpdateChecker.isRefusal(-1))
+    }
+
+    @Test fun aDownloadFromAPlainHttpAddressIsRefusedBeforeAnythingIsWritten() {
+        // The environment allows cleartext. Over HTTP the package and the sums file that describes
+        // it can both be replaced by whoever is on the network, and the comparison would pass.
+        val target = java.io.File(RuntimeEnvironment.getApplication().cacheDir, "updates/insecure.apk")
+        val result = UpdateDownloader().downloadAndVerify(
+            apkUrl = "http://mirror.example.invalid/DiPlay-Legacy-Geely-V45.apk",
+            targetFile = target,
+            expectedSha256 = null,
+            onProgress = { _, _ -> },
+            isCancelled = { false },
+        )
+
+        assertTrue(result is UpdateDownloader.DownloadResult.Failure)
+        assertEquals(
+            UpdateDownloader.DownloadResult.Failure.Kind.INSECURE,
+            (result as UpdateDownloader.DownloadResult.Failure).kind,
+        )
+        assertTrue("nothing is written for an address it will not use", !target.exists())
+        target.delete()
+    }
+
+    @Test fun whichAddressesAPackageIsFetchedFrom() {
+        assertTrue(UpdateDownloader.isFetchableApkUrl("https://github.com/o/r/releases/download/v1/x.apk"))
+        assertTrue("the tests' own server", UpdateDownloader.isFetchableApkUrl("http://127.0.0.1:8080/x.apk"))
+        assertTrue(UpdateDownloader.isFetchableApkUrl("http://localhost:8080/x.apk"))
+        assertTrue(!UpdateDownloader.isFetchableApkUrl("http://github.com/o/r/x.apk"))
+        assertTrue(!UpdateDownloader.isFetchableApkUrl("file:///sdcard/x.apk"))
+        assertTrue(!UpdateDownloader.isFetchableApkUrl("not a url"))
+    }
+
+    @Test fun aServerThatRefusesThePackageIsANetworkFailure() {
+        WithServer("", status = "403 Forbidden") { url ->
+            val result = UpdateDownloader().downloadAndVerify(
+                apkUrl = url,
+                targetFile = java.io.File(RuntimeEnvironment.getApplication().cacheDir, "updates/refused.apk"),
+                expectedSha256 = null,
+                onProgress = { _, _ -> },
+                isCancelled = { false },
+            )
+            assertTrue(result is UpdateDownloader.DownloadResult.Failure)
+            assertEquals(
+                UpdateDownloader.DownloadResult.Failure.Kind.NETWORK,
+                (result as UpdateDownloader.DownloadResult.Failure).kind,
+            )
+        }
     }
 
     @Test fun aChecksumFileThatAnswersAnErrorIsNoChecksum() {

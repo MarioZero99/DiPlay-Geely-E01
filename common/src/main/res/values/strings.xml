@@ -540,4 +540,9 @@
     <string name="update_current_version">Installed: %1$s</string>
     <string name="update_found_release">Latest on GitHub: %1$s</string>
     <string name="update_install_confirm">DiPlay %1$s will now be installed over the version on this car. Your settings stay as they are. The car opens its installer next and asks you to confirm.</string>
+    <string name="update_session_active">CarPlay is running. End the session before installing an update.</string>
+    <string name="update_error_checksum">The downloaded package does not match the checksum the release published, so it was not kept. Try again.</string>
+    <string name="update_error_busy">The update server is busy right now. Try again in a few minutes.</string>
+    <string name="update_error_freed">The download stopped because the car needed the space back. The card follows it again on the next check.</string>
+    <string name="update_error_insecure">The update link only downloads from an HTTPS address. These releases are downloaded from GitHub.</string>
 </resources>

@@ -52,7 +52,12 @@ open class UpdateChecker(
         /** The current release is not newer. It carries the release so the page can name the version. */
         data class UpToDate(val info: ReleaseInfo) : CheckResult()
 
-        data class Error(val message: String) : CheckResult()
+        /**
+         * [message] is the reason, untranslated. [busy] is GitHub refusing rather than failing to
+         * answer -- a rate limit or a private release -- which is the one case whose advice is to
+         * wait rather than to look at the car's connection.
+         */
+        data class Error(val message: String, val busy: Boolean = false) : CheckResult()
     }
 
     /**
@@ -114,13 +119,16 @@ open class UpdateChecker(
      * The message is reason only -- no URL, no stack trace -- because it is shown to a driver.
      */
     open fun checkLatestRelease(currentVersionCode: Int, timeoutMs: Int = DEFAULT_TIMEOUT_MS): CheckResult {
-        val body = try {
-            fetch(releasesUrl, timeoutMs)
+        val answer = try {
+            answer(releasesUrl, timeoutMs, accept = "application/vnd.github.v3+json")
         } catch (e: IOException) {
             return CheckResult.Error(reasonFor(e))
         } catch (e: Exception) {
             return CheckResult.Error("unexpected")
-        } ?: return CheckResult.Error("no answer")
+        }
+        if (answer == null) return CheckResult.Error("no answer")
+        if (answer.status != HttpURLConnection.HTTP_OK) return CheckResult.Error("http ${answer.status}", busy = isRefusal(answer.status))
+        val body = answer.body
         val info = parseReleaseJson(body) ?: return CheckResult.Error(NO_PACKAGE_FOR_THIS_CAR)
         return compare(info, currentVersionCode)
     }
@@ -132,18 +140,26 @@ open class UpdateChecker(
      * second library. The socket honours both a connect and a read timeout: a car that has driven out
      * of signal can hold a connection open for as long as the radio is still trying.
      */
+    internal fun fetch(url: String, timeoutMs: Int): String? = answer(url, timeoutMs)?.takeIf { it.status == HttpURLConnection.HTTP_OK }?.body
+
+    /** One GET and everything it answered: the status as well as the body. */
+    private class Answer(val status: Int, val body: String)
+
     @SuppressLint("TrulyRandom") // Nothing here is encrypted; this is only a fetch of public JSON.
-    internal fun fetch(url: String, timeoutMs: Int): String? {
+    private fun answer(url: String, timeoutMs: Int, accept: String = "application/json"): Answer? {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = timeoutMs
             connection.readTimeout = timeoutMs
             connection.requestMethod = "GET"
             connection.setRequestProperty("User-Agent", USER_AGENT)
-            connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
+            connection.setRequestProperty("Accept", accept)
             connection.instanceFollowRedirects = true
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
-            return connection.inputStream.bufferedReader().use { it.readText() }
+            val status = connection.responseCode
+            // The body of a refusal says why -- GitHub puts the reason in it -- and it is small.
+            val stream = if (status == HttpURLConnection.HTTP_OK) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            return Answer(status, body)
         } finally {
             connection.disconnect()
         }
@@ -165,6 +181,16 @@ open class UpdateChecker(
 
         /** GitHub refuses a request that does not say who is making it. */
         const val USER_AGENT = "DiPlay-Geely-Updater"
+
+        /**
+         * Whether [status] is GitHub refusing rather than failing to answer.
+         *
+         * 403 is what a rate-limited client gets, what a request with no `User-Agent` gets, and what
+         * a private release gets; 404 is a repository or a release that is not there. None of those
+         * is the car's connection, and the driver's next move for all of them is to wait.
+         */
+        fun isRefusal(status: Int): Boolean =
+            status == HttpURLConnection.HTTP_FORBIDDEN || status == HttpURLConnection.HTTP_NOT_FOUND
 
         /** The sums file `scripts/publish-apk.sh` uploads beside the package. */
         const val SUMS_ASSET_NAME = "SHA256SUMS.txt"

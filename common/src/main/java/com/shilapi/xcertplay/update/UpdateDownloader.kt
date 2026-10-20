@@ -32,7 +32,27 @@ open class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
 
         object Cancelled : DownloadResult()
 
-        data class Failure(val error: String) : DownloadResult()
+        /**
+         * [error] is the reason, never translated: a page that wants a sentence maps it to one, and
+         * a page that does not shows it as it is. [kind] is the one thing a page has to act on.
+         */
+        data class Failure(val error: String, val kind: Kind = Kind.OTHER) : DownloadResult() {
+            enum class Kind {
+                /** The bytes were not the ones the sums file describes. */
+                CHECKSUM,
+
+                /** The connection failed or the server refused. */
+                NETWORK,
+
+                /** The address is not one this link fetches packages from. */
+                INSECURE,
+
+                /** The system needed the space back mid-download. */
+                NO_SPACE,
+
+                OTHER,
+            }
+        }
     }
 
     /**
@@ -49,6 +69,7 @@ open class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
         onProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
         isCancelled: () -> Boolean,
     ): DownloadResult {
+        if (!isFetchableApkUrl(apkUrl)) return DownloadResult.Failure("not an https address", DownloadResult.Failure.Kind.INSECURE)
         targetFile.parentFile?.mkdirs()
         val partial = File(targetFile.parentFile, targetFile.name + UpdateStorageCleaner.PARTIAL_SUFFIX)
         val expected = expectedSha256?.trim()?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() }
@@ -61,7 +82,7 @@ open class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
             connection.instanceFollowRedirects = true
             val status = connection.responseCode
             if (status != HttpURLConnection.HTTP_OK) {
-                return DownloadResult.Failure("http $status")
+                return DownloadResult.Failure("http $status", DownloadResult.Failure.Kind.NETWORK)
             }
             val total = connection.contentLengthLong.takeIf { it > 0 } ?: -1L
             val digest = MessageDigest.getInstance("SHA-256")
@@ -92,15 +113,17 @@ open class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
             }
             if (expected != null && digest.digest().joinToString("") { "%02x".format(it) } != expected) {
                 partial.delete()
-                return DownloadResult.Failure(CHECKSUM_MISMATCH)
+                return DownloadResult.Failure(CHECKSUM_MISMATCH, DownloadResult.Failure.Kind.CHECKSUM)
             }
             if (!partial.renameTo(targetFile)) {
                 partial.delete()
-                return DownloadResult.Failure("could not store the package")
+                return DownloadResult.Failure("could not store the package", DownloadResult.Failure.Kind.NO_SPACE)
             }
             return DownloadResult.Success(targetFile, verified = expected != null)
         } catch (e: IOException) {
-            return DownloadResult.Failure(reasonFor(e))
+            // A write that runs out of space arrives as an IOException too; ENOSPC is the one case
+            // where what the driver has to do is different from trying the connection again.
+            return DownloadResult.Failure(reasonFor(e), kindFor(e))
         } catch (e: SecurityException) {
             return DownloadResult.Failure("not allowed to store the package")
         } finally {
@@ -140,9 +163,36 @@ open class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
         else -> error.javaClass.simpleName
     }
 
+    private fun kindFor(error: IOException): DownloadResult.Failure.Kind =
+        if (error.message?.contains("ENOSPC", ignoreCase = true) == true) {
+            DownloadResult.Failure.Kind.NO_SPACE
+        } else {
+            DownloadResult.Failure.Kind.NETWORK
+        }
+
     companion object {
         const val DEFAULT_TIMEOUT_MS = 15_000
         const val CHECKSUM_MISMATCH = "checksum mismatch"
+
+        /**
+         * Whether [url] is one this link downloads a package from.
+         *
+         * HTTPS, and only HTTPS. The package's integrity is decided by the sums file, and the sums
+         * file is fetched over the same kind of connection: over plain HTTP both can be replaced by
+         * whoever is on the network, and the comparison would pass against bytes they wrote. This
+         * app's manifest allows cleartext for its own local traffic, so the rule has to be here.
+         *
+         * Loopback is the one plain address allowed, and only for tests: a package served by the
+         * test that is checking the download is the test's own bytes.
+         */
+        fun isFetchableApkUrl(url: String): Boolean {
+            val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+            val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return false
+            if (scheme == "https") return true
+            if (scheme != "http") return false
+            val host = uri.host ?: return false
+            return host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1"
+        }
 
         /**
          * The digest a `shasum -a 256` / `sha256sum` listing gives for [apkFileName].

@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -72,6 +73,7 @@ class UpdateCardControllerTest {
     private fun controller(
         currentVersionCode: Int = 44,
         confirmInstall: Boolean = false,
+        sessionActive: () -> Boolean = { false },
         onInstall: (File) -> Unit = {},
     ): UpdateCardController =
         UpdateCardController(
@@ -83,6 +85,7 @@ class UpdateCardControllerTest {
             onStateChanged = { states += it },
             onInstall = onInstall,
             needsInstallerConfirmation = { confirmInstall },
+            sessionActive = sessionActive,
         ).also { controller = it }
 
     /** Lets the main thread run and waits for a state of [type], failing with what it saw instead. */
@@ -272,6 +275,31 @@ class UpdateCardControllerTest {
 
         assertEquals("nothing installs before the question is answered", 0, installed.size)
         assertTrue("and the package is still there to answer for", card.state is UpdateCardController.State.ReadyToInstall)
+
+        // Answering it is answering the driver's own press: the installer starts after.
+        val question = card.installerQuestion
+        assertNotNull("the question is asked", question)
+        question!!.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+        settle()
+
+        assertEquals(cleaner.apkFileName(45), installed.single().name)
+    }
+
+    @Test fun dismissingTheInstallQuestionInstallsNothing() {
+        checker.latest = release(45)
+        val installed = Collections.synchronizedList(mutableListOf<File>())
+        val card = controller(confirmInstall = true, onInstall = { installed += it })
+        card.check()
+        await<UpdateCardController.State.UpdateAvailable>()
+        card.download()
+        await<UpdateCardController.State.ReadyToInstall>()
+
+        card.install()
+        settle()
+        card.installerQuestion!!.dismiss()
+        settle()
+
+        assertEquals("a dismissed question is a no", 0, installed.size)
     }
 
     @Test fun aPackageThatTheSystemCacheTookAwayIsADownloadAgainNotAnInstallError() {
@@ -433,6 +461,95 @@ class UpdateCardControllerTest {
         assertEquals("an install retry fetches nothing", 1, downloader.calls)
     }
 
+    // ---- a session that is running -------------------------------------------------------------
+
+    @Test fun aDownloadIsRefusedWhileCarPlayIsRunning() {
+        // The install that follows restarts the app under a live session. Nothing lands on the car
+        // while one is running, which is the same rule the firmware card's writes follow.
+        checker.latest = release(45)
+        val card = controller(sessionActive = { true })
+        card.check()
+        await<UpdateCardController.State.UpdateAvailable>()
+
+        card.download()
+
+        await<UpdateCardController.State.Error> { it.messageKey == UpdateCardController.ERROR_SESSION }
+        assertEquals("nothing is fetched", 0, downloader.calls)
+    }
+
+    @Test fun anInstallIsRefusedWhileCarPlayIsRunning() {
+        checker.latest = release(45)
+        var live = false
+        val installed = Collections.synchronizedList(mutableListOf<File>())
+        val card = controller(sessionActive = { live }, onInstall = { installed += it })
+        card.check()
+        await<UpdateCardController.State.UpdateAvailable>()
+        card.download()
+        await<UpdateCardController.State.ReadyToInstall>()
+        live = true
+
+        card.install()
+
+        await<UpdateCardController.State.Error> { it.messageKey == UpdateCardController.ERROR_SESSION }
+        assertEquals("the installer is not opened", 0, installed.size)
+    }
+
+    @Test fun checkingIsStillAllowedWhileCarPlayIsRunning() {
+        // A check fetches a small JSON and touches nothing on the car: the one thing a driver may do
+        // mid-session is ask whether there is something to install once it ends.
+        checker.latest = release(44)
+        val card = controller(sessionActive = { true })
+
+        card.check()
+
+        await<UpdateCardController.State.UpToDate>()
+    }
+
+    // ---- the folder holds one package -----------------------------------------------------------
+
+    @Test fun aDownloadLeavesOnlyThePackageItFetched() {
+        // Two packages would be two of everything the folder is budgeted for. What is there for a
+        // version other than the one being fetched is not what anything is about to install.
+        checker.latest = release(45)
+        val other = readablePackage(context, File(cleaner.updateDir, cleaner.apkFileName(46)), 46)
+        val fragment = File(cleaner.updateDir, cleaner.apkFileName(45) + UpdateStorageCleaner.PARTIAL_SUFFIX).apply { writeBytes(ByteArray(4)) }
+        val card = controller()
+        card.check()
+        await<UpdateCardController.State.UpdateAvailable>()
+
+        card.download()
+        val ready = await<UpdateCardController.State.ReadyToInstall>()
+
+        assertEquals("one package", listOf(cleaner.apkFileName(45)), cleaner.updateDir.list()!!.sorted())
+        assertEquals(cleaner.apkFileName(45), ready.file.name)
+        assertTrue("the one for another version is gone", !other.exists())
+        assertTrue("and so is the fragment", !fragment.exists())
+    }
+
+    @Test fun aFailureIsSaidInTheWordsItsKindDeserves() {
+        checker.latest = release(45)
+        val card = controller()
+        card.check()
+        await<UpdateCardController.State.UpdateAvailable>()
+        downloader.failureResult = UpdateDownloader.DownloadResult.Failure(
+            "checksum mismatch",
+            UpdateDownloader.DownloadResult.Failure.Kind.CHECKSUM,
+        )
+
+        card.download()
+
+        await<UpdateCardController.State.Error> { it.messageKey == UpdateCardController.ERROR_CHECKSUM }
+    }
+
+    @Test fun aGitHubThatRefusesTheCheckSaysToWait() {
+        checker.refusal = UpdateChecker.CheckResult.Error("http 403", busy = true)
+        val card = controller()
+
+        card.check()
+
+        await<UpdateCardController.State.Error> { it.messageKey == UpdateCardController.ERROR_BUSY }
+    }
+
     // ---- the rule ----------------------------------------------------------------------------
 
     @Test fun nothingIsCheckedUntilCheckIsCalled() {
@@ -508,6 +625,8 @@ class UpdateCardControllerTest {
 
     /** Answers with [latest] -- or fails with [failure] -- and remembers every request. */
     private class FakeChecker : UpdateChecker() {
+        @Volatile var refusal: UpdateChecker.CheckResult.Error? = null
+
         val requests: MutableList<Int> = Collections.synchronizedList(mutableListOf())
         var latest: ReleaseInfo? = null
         var failure: Exception? = null
@@ -517,6 +636,7 @@ class UpdateCardControllerTest {
             requests += currentVersionCode
             gate?.await(5, TimeUnit.SECONDS)
             failure?.let { throw it }
+            refusal?.let { return it }
             val info = latest ?: throw IOException("no release")
             return compare(info, currentVersionCode)
         }
@@ -528,6 +648,7 @@ class UpdateCardControllerTest {
         @Volatile var blockUntilCancelled = false
         @Volatile var cancelRequested = false
         @Volatile var failure: Exception? = null
+        @Volatile var failureResult: UpdateDownloader.DownloadResult.Failure? = null
         /** The name the offer asked to be written under. */
         @Volatile var lastApkFileName: String? = null
         /** Open once the stand-in is inside the download, so a test can cancel a running one. */
@@ -562,6 +683,7 @@ class UpdateCardControllerTest {
             writes += targetFile.absolutePath
             lastApkFileName = targetFile.name
             failure?.let { throw it }
+            failureResult?.let { return it }
             val payload = ByteArray(1024)
             if (blockUntilCancelled) {
                 running.countDown()

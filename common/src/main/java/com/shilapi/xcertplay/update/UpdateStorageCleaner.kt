@@ -100,6 +100,27 @@ class UpdateStorageCleaner(private val context: Context) {
         return removed
     }
 
+    /**
+     * Makes the folder ready for [targetVersionCode]: the fragments go, and so does every package for
+     * any other version.
+     *
+     * Called before a download rather than only on the cold start. Two packages would be two of
+     * everything this folder is budgeted for -- about 6 MB each on a car with 26 MB of memory and a
+     * cache the system shares -- and the one that is not [targetVersionCode] is the one nothing is
+     * about to install. It is also what makes a download write to a name no stale file is holding.
+     */
+    fun prepareForDownload(targetVersionCode: Int): Int {
+        val dir = updateDir
+        if (!dir.isDirectory) return 0
+        val keep = apkFileName(targetVersionCode)
+        var removed = 0
+        dir.listFiles()?.forEach { file ->
+            if (!file.isFile) return@forEach
+            if (file.name != keep && file.delete()) removed++
+        }
+        return removed
+    }
+
     /** What the package manager says is inside [file], when it can read it at all. */
     fun archiveVersionCode(file: File): Int? = versionCodeOf(file)
 

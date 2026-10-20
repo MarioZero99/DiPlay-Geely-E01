@@ -3403,6 +3403,10 @@ class DiPlayActivity : ComponentActivity() {
     private fun updateErrorMessage(state: UpdateCardController.State.Error): String {
         val resource = when (state.messageKey) {
             UpdateCardController.ERROR_NETWORK -> R.string.update_error_network
+            UpdateCardController.ERROR_BUSY -> R.string.update_error_busy
+            UpdateCardController.ERROR_CHECKSUM -> R.string.update_error_checksum
+            UpdateCardController.ERROR_INSECURE -> R.string.update_error_insecure
+            UpdateCardController.ERROR_SESSION -> R.string.update_session_active
             UpdateCardController.ERROR_STORAGE -> R.string.update_error_storage
             UpdateCardController.ERROR_DOWNLOAD -> R.string.update_error_download
             UpdateCardController.ERROR_INSTALL -> R.string.update_error_install
@@ -3425,6 +3429,9 @@ class DiPlayActivity : ComponentActivity() {
                 if (!isFinishing && !isDestroyed && (page == "system" || page == "settings")) render()
             },
             onInstall = { file -> UpdateInstaller.install(this, file).getOrThrow() },
+            // The same rule the firmware card's writes follow: nothing that lands on the car while
+            // CarPlay is running, because the install restarts the app under the session.
+            sessionActive = { CarPlayBackgroundSession.hasSession() },
         )
         updateLink = controller
         return controller
