@@ -37,7 +37,7 @@
   - `fun cleanOldUpdates(currentVersionCode: Int = getInstalledVersionCode()): Int`
   - `fun findReadyApk(targetVersionCode: Int, expectedSha256: String?): File?`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 创建 `UpdateStorageCleanerTest.kt`，编写以下测试用例：
 1. `cleanOldUpdatesDeletesTmpDownloadFiles`：验证残留的 `.download` 文件被直接删除；
@@ -45,12 +45,12 @@
 3. `hasAdequateFreeSpaceReturnsTrueWhenSufficient`：验证磁盘空间检测逻辑正确；
 4. `findReadyApkReturnsFileWhenShaMatches`：验证本地已存在且 SHA256 匹配的 APK 能被成功检测出。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.update.UpdateStorageCleanerTest`
 Expected: FAIL (类不存在)。
 
-- [ ] **Step 3: Implement `UpdateStorageCleaner`**
+- [x] **Step 3: Implement `UpdateStorageCleaner`**
 
 实现 `UpdateStorageCleaner.kt`：
 - `getUpdateDir()`：优先使用 `context.getExternalFilesDir("updates")` 或 `File(context.externalCacheDir, "updates")`，回退至 `File(context.cacheDir, "updates")`；
@@ -58,12 +58,12 @@ Expected: FAIL (类不存在)。
 - `hasAdequateFreeSpace()`：通过 `StatFs(dir.path).availableBytes` 校验是否大于阈值；
 - `findReadyApk()`：检查目标文件存在且非空，若提供了 `expectedSha256` 则计算本地文件 SHA256 比对。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.update.UpdateStorageCleanerTest`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```sh
 git add common/src/main/java/com/shilapi/xcertplay/update/UpdateStorageCleaner.kt common/src/test/java/com/shilapi/xcertplay/update/UpdateStorageCleanerTest.kt
@@ -86,19 +86,19 @@ git commit -m "feat(update): implement update storage directory management and a
   - `fun checkLatestRelease(currentVersionCode: Int, timeoutMs: Int = 10000): CheckResult`
   - `sealed class CheckResult { data class UpdateFound(val info: ReleaseInfo) : CheckResult(); object UpToDate : CheckResult(); data class Error(val message: String) : CheckResult() }`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 创建 `UpdateCheckerTest.kt`：
 1. `parseReleaseJsonExtractsOfficialApkAndSha256`：传入真实 GitHub Releases JSON 样例，验证成功解析 tag、notes、官方包 `DiPlay-Legacy-Geely-V043.apk` 及 `SHA256SUMS.txt`，并滤掉 `-local.apk`；
 2. `parseReleaseJsonRejectsReleaseWithoutOfficialApk`：无官方包时返回 null；
 3. `checkResultIdentifiesUpToDateWhenVersionMatchesOrLower`：当远端 `versionCode <= currentVersionCode` 时返回 `UpToDate`。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.update.UpdateCheckerTest`
 Expected: FAIL。
 
-- [ ] **Step 3: Implement `UpdateChecker`**
+- [x] **Step 3: Implement `UpdateChecker`**
 
 实现 `UpdateChecker.kt`：
 - 使用 `org.json.JSONObject` 解析 GitHub API 返回的 JSON 结构；
@@ -111,12 +111,12 @@ Expected: FAIL。
   - 设置 `ConnectTimeout` 与 `ReadTimeout` 为 10 秒；
   - 捕获网络异常转译为友好错误信息。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.update.UpdateCheckerTest`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```sh
 git add common/src/main/java/com/shilapi/xcertplay/update/UpdateChecker.kt common/src/test/java/com/shilapi/xcertplay/update/UpdateCheckerTest.kt
@@ -137,7 +137,7 @@ git commit -m "feat(update): implement GitHub release checker and asset parser"
   - `fun downloadAndVerify(apkUrl: String, targetFile: File, expectedSha256: String?, onProgress: (bytesRead: Long, totalBytes: Long) -> Unit, isCancelled: () -> Boolean): DownloadResult`
   - `sealed class DownloadResult { data class Success(val file: File) : DownloadResult(); object Cancelled : DownloadResult(); data class Failure(val error: String) : DownloadResult() }`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 创建 `UpdateDownloaderTest.kt`：
 1. `parseExpectedSha256FromSumsFile`：验证从 `SHA256SUMS.txt` 格式内容（`<hash>  <filename>`）中精准截取目标 APK 的 64 位 SHA256 字符串；
@@ -145,12 +145,12 @@ git commit -m "feat(update): implement GitHub release checker and asset parser"
 3. `downloadDeletesTempFileWhenChecksumMismatch`：当计算 hash 与预期不符时，断言抛错/返回 Failure 并确保临时 `.download` 文件被彻底删除；
 4. `downloadRespectsCancellation`：测试中途取消时立即停止并清理未完成碎片。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.update.UpdateDownloaderTest`
 Expected: FAIL。
 
-- [ ] **Step 3: Implement `UpdateDownloader`**
+- [x] **Step 3: Implement `UpdateDownloader`**
 
 实现 `UpdateDownloader.kt`：
 - 计算 SHA-256：使用 `MessageDigest.getInstance("SHA-256")`；
@@ -158,12 +158,12 @@ Expected: FAIL。
 - 检查 `isCancelled()`：若为 true 则在 finally 块中关闭流并删除临时文件；
 - 校验阶段：若 `expectedSha256 != null`，对比十六进制摘要；一致则 `tmpFile.renameTo(targetFile)`。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.update.UpdateDownloaderTest`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```sh
 git add common/src/main/java/com/shilapi/xcertplay/update/UpdateDownloader.kt common/src/test/java/com/shilapi/xcertplay/update/UpdateDownloaderTest.kt
@@ -185,18 +185,18 @@ git commit -m "feat(update): implement streaming downloader with atomic sha256 v
   - `fun createInstallIntent(context: Context, apkFile: File): Intent`
   - `fun install(context: Context, apkFile: File): Result<Unit>`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 创建 `UpdateInstallerTest.kt`：
 1. `createInstallIntentSetsCorrectActionAndFlags`：断言返回的 Intent 包含 `Intent.ACTION_VIEW`、`Intent.FLAG_ACTIVITY_NEW_TASK`、`Intent.FLAG_GRANT_READ_URI_PERMISSION`，且 MIME 类型为 `application/vnd.android.package-archive`；
 2. `createInstallIntentUsesContentUri`：断言生成的 URI 属于 FileProvider 规范的 `content://` 协议。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.update.UpdateInstallerTest`
 Expected: FAIL。
 
-- [ ] **Step 3: Modify XMLs and implement `UpdateInstaller`**
+- [x] **Step 3: Modify XMLs and implement `UpdateInstaller`**
 
 1. 修改 `diagnostic_report_paths.xml`，增加对 `updates/` 目录的授权映射：
    ```xml
@@ -209,12 +209,12 @@ Expected: FAIL。
    - 组装并返回带权限 Flag 的 Intent；
    - `install()` 方法执行 `context.startActivity(intent)`。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.update.UpdateInstallerTest`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```sh
 git add common/src/main/res/xml/diagnostic_report_paths.xml common/src/main/AndroidManifest.xml common/src/main/java/com/shilapi/xcertplay/update/UpdateInstaller.kt common/src/test/java/com/shilapi/xcertplay/update/UpdateInstallerTest.kt
@@ -239,7 +239,7 @@ git commit -m "feat(update): configure FileProvider paths and package install in
   - `fun cancel()`
   - `fun install()`
 
-- [ ] **Step 1: Define strings in both languages**
+- [x] **Step 1: Define strings in both languages**
 
 在 `values/strings.xml` 与 `values-zh-rCN/strings.xml` 中增加更新相关词条：
 - `check_for_updates`: "Check for updates" / "检查更新"
@@ -253,7 +253,7 @@ git commit -m "feat(update): configure FileProvider paths and package install in
 - `update_error`: "Update check failed: %1$s" / "更新失败：%1$s"
 - `insufficient_storage`: "Insufficient storage for update" / "车机存储空间不足"
 
-- [ ] **Step 2: Write failing tests for `UpdateCardController`**
+- [x] **Step 2: Write failing tests for `UpdateCardController`**
 
 创建 `UpdateCardControllerTest.kt`，验证状态转移：
 1. `initialStateIsIdle`：初始态为 IDLE；
@@ -261,19 +261,19 @@ git commit -m "feat(update): configure FileProvider paths and package install in
 3. `checkTransitionsToReadyToInstallIfLocalApkMatches`：本地已有安装包时直接进入 READY_TO_INSTALL；
 4. `downloadUpdatesProgressAndReachesReadyToInstall`：下载成功后状态切为 READY_TO_INSTALL。
 
-- [ ] **Step 3: Implement `UpdateCardController` and integrate into `DiPlayActivity`**
+- [x] **Step 3: Implement `UpdateCardController` and integrate into `DiPlayActivity`**
 
 1. 编写 `UpdateCardController.kt`，处理后台线程任务调度与回调主线程；
 2. 在 `DiPlayActivity.systemCards` 的「关于」卡片上方或内部挂载更新卡片视图：
    - 包含版本文本显示、动态主按钮（检查/下载/安装）、以及进度条布局；
 3. 在 `DiPlayActivity.onCreate` 中启动后台一次性调用 `UpdateStorageCleaner(this).cleanOldUpdates()`。
 
-- [ ] **Step 4: Run tests to verify**
+- [x] **Step 4: Run tests to verify**
 
 Run: `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.update.*`
 Expected: ALL PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```sh
 git add common/src/main/res/values/strings.xml common/src/main/res/values-zh-rCN/strings.xml common/src/main/java/com/shilapi/xcertplay/update/UpdateCardController.kt common/src/main/java/com/shilapi/xcertplay/DiPlayActivity.kt common/src/test/java/com/shilapi/xcertplay/update/UpdateCardControllerTest.kt
@@ -287,19 +287,44 @@ git commit -m "feat(update): integrate on-demand update card into system setting
 **Files:**
 - Test: All tests across `:common`, `:mobile`, `:shared`
 
-- [ ] **Step 1: Run complete test suite**
+- [x] **Step 1: Run complete test suite**
 
 Run: `./gradlew testDebugUnitTest`
 Expected: BUILD SUCCESSFUL with 0 failures.
 
-- [ ] **Step 2: Run release packaging verification (hop verification)**
+- [x] **Step 2: Run release packaging verification (hop verification)**
 
 Run: `scripts/publish-apk.sh --dry-run` 或 `./gradlew :mobile:assembleRelease`
 验证 APK 包含正确的 FileProvider 与更新资源，未破坏原有 hop 接线与 R8 裁剪规则。
 
-- [ ] **Step 3: Final Commit & Document wrap-up**
+- [x] **Step 3: Final Commit & Document wrap-up**
 
 ```sh
 git status
 ```
 确认工作区干净，所有改动均经过单元测试覆盖。
+
+---
+
+## Done — what the build actually verified (2026-10-20)
+
+| Check | Command | Result |
+|---|---|---|
+| The plan's tests | `./gradlew :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.update.*'` | 64 tests, 0 failures |
+| Full `:common` | `./gradlew :common:testDebugUnitTest` | 377 tests, 0 failures (313 before this work) |
+| Full `:shared` | `./gradlew :shared:testDebugUnitTest` | 541 tests, 0 failures |
+| Lint (as CI runs it) | `./gradlew :mobile:lintDebug` | 11 findings, all pre-existing; none in the update package |
+| Packaging | `publish-apk.sh`'s checks, run against `dist/…V044.apk` re-signed with a stand-in key | pass, apart from the certificate-identity check the stand-in key cannot pass |
+
+Three things about the car's environment that the plan did not say and the work had to decide:
+
+1. **Version code.** `publish-apk.sh` writes the digits of `versionName` with their dots removed, so a
+   tag `v0.4.4-geely` is the file `V044.apk`. The number is therefore read from the tag, and a file
+   the downloader writes is named `V<versionCode>.apk` (`V44`), which is the version the package
+   manager reads back — not a name that could be reversed into a version.
+2. **Android 5.0.** `minSdk` stays 19 and the card only appears from API 21. `getPackageArchiveInfo`
+   and `StatFs` are API 1, `FileProvider` (`external-cache-path`) is safely available below 21, and
+   `REQUEST_INSTALL_PACKAGES` is simply unknown below 26.
+3. **Robolectric has no API 22 image**, so the tests run at 28 with the code paths that differ by API
+   level exercised through their 21+ branch; the car's own 22 run is not covered by any test and
+   should be checked on the device.
