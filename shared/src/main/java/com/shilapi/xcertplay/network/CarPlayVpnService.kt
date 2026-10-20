@@ -17,6 +17,7 @@ import com.shilapi.xcertplay.airplay.PairingStore
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
 import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.io.IOException
+import java.net.BindException
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -119,6 +120,7 @@ class CarPlayVpnService : VpnService() {
             )
             AttachResult.Started
         } catch (error: Exception) {
+            noteAirPlayBindFailed(config.port, error)
             releaseLocked()
             AttachResult.Failed(error.message ?: error.javaClass.simpleName)
         }
@@ -161,6 +163,7 @@ class CarPlayVpnService : VpnService() {
             )
             AttachResult.Started
         } catch (error: Exception) {
+            noteAirPlayBindFailed(config.port, error)
             releaseLocked()
             AttachResult.Failed(error.message ?: error.javaClass.simpleName)
         }
@@ -188,6 +191,28 @@ class CarPlayVpnService : VpnService() {
         super.onDestroy()
     }
 
+    /**
+     * Preferred port taken, listener moved. The number alone does not say who still holds it, and on
+     * this head unit there is no adb to go and look. The kernel table names the uid and, when the
+     * holder is an app, the package.
+     */
+    private fun noteAirPlayPortBusy(busy: Int, bound: Int) {
+        DiagLog.w(
+            TAG,
+            "AirPlay port $busy is in use; listening on $bound instead; " +
+                PortHolders.tcp(busy, packageNameResolver(this)),
+        )
+    }
+
+    /** Every candidate refused. Same table, so the next report says who was on the preferred port. */
+    private fun noteAirPlayBindFailed(port: Int, error: Exception) {
+        if (error !is BindException) return
+        DiagLog.w(
+            TAG,
+            "AirPlay port $port could not be bound; " + PortHolders.tcp(port, packageNameResolver(this)),
+        )
+    }
+
     private fun startAirPlayServer(
         generation: Int,
         replacement: AirPlayAttachment,
@@ -195,14 +220,10 @@ class CarPlayVpnService : VpnService() {
         val addresses = listOf(replacement.address) + replacement.additionalAddresses
         val servers = if (replacement.additionalAddresses.isEmpty()) {
             listOf(
-                AirPlayPortSelector.bind(replacement.address, replacement.config.port) { busy, bound ->
-                    DiagLog.w(TAG, "AirPlay port $busy is in use; listening on $bound instead")
-                },
+                AirPlayPortSelector.bind(replacement.address, replacement.config.port, onFallback = ::noteAirPlayPortBusy),
             )
         } else {
-            AirPlayPortSelector.bindAll(addresses, replacement.config.port) { busy, bound ->
-                DiagLog.w(TAG, "AirPlay port $busy is in use; listening on $bound instead")
-            }
+            AirPlayPortSelector.bindAll(addresses, replacement.config.port, onFallback = ::noteAirPlayPortBusy)
         }
         val server = servers.first()
         // The bound port, not the requested one: every address shares it, and it is what Bonjour and
