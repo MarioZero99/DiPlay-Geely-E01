@@ -63,6 +63,9 @@ import com.shilapi.xcertplay.network.sameWifiNetworkName
 import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.WirelessGap
+import com.shilapi.xcertplay.update.UpdateCardController
+import com.shilapi.xcertplay.update.UpdateInstaller
+import com.shilapi.xcertplay.update.UpdateStorageCleaner
 import com.shilapi.xcertplay.transport.WirelessReadiness
 import com.shilapi.xcertplay.transport.WirelessReadinessCheck
 import com.shilapi.xcertplay.transport.WirelessReadinessInput
@@ -83,8 +86,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
-import java.util.Locale
 import org.json.JSONObject
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /** DiAuto's visual language, with a connection flow for an independent CarPlay receiver. */
@@ -173,6 +176,16 @@ class DiPlayActivity : ComponentActivity() {
     private var toneStop: Runnable? = null
     private var exportButton: Button? = null
     private var uploadButton: Button? = null
+
+    /**
+     * The update card's behaviour, made the first time its card is drawn and kept until the page
+     * goes away. Nothing is checked before the driver presses the button; while the card is not on
+     * the page its state is only where the last press left it.
+     */
+    private var updateLink: UpdateCardController? = null
+    private var currentUpdateState: UpdateCardController.State? = null
+    /** Whether the update card was on the last page drawn, so its controller can be kept or closed. */
+    private var updateCardShown = false
 
     private var physicalSizeBasis = AirPlayDisplaySettings.DEFAULT_PHYSICAL_SIZE_BASIS
     private var widthPhysicalMm = AirPlayDisplaySettings.DEFAULT_WIDTH_PHYSICAL_MM
@@ -263,6 +276,11 @@ class DiPlayActivity : ComponentActivity() {
             isAppearanceLightStatusBars = false
             hide(WindowInsetsCompat.Type.statusBars())
         }
+        // The update folder keeps at most one package, and what is in it was written by a download
+        // that ended -- or did not. It is swept here, on the cold start, rather than before each
+        // download: a download that is about to fetch a package should not be the first thing to
+        // find out the last one was never finished.
+        sweepUpdateFolderInBackground()
         setupError = runCatching {
             // Loading the CarPlay identity is crypto and file I/O on the drawing thread, so its cost
             // belongs in the report next to the rest of the cold start rather than in a guess.
@@ -403,6 +421,10 @@ class DiPlayActivity : ComponentActivity() {
         toneStop = null
         testToneTrack?.let { runCatching { it.stop(); it.release() } }
         testToneTrack = null
+        // A download in flight is stopped with the page: its thread would otherwise keep writing
+        // into a folder no card is left to show, and it would publish to a page that is gone.
+        updateLink?.close()
+        updateLink = null
         releaseAdapterPage()
         super.onDestroy()
     }
@@ -417,6 +439,14 @@ class DiPlayActivity : ComponentActivity() {
     private fun render() = PerfTrace.span("ui/render", warnAboveMs = 32) { renderPage() }
 
     private fun renderPage() {
+        // The card is about to be drawn again from the state the controller holds; a controller whose
+        // card is no longer on the page has nothing left to draw for.
+        if (updateCardShown && page != "system" && page != "settings") {
+            updateLink?.close()
+            updateLink = null
+            currentUpdateState = null
+        }
+        updateCardShown = false
         status = null; connectButton = null; disconnectButton = null; lastRunning = null; adapterStatus = null
         // One probe per redraw: laying the page out asks what the head unit supports several times over.
         cachedReport = null
@@ -941,6 +971,7 @@ class DiPlayActivity : ComponentActivity() {
             if (deviceSupportsWireless()) card.addView(button(getString(R.string.wireless_connection_help), false) { wirelessHelp() }, matchButton(10, 60))
         }
         hopMaintenanceCards(columns)
+        updateCard(columns)
         columns.card(R.string.about, R.drawable.ic_dp_about) { card ->
             card.addView(button(getString(R.string.about_diplay), false) { page = "about"; render() }, matchButton(0, 60))
         }
@@ -3263,6 +3294,145 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun version() = packageManager.getPackageInfo(packageName, 0).versionName ?: "0.1.0-beta.1"
+
+    /**
+     * The update link's card, in System settings beside About.
+     *
+     * The page is redrawn from [UpdateCardController.State] rather than kept in place and mutated, the
+     * way every other control on this page is: the card has one to three lines and one button, and a
+     * rebuild of it costs nothing next to the cockpit. The controller outlives the redraw and only
+     * publishes a state when something has actually happened, so a redraw during a download shows the
+     * download where it had got to.
+     *
+     * No card at all in two cases, each of which is a reason not to offer rather than a fault: the
+     * head unit is older than Android 5.0, where the system installer this card hands a package to
+     * and the external cache the download goes through do not both exist; and another installer owns
+     * the app's updates (a store's copy, say), where replacing it by hand would be undone by that
+     * installer's next update.
+     */
+    private fun updateCard(columns: CardColumns) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return
+        if (UpdateInstaller.shouldStandAside(this, packageName)) return
+        val controller = updateLink ?: newUpdateLink()
+        updateCardShown = true
+        val state = currentUpdateState ?: controller.state.also { currentUpdateState = it }
+        columns.card(R.string.software_update, R.drawable.ic_dp_settings) { card ->
+            card.addView(label(getString(R.string.software_update_hint), 14, MUTED))
+            val currentVersion = label(getString(R.string.update_current_version, version()), 16, TEXT).apply { setPadding(0, dp(12), 0, 0) }
+            card.addView(currentVersion)
+            when (state) {
+                is UpdateCardController.State.Idle -> {
+                    card.addView(button(getString(R.string.check_for_updates), true) { controller.check() }, matchButton(16, 60))
+                }
+                is UpdateCardController.State.Checking -> {
+                    card.addView(label(getString(R.string.checking_updates), 16, MUTED).apply { setPadding(0, dp(8), 0, 0) })
+                    card.addView(button(getString(R.string.checking_updates), false) {}.apply { isEnabled = false }, matchButton(16, 60))
+                }
+                is UpdateCardController.State.UpToDate -> {
+                    card.addView(label(getString(R.string.already_latest_version), 16, TEXT).apply { setPadding(0, dp(8), 0, 0) })
+                    card.addView(button(getString(R.string.check_for_updates), false) { controller.check() }, matchButton(16, 60))
+                }
+                is UpdateCardController.State.UpdateAvailable -> {
+                    card.addView(label(getString(R.string.new_version_found, state.info.versionName), 18, TEXT, true).apply { setPadding(0, dp(8), 0, 0) })
+                    card.addView(label(getString(R.string.new_version_size, formatBytes(state.info.apkAsset.sizeBytes), getString(R.string.update_found_release, state.info.tagName)), 14, MUTED).apply { setPadding(0, dp(4), 0, 0) })
+                    notesExcerpt(state.info.notes)?.let { card.addView(label(it, 14, MUTED).apply { setPadding(0, dp(8), 0, 0) }) }
+                    card.addView(button(getString(R.string.download_update, formatBytes(state.info.apkAsset.sizeBytes)), true) { controller.download() }, matchButton(16, 60))
+                }
+                is UpdateCardController.State.Downloading -> {
+                    val progressText = if (state.totalBytes > 0) {
+                        getString(R.string.downloading_update, state.percent)
+                    } else {
+                        getString(R.string.downloading_unknown_size, formatBytes(state.bytesRead))
+                    }
+                    // A server that said how much is coming gets a bar that fills; one that did not
+                    // gets a bar that moves, because there is nothing to measure it against.
+                    val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                        max = 100
+                        isIndeterminate = state.totalBytes <= 0
+                        if (state.totalBytes > 0) setProgress(state.percent)
+                    }
+                    card.addView(label("${getString(R.string.new_version_found, state.info.versionName)} \u00b7 $progressText", 16, TEXT).apply { setPadding(0, dp(8), 0, 0) })
+                    card.addView(bar, LinearLayout.LayoutParams(-1, dp(8)).apply { topMargin = dp(12) })
+                    card.addView(button(getString(R.string.cancel), false) { controller.cancel() }, matchButton(16, 60))
+                }
+                is UpdateCardController.State.ReadyToInstall -> {
+                    card.addView(label(getString(R.string.update_ready_to_install, state.file.name), 16, TEXT).apply { setPadding(0, dp(8), 0, 0) })
+                    card.addView(button(getString(R.string.install_now), true) { controller.install() }, matchButton(16, 60))
+                }
+                is UpdateCardController.State.Error -> {
+                    card.addView(label(updateErrorMessage(state), 16, WARNING).apply { setPadding(0, dp(8), 0, 0) })
+                    card.addView(button(getString(R.string.retry), true) { controller.retry() }, matchButton(16, 60))
+                }
+            }
+        }
+    }
+
+    /**
+     * What went wrong, in the driver's words, with the platform's own reason after it when there is
+     * one. The reason is never translated: it is the only thing that says which failure it was.
+     */
+    private fun updateErrorMessage(state: UpdateCardController.State.Error): String {
+        val resource = when (state.messageKey) {
+            UpdateCardController.ERROR_NETWORK -> R.string.update_error_network
+            UpdateCardController.ERROR_STORAGE -> R.string.update_error_storage
+            UpdateCardController.ERROR_DOWNLOAD -> R.string.update_error_download
+            UpdateCardController.ERROR_INSTALL -> R.string.update_error_install
+            else -> R.string.update_error_network
+        }
+        val text = getString(resource)
+        return if (state.detail.isBlank()) text else "$text (${state.detail})"
+    }
+
+    /** Makes the controller the first time the card is drawn, and subscribes it to this page. */
+    private fun newUpdateLink(): UpdateCardController {
+        val controller = UpdateCardController(
+            context = this,
+            cleaner = UpdateStorageCleaner(this),
+            currentVersionCode = installedVersionCode(),
+            onStateChanged = { state ->
+                currentUpdateState = state
+                // Only redraw the page the card is on. A download finishing while the driver is on
+                // the home page does not need the cockpit rebuilt for it.
+                if (!isFinishing && !isDestroyed && (page == "system" || page == "settings")) render()
+            },
+            onInstall = { file -> UpdateInstaller.install(this, file).getOrThrow() },
+        )
+        updateLink = controller
+        return controller
+    }
+
+    private fun installedVersionCode(): Int = runCatching { UpdateStorageCleaner(this).getInstalledVersionCode() }.getOrDefault(0)
+
+    /** The first lines of a release's notes: enough to say what changed, never a whole changelog. */
+    private fun notesExcerpt(notes: String): String? {
+        val lines = notes.lineSequence()
+            .map { it.trim().removePrefix("-").removePrefix("*").trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith(">") }
+            .take(3)
+            .toList()
+        return if (lines.isEmpty()) null else lines.joinToString("\n")
+    }
+
+    private fun formatBytes(bytes: Long): String =
+        if (bytes >= 1024 * 1024) String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0))
+        else String.format(Locale.ROOT, "%.0f KB", bytes / 1024.0)
+
+    /**
+     * The folder is swept on the cold start, off the main thread.
+     *
+     * It reads the manifest of every package in it through the package manager, which is file I/O
+     * over a zipped file, and on a car that is not something to do while the page is being drawn.
+     * Nothing is drawn for it: the folder is internal to the update link, and a driver has no reason
+     * to be told that a fragment from a download that ended was removed.
+     */
+    private fun sweepUpdateFolderInBackground() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return
+        if (UpdateInstaller.shouldStandAside(this, packageName)) return
+        val cleaner = UpdateStorageCleaner(applicationContext)
+        Thread({
+            runCatching { cleaner.cleanOldUpdates() }
+        }, "update-sweep").apply { isDaemon = true }.start()
+    }
 
     private fun languageCards(columns: CardColumns) {
         columns.card(R.string.language_section_title) { card ->

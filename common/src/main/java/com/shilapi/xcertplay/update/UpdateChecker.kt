@@ -41,7 +41,7 @@ data class ReleaseInfo(
  *
  * GitHub answers a request with no `User-Agent` with a 403 rather than a page, so one is always sent.
  */
-class UpdateChecker(
+open class UpdateChecker(
     private val repoOwner: String = DEFAULT_REPO_OWNER,
     private val repoName: String = DEFAULT_REPO_NAME,
 ) {
@@ -113,7 +113,7 @@ class UpdateChecker(
      * throw: a check that throws on the drawing thread would take the page down over a lost signal.
      * The message is reason only -- no URL, no stack trace -- because it is shown to a driver.
      */
-    fun checkLatestRelease(currentVersionCode: Int, timeoutMs: Int = DEFAULT_TIMEOUT_MS): CheckResult {
+    open fun checkLatestRelease(currentVersionCode: Int, timeoutMs: Int = DEFAULT_TIMEOUT_MS): CheckResult {
         val body = try {
             fetch(releasesUrl, timeoutMs)
         } catch (e: IOException) {

@@ -24,7 +24,7 @@ import java.util.Locale
  * says so by [DownloadResult.Success.verified], rather than refusing what would then be the car's
  * only route to an update.
  */
-class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
+open class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
 
     sealed class DownloadResult {
         /** [verified] is false only for a release that published no sums file. */
@@ -42,7 +42,7 @@ class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
      * [onProgress] is called from that thread as bytes arrive; [isCancelled] is asked between
      * buffer loads, so a cancel lands within one buffer of the press.
      */
-    fun downloadAndVerify(
+    open fun downloadAndVerify(
         apkUrl: String,
         targetFile: File,
         expectedSha256: String?,
@@ -116,7 +116,7 @@ class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
      * package beside it. A failure to fetch is null: the caller treats a release without a checksum
      * as unverified rather than uninstallable.
      */
-    fun fetchChecksum(sha256Url: String, apkFileName: String): String? {
+    open fun fetchChecksum(sha256Url: String, apkFileName: String): String? {
         val text = try {
             val connection = URL(sha256Url).openConnection() as HttpURLConnection
             try {

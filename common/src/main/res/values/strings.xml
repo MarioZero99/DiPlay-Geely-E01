@@ -515,4 +515,28 @@
     <string name="day_night_manual">Manual</string>
     <string name="exit_confirm_body">The CarPlay session ends with it. To use DiPlay again, open it from the car\'s launcher.</string>
     <string name="cluster_display_not_detected">No dashboard display is attached right now. The dashboard controls appear on their own once the car exposes one.</string>
+    <!-- The update link: a card in System settings that asks GitHub, on a press, whether a newer
+         official package exists. Nothing here is fetched until the driver presses the button. -->
+    <string name="software_update">Software update</string>
+    <string name="software_update_hint">Checks the official release only when you press the button. Nothing is downloaded or installed without your press.</string>
+    <string name="check_for_updates">Check for updates</string>
+    <string name="checking_updates">Checking for updates\u2026</string>
+    <string name="already_latest_version">Already on the latest version</string>
+    <string name="new_version_found">Found new version %1$s</string>
+    <string name="new_version_size">%1$s \u00b7 %2$s</string>
+    <string name="download_update">Download update (%1$s)</string>
+    <string name="downloading_update">Downloading\u2026 %1$d%%</string>
+    <string name="downloading_unknown_size">Downloaded %1$s</string>
+    <string name="install_now">Install now</string>
+    <string name="update_ready_to_install">Update ready (%1$s). The car opens its installer next and asks you to confirm.</string>
+    <string name="update_ready_unverified">This release published no checksum, so the package could not be verified.</string>
+    <string name="update_managed_elsewhere">This app is updated by another installer, so updates are not offered here.</string>
+    <string name="update_error_network">Could not reach the update server. Check the car\'s network connection and try again.</string>
+    <string name="update_error_storage">Not enough storage for the update. It needs about 25 MB free.</string>
+    <string name="update_error_download">The download failed. Try again.</string>
+    <string name="update_error_install">The car\'s installer could not be opened.</string>
+    <string name="retry">Retry</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="update_current_version">Installed: %1$s</string>
+    <string name="update_found_release">Latest on GitHub: %1$s</string>
 </resources>
