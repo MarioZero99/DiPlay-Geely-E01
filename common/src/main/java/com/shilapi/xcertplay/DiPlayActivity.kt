@@ -315,6 +315,16 @@ class DiPlayActivity : ComponentActivity() {
                 // The firmware page is left by its own control and by nothing else while a write is in
                 // flight: back would take the driver off the one screen that says what is happening.
                 if (page == PAGE_FIRMWARE && firmwareRunning()) return
+                if (page == PAGE_FIRMWARE) {
+                    // Back off the waiting page means the page it was opened from, which is the
+                    // bucket its card now lives in rather than the System settings tab it used to
+                    // share. It is the same place the card is, so a driver who came to look at the
+                    // firmware ends up somewhere they can look at it again.
+                    page = "settings"
+                    activeSettingsTab = SettingsTab.EXPERIMENTAL
+                    render()
+                    return
+                }
                 goBack()
             }
         })
@@ -440,8 +450,10 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun renderPage() {
         // The card is about to be drawn again from the state the controller holds; a controller whose
-        // card is no longer on the page has nothing left to draw for.
-        if (updateCardShown && page != "system" && page != "settings") {
+        // card is no longer on the page has nothing left to draw for. The bucket it is in is drawn by
+        // the one settings route and, with the experimental cards in the package, by the system route
+        // too; the waiting page that follows a firmware write is neither.
+        if (updateCardShown && !(showsFirmwareBucket() && !firmwareRunning())) {
             updateLink?.close()
             updateLink = null
             currentUpdateState = null
@@ -511,7 +523,7 @@ class DiPlayActivity : ComponentActivity() {
             "system" -> systemSettings(CardColumns(content))
             "settings" -> settings(content)
             "about" -> about(content)
-            PAGE_FIRMWARE -> firmwareProgress(content)
+            PAGE_FIRMWARE -> if (ExperimentalFeatures.enabled) firmwareProgress(content) else Unit
             else -> Unit
         }
         setContentView(scroll)
@@ -970,8 +982,6 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(button(getString(R.string.app_permissions), false) { openSystem(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }, matchButton(16, 60))
             if (deviceSupportsWireless()) card.addView(button(getString(R.string.wireless_connection_help), false) { wirelessHelp() }, matchButton(10, 60))
         }
-        hopMaintenanceCards(columns)
-        updateCard(columns)
         columns.card(R.string.about, R.drawable.ic_dp_about) { card ->
             card.addView(button(getString(R.string.about_diplay), false) { page = "about"; render() }, matchButton(0, 60))
         }
@@ -989,8 +999,17 @@ class DiPlayActivity : ComponentActivity() {
      *
      * The key is still checked as well: `-Pexperimental=on` with no local.properties is a local package
      * with nothing to upload to, and a button that could only fail is worse than no button.
+     *
+     * The other two tenants decide the firmware of the car and the app installed on it, and neither is
+     * something to put in front of a driver on the settings page they open for the radio volume. The
+     * head-unit card used to sit in System settings with its permanent install hidden in an official
+     * package, which left the same card meaning two different things depending on how the package was
+     * built; the update link was drawn there too. Both are here now, under the switch that decides
+     * whether the bucket is drawn at all, so "what does an official package show?" has one answer.
      */
     private fun experimentalCards(columns: CardColumns) {
+        updateCard(columns)
+        hopMaintenanceCards(columns)
         columns.card(R.string.experimental_report_upload, R.drawable.ic_dp_diagnostics) { card ->
             card.addView(label(getString(R.string.experimental_report_upload_hint), 16, MUTED))
             if (SupabaseLogUpload.enabled(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_KEY)) {
@@ -1460,16 +1479,19 @@ class DiPlayActivity : ComponentActivity() {
                 // head unit's and runs on while this app is gone — and off it when there is neither a
                 // write nor an ending to report, which is a page a restored intent can still name and
                 // not a place to leave anyone standing.
+                // The waiting page is shown to whoever is looking at the bucket the card is in, and
+                // nobody else. The page it used to share was System settings, which had the card on
+                // every route; the bucket is on the one settings route, so both of them qualify.
                 when (maintenance?.status) {
                     CarBluetoothMaintenanceStatus.RUNNING -> {
                         startWatchingMaintenance(hop)
-                        if (page != PAGE_FIRMWARE) page = PAGE_FIRMWARE
+                        if (showsFirmwareBucket()) page = PAGE_FIRMWARE
                     }
                     CarBluetoothMaintenanceStatus.NONE ->
-                        if (page == PAGE_FIRMWARE && hopMaintenanceRunning == null) page = "system"
+                        if (page == PAGE_FIRMWARE && hopMaintenanceRunning == null) page = "settings"
                     else -> Unit
                 }
-                if (page == "system" || page == PAGE_FIRMWARE) render()
+                if (page == "system" || page == "settings" || page == PAGE_FIRMWARE) render()
             }
         }, "car-hop-maintenance").apply { isDaemon = true }.start()
     }
@@ -1482,6 +1504,16 @@ class DiPlayActivity : ComponentActivity() {
      * has been asked again; and the hop's own file read covers an operation that began in an earlier
      * life of this process. None of the three touches the head unit.
      */
+    /**
+     * Whether the page on screen carries the bucket the firmware card is in.
+     *
+     * The single settings route that draws every tab is `"settings"`; `"system"` is the older route
+     * that draws the system cards alone, and it has the bucket's cards only when the bucket is drawn
+     * at all — which is a fact about the package, not about the route.
+     */
+    private fun showsFirmwareBucket(): Boolean =
+        page == "settings" || (page == "system" && ExperimentalFeatures.enabled)
+
     private fun firmwareRunning(): Boolean {
         if (hopMaintenance?.status == CarBluetoothMaintenanceStatus.RUNNING) return true
         if (hopMaintenanceRunning != null) return true
@@ -1523,7 +1555,7 @@ class DiPlayActivity : ComponentActivity() {
                 // follow, and its reason is the card's to report where the buttons are.
                 if (firmwareRunning()) page = PAGE_FIRMWARE else hopMaintenanceResult = message
                 refreshHopMaintenance(hop)
-                if (page == "system" || page == PAGE_FIRMWARE) render()
+                if (page == "system" || page == "settings" || page == PAGE_FIRMWARE) render()
             }
         }, "car-hop-maintenance-run").apply { isDaemon = true }.start()
     }
@@ -1613,18 +1645,11 @@ class DiPlayActivity : ComponentActivity() {
                         .apply { setPadding(0, dp(12), 0, 0) },
                 )
             }
-            // The write that survives a reboot is a local-package feature. What is withheld here is
-            // the offer, not the hop's ability to do it — the same split `PERMANENT_INSTALL_OFFERED`
-            // makes inside the hop, and the same one the experimental bucket makes with the report
-            // upload: the code is in both packages, the control is in one. The other two actions stay
-            // in both, because the payload swap changes nothing on `/system` and the restore is the
-            // way back out of an install a local package made.
-            val offered = if (ExperimentalFeatures.enabled) {
-                maintenance.actions
-            } else {
-                maintenance.actions.filterNot { it.permanent }
-            }
-            offered.forEach { action ->
+            // Every action the hop offers. The card is drawn only in the bucket a local package has,
+            // and the permanent install — the one write that survives a reboot — is the reason this
+            // whole card is in that bucket rather than in System settings. The package decides that by
+            // the bucket existing, which is a rule about the page rather than about each button.
+            maintenance.actions.forEach { action ->
                 if (sessionLive) return@forEach
                 val running = hopMaintenanceRunning == action.id
                 card.addView(

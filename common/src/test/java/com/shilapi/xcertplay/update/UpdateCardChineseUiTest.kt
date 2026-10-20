@@ -6,6 +6,9 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.TextView
 import com.shilapi.xcertplay.DiPlayActivity
+import com.shilapi.xcertplay.ExperimentalFeatures
+import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,6 +22,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "zh-rCN")
 class UpdateCardChineseUiTest {
+
+    @Before fun thisPackageHasTheBucket() = ExperimentalFeatures.override(true)
+
+    @After fun giveThePackageItsOwnAnswerBack() = ExperimentalFeatures.resetOverride()
 
     @Test
     fun theCardIsInChineseOnTheChinesePage() {

@@ -5,9 +5,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.TextView
+import com.shilapi.xcertplay.DiPlayActivity
+import com.shilapi.xcertplay.ExperimentalFeatures
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -15,10 +20,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import com.shilapi.xcertplay.DiPlayActivity
 
 /**
- * The update card where a driver meets it: the settings page's System tab.
+ * The update card where a driver meets it: the settings page's Experimental features bucket.
+ *
+ * The card is experimental -- it replaces the app the car is running, from a GitHub release, which is
+ * not a button for the settings page a driver opens for the radio volume. Its being in the bucket is
+ * what makes it absent from an official package, so that half is pinned too.
  *
  * What is asserted here is what the page shows before anything has happened -- the card, this app's
  * version and the one button that starts it -- and that drawing it fetched, started and wrote
@@ -29,6 +37,10 @@ import com.shilapi.xcertplay.DiPlayActivity
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "en")
 class UpdateCardUiTest {
+
+    @Before fun thisPackageHasTheBucket() = ExperimentalFeatures.override(true)
+
+    @After fun giveThePackageItsOwnAnswerBack() = ExperimentalFeatures.resetOverride()
 
     private fun settingsPage(): DiPlayActivity {
         val intent = Intent(RuntimeEnvironment.getApplication(), DiPlayActivity::class.java)
@@ -57,12 +69,12 @@ class UpdateCardUiTest {
     }
 
     @Test
-    fun theSystemTabDrawsTheUpdateCardWithTheInstalledVersionAndOneButton() {
+    fun theBucketDrawsTheUpdateCardWithTheInstalledVersionAndOneButton() {
         val page = settingsPage()
 
         val texts = texts(page)
 
-        assertTrue("the system page is the one drawn", texts.contains("System settings"))
+        assertTrue("the settings page is the one drawn", texts.contains("Experimental features"))
         assertTrue("the card is on it", texts.contains("Software update"))
         assertTrue(
             "and says what it will not do on its own",
@@ -74,6 +86,29 @@ class UpdateCardUiTest {
             listOf("Check for updates"),
             buttons(page).filter { it == "Check for updates" },
         )
+    }
+
+    @Test
+    fun anOfficialPackageHasNoUpdateCardAndNoSystemCardEither() {
+        ExperimentalFeatures.override(false)
+        val page = settingsPage()
+
+        val texts = texts(page)
+
+        assertTrue("the system page is drawn", texts.contains("System settings"))
+        assertFalse("the update link is experimental, so an official package has none", texts.contains("Software update"))
+        assertFalse("and nothing that would start it", buttons(page).any { it == "Check for updates" })
+    }
+
+    @Test
+    fun theSystemTabNoLongerCarriesTheUpdateLink() {
+        // The card lives in one bucket and only one. The System tab is what a driver opens to save a
+        // report; an app that can replace itself does not belong on it.
+        val page = settingsPage()
+        val texts = texts(page)
+
+        assertTrue("the System tab is on the page too", texts.contains("System settings"))
+        assertEquals("one update card in total", 1, texts.count { it == "Software update" })
     }
 
     @Test

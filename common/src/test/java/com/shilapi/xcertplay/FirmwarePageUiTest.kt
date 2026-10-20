@@ -45,7 +45,18 @@ import java.time.Duration
 class FirmwarePageUiTest {
     private val hop = FirmwareHop()
 
-    @Before fun thisBuildHasThisHop() = CarBluetoothHops.override(hop)
+    /**
+     * This build has this hop, and this package has the bucket the firmware card lives in.
+     *
+     * The bucket is pinned rather than read for the reason [com.shilapi.xcertplay.ExperimentalFeatures]
+     * gives: a unit test cannot rebuild the package around itself. An official package has no bucket,
+     * and therefore no card and no waiting page -- [anOfficialPackageHasNoFirmwareCardAtAll] says that
+     * by switching the pin off.
+     */
+    @Before fun thisBuildHasThisHop() {
+        CarBluetoothHops.override(hop)
+        ExperimentalFeatures.override(true)
+    }
 
     @After fun giveTheBuildItsOwnAnswerBack() {
         CarBluetoothHops.resetOverride()
@@ -253,30 +264,55 @@ class FirmwarePageUiTest {
     }
 
     /**
-     * The permanent install is a local-package feature: an official package does not offer it.
+     * The whole card is a local-package feature, and an official package has none of it.
      *
-     * It is the one action here that leaves something a reboot does not undo, which is exactly why
-     * the package decides it. The two an official package still offers are the ones that change
-     * nothing on `/system` — and the restore in particular, because it is the way back out of an
-     * install a local package made, and a package that could not undo one would strand the car.
+     * It used to be in System settings with only its permanent install hidden in an official
+     * package, which made one card mean two things depending on how the package was built. Where the
+     * card is now is the answer: the bucket that exists only in a local package. An official package
+     * therefore offers no write to `/system`, and no payload swap or restore either — those two do
+     * not touch `/system`, but they act on the firmware the bucket is here to change, and the page
+     * that shows a write in progress is drawn by the same bucket.
      */
-    @Test fun anOfficialPackageDoesNotOfferThePermanentInstall() {
+    @Test fun anOfficialPackageHasNoFirmwareCardAtAll() {
         ExperimentalFeatures.override(false)
         val activity = open("system")
-        val shown = settle(activity) { "Head unit firmware" in texts(activity) }
-        assertTrue("the card is still drawn", "Head unit firmware" in shown)
+        val shown = settle(activity) { "System settings" in texts(activity) }
+        assertFalse("no firmware card", "Head unit firmware" in shown)
         val labels = buttonLabels(activity)
-        assertFalse("no write to /system on offer", "Install the patched firmware" in labels)
-        assertTrue("the payload swap stays", "Use the new payload" in labels)
-        assertTrue("and so does the way back out", "Put the head unit's own firmware back" in labels)
+        assertFalse("no write to /system", "Install the patched firmware" in labels)
+        assertFalse("and none of what acts on the firmware", "Use the new payload" in labels || "Put the head unit's own firmware back" in labels)
     }
 
-    /** The local package is the one that offers it, and it offers it unconditionally. */
+    /** The local package is the one with the bucket, and it offers every action the hop has. */
     @Test fun theLocalPackageOffersThePermanentInstall() {
         ExperimentalFeatures.override(true)
-        val activity = open("system")
+        val activity = open("settings")
         settle(activity) { "Head unit firmware" in texts(activity) }
-        assertTrue("the write is on offer", "Install the patched firmware" in buttonLabels(activity))
+        val labels = buttonLabels(activity)
+        assertTrue("the write is on offer", "Install the patched firmware" in labels)
+        assertTrue("so is the payload swap", "Use the new payload" in labels)
+        assertTrue("and the way back out", "Put the head unit's own firmware back" in labels)
+    }
+
+    /**
+     * Back is not a way off it either, from the bucket's own route.
+     *
+     * The waiting page follows an operation wherever it was started from, so it reappears the moment
+     * the hop still reports one running — and a driver who pressed back would be looking at a page
+     * that says nothing about the write. The only way off is the write ending.
+     */
+    @Test fun backOffTheWaitingPageLandsBackOnItWhileItRuns() {
+        hop.running = true
+        hop.status = CarBluetoothMaintenanceStatus.RUNNING
+        hop.currentStep = 3
+        val activity = open("settings")
+        settle(activity) { heading in texts(activity) }
+
+        activity.onBackPressedDispatcher.onBackPressed()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertTrue("still on the waiting page", heading in texts(activity))
+        assertFalse("and the app is not on its way out", activity.isFinishing)
     }
 
     /** A hop whose one operation is the one under test, answering from fields the test sets. */
