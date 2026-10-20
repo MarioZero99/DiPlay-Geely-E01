@@ -134,11 +134,7 @@ class UpdateChecker(
      */
     @SuppressLint("TrulyRandom") // Nothing here is encrypted; this is only a fetch of public JSON.
     internal fun fetch(url: String, timeoutMs: Int): String? {
-        val connection = try {
-            URL(url).openConnection() as HttpURLConnection
-        } catch (e: ClassCastException) {
-            return null
-        }
+        val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = timeoutMs
             connection.readTimeout = timeoutMs
