@@ -58,6 +58,27 @@ class UpdateInstallerTest {
         assertTrue(!UpdateInstaller.shouldStandAside(context, packageName = "not.installed.here"))
     }
 
+    @Test fun theSystemInstallerStillOffersUpdates() {
+        shadowOf(context.packageManager).addPackage(context.packageName)
+        context.packageManager.setInstallerPackageName(context.packageName, "com.android.packageinstaller")
+
+        assertTrue(!UpdateInstaller.shouldStandAside(context, packageName = context.packageName))
+    }
+
+    @Test fun anAdbInstallStillOffersUpdates() {
+        shadowOf(context.packageManager).addPackage(context.packageName)
+        context.packageManager.setInstallerPackageName(context.packageName, "com.android.shell")
+
+        assertTrue(!UpdateInstaller.shouldStandAside(context, packageName = context.packageName))
+    }
+
+    @Test fun anUpdateThisAppInstalledStillOffersTheNextOne() {
+        shadowOf(context.packageManager).addPackage(context.packageName)
+        context.packageManager.setInstallerPackageName(context.packageName, context.packageName)
+
+        assertTrue(!UpdateInstaller.shouldStandAside(context, packageName = context.packageName))
+    }
+
     @Test fun theSystemInstallerIsNotAnotherOwner() {
         // An app installed through the system's own installer UI is not store-owned: nothing keeps
         // a record that would be broken by replacing it.

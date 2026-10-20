@@ -526,6 +526,30 @@ class UpdateCardControllerTest {
         assertTrue("and so is the fragment", !fragment.exists())
     }
 
+    @Test fun aSumsFileThatCannotBeFetchedDoesNotOfferAnInstall() {
+        checker.latest = release(45)
+        downloader.checksumMissing = true
+        val card = controller()
+
+        card.check()
+
+        await<UpdateCardController.State.Error> { it.messageKey == UpdateCardController.ERROR_CHECKSUM }
+        assertEquals(0, downloader.calls)
+    }
+
+    @Test fun aDownloadWhoseChecksumDisappearsIsNotFetched() {
+        checker.latest = release(45)
+        val card = controller()
+        card.check()
+        await<UpdateCardController.State.UpdateAvailable>()
+        downloader.checksumMissing = true
+
+        card.download()
+
+        await<UpdateCardController.State.Error> { it.messageKey == UpdateCardController.ERROR_CHECKSUM }
+        assertEquals(0, downloader.calls)
+    }
+
     @Test fun aFailureIsSaidInTheWordsItsKindDeserves() {
         checker.latest = release(45)
         val card = controller()
@@ -700,6 +724,12 @@ class UpdateCardControllerTest {
             return DownloadResult.Success(targetFile, verified = expectedSha256 != null)
         }
 
-        override fun fetchChecksum(sha256Url: String, apkFileName: String): String? = sums[apkFileName]
+        /** A sums file that was published but could not be fetched. The download must not proceed. */
+        @Volatile var checksumMissing = false
+
+        override fun fetchChecksum(sha256Url: String, apkFileName: String): String? {
+            if (checksumMissing) return null
+            return sums[apkFileName] ?: "ab".repeat(32)
+        }
     }
 }

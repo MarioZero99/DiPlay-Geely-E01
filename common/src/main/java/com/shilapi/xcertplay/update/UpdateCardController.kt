@@ -146,6 +146,15 @@ class UpdateCardController(
     }
 
     /**
+     * The digest published beside [info], or null when this release has no sums file or the sums file
+     * could not be read. A release that has a sums file and a null return is not downloaded.
+     */
+    private fun checksumFor(info: ReleaseInfo): String? {
+        val asset = info.sha256Asset ?: return null
+        return runCatching { downloader.fetchChecksum(asset.downloadUrl, info.apkAsset.name) }.getOrNull()
+    }
+
+    /**
      * Decides, off the main thread, whether the offered release is already here.
      *
      * The folder is cleaned first, so a package for a version that is now installed goes before the
@@ -155,7 +164,11 @@ class UpdateCardController(
      */
     private fun offer(info: ReleaseInfo, ticket: Int) {
         val versionCode = info.versionCode
-        val sums = info.sha256Asset?.let { asset -> runCatching { downloader.fetchChecksum(asset.downloadUrl, info.apkAsset.name) }.getOrNull() }
+        val sums = checksumFor(info)
+        if (info.sha256Asset != null && sums == null) {
+            finish(ticket) { fail(Step.CHECK, info, ERROR_CHECKSUM, "checksum unavailable") }
+            return
+        }
         val found = cleaner.cleanOldUpdates(currentVersionCode).let { cleaner.findReadyApk(versionCode, sums) }
         // A file whose checksum matches but whose manifest cannot be read is not the package: the
         // name and the digest say what it should be, and the archive says it is not. Offering it
@@ -202,13 +215,18 @@ class UpdateCardController(
                 finish(ticket) { fail(Step.DOWNLOAD, info, ERROR_STORAGE, "") }
                 return@execute
             }
+            // The checksum is asked for again here rather than kept from the check: the copy that
+            // decides the install is the one fetched beside the download. It is asked before the
+            // folder is cleared, so a sums file that cannot be read leaves what is already there.
+            val expected = checksumFor(info)
+            if (info.sha256Asset != null && expected == null) {
+                finish(ticket) { fail(Step.DOWNLOAD, info, ERROR_CHECKSUM, "checksum unavailable") }
+                return@execute
+            }
             // One package at a time: what the folder holds for another version goes before this
             // download writes another 6 MB beside it.
             cleaner.prepareForDownload(info.versionCode)
             val apkFile = File(cleaner.updateDir, info.apkAsset.name)
-            // The checksum is asked for again here rather than kept from the check: the copy that
-            // decides the install is the one fetched beside the download.
-            val expected = info.sha256Asset?.let { asset -> downloader.fetchChecksum(asset.downloadUrl, info.apkAsset.name) }
             // Anything the downloader throws, rather than returns, ends this attempt the same way a
             // failure it returns does: the page is told and the fragment is gone. Letting it escape
             // would leave the page on a download that is no longer running.

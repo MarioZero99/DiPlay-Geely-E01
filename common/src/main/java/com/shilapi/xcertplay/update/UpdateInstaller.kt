@@ -86,8 +86,13 @@ object UpdateInstaller {
      * the driver just installed. Installed by hand, there is nothing to leave it to, and the link
      * offers.
      */
-    fun shouldStandAside(context: Context, packageName: String): Boolean =
-        installingPackageOnBehalfOf(context, packageName) != null
+    fun shouldStandAside(context: Context, packageName: String): Boolean {
+        val installer = installingPackageOnBehalfOf(context, packageName) ?: return false
+        // The package installer, adb, and an update this app handed over itself record a name, and
+        // none of those names is a store that will replace what the driver just installed.
+        if (installer == packageName) return false
+        return !isKnownInstallPath(installer)
+    }
 
     /**
      * The installers that do not own an app's updates.
