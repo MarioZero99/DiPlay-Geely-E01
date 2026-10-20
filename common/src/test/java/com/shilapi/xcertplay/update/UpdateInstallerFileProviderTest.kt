@@ -16,7 +16,12 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
- * The URI the installer is handed, resolved through the FileProvider the app really declares.
+ * The intent and URI the installer is handed, resolved through the FileProvider the app declares.
+ *
+ * The action is the one a file manager on this car uses to install a package it downloaded
+ * (`ACTION_INSTALL_PACKAGE` with the package-archive MIME type), because that is the one the head
+ * unit's installer has been seen to answer. The URI comes from the app's own provider, exposed over
+ * the app's cache, for the same reason that file manager exposes its own.
  *
  * This class keeps the app's manifest, which [UpdateInstallerTest] drops: the FileProvider answers a
  * URI only for a root its `diagnostic_report_paths.xml` maps, and a test that runs without the
@@ -49,10 +54,13 @@ class UpdateInstallerFileProviderTest {
     @Test fun createInstallIntentSetsCorrectActionAndFlags() {
         val intent = UpdateInstaller.createInstallIntent(context, apk)
 
-        assertEquals(Intent.ACTION_VIEW, intent.action)
+        assertEquals(Intent.ACTION_INSTALL_PACKAGE, intent.action)
         assertEquals("application/vnd.android.package-archive", intent.type)
         assertTrue("the page is an activity, but the intent is not promised that", intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
         assertTrue("the installer must be able to read a URI it was handed", intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+        assertTrue("the package is from an app, not an unknown source", intent.getBooleanExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, false))
+        assertTrue("it replaces the copy that is installed", intent.getBooleanExtra(Intent.EXTRA_ALLOW_REPLACE, false))
+        assertEquals("the installer may name the app that asked", context.packageName, intent.getStringExtra(Intent.EXTRA_INSTALLER_PACKAGE_NAME))
     }
 
     @Test fun createInstallIntentUsesContentUri() {
@@ -91,7 +99,7 @@ class UpdateInstallerFileProviderTest {
         assertTrue(result.isSuccess)
         val started = shadowOf(context).nextStartedActivity
         assertNotNull(started)
-        assertEquals(Intent.ACTION_VIEW, started.action)
+        assertEquals(Intent.ACTION_INSTALL_PACKAGE, started.action)
         assertEquals("application/vnd.android.package-archive", started.type)
     }
 

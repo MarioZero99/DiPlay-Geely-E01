@@ -18,6 +18,15 @@ import java.io.File
  * intent is refused from API 24 up, and this app targets 37 on a 22 head unit, so the refusal would
  * come from the platform's `targetSdk` check rather than from the car's age. The read grant is a
  * flag on the intent, so it lasts as long as the intent does.
+ *
+ * `ACTION_INSTALL_PACKAGE` rather than a plain view of the archive. A file manager on this very car
+ * that does open the installer (`com.cxinventor.file.explorer`, found by its dex strings) sends
+ * exactly this action with this MIME type, and this is the action the installer's own activity
+ * declares an intent filter for. A `view` of a package-archive URI reaches it only through the
+ * platform's fallback for unhandled types, which is a path the car's ROM did not have to keep --
+ * `ACTION_INSTALL_PACKAGE` is what the head unit's own file browsers have been shown to get through.
+ * It is deprecated from API 29 and this app targets 37, so the only place the deprecation can bite
+ * is a device running Android 10 or later -- and never this one.
  */
 object UpdateInstaller {
 
@@ -29,15 +38,23 @@ object UpdateInstaller {
     /**
      * The intent that opens [apkFile] in the system installer.
      *
-     * `ACTION_VIEW` rather than `ACTION_INSTALL_PACKAGE`: the latter is deprecated from API 29, and
-     * the installer's own file-type handling answers a view of a package-archive `content://` URI.
+     * The three extras are the ones the platform's own documentation attaches to this action: the
+     * package is not from an unknown source (`EXTRA_NOT_UNKNOWN_SOURCE`, API 17+), it replaces the
+     * copy already installed (`EXTRA_ALLOW_REPLACE`, API 19+), and the installer may name this app as
+     * the one that started it. None is required for the installer to open, and all of them are what
+     * tells it the request came from an app that said it could install rather than from a stray
+     * intent.
      */
+    @Suppress("DEPRECATION") // API 29: the action stays for every head unit this app is built for.
     fun createInstallIntent(context: Context, apkFile: File): Intent {
         val uri: Uri = FileProvider.getUriForFile(context, authority(context), apkFile)
-        return Intent(Intent.ACTION_VIEW).apply {
+        return Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
             setDataAndType(uri, PACKAGE_MIME_TYPE)
             // Not promised the caller is an activity: the controller runs this from a worker.
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+            putExtra(Intent.EXTRA_ALLOW_REPLACE, true)
+            putExtra(Intent.EXTRA_INSTALLER_PACKAGE_NAME, context.packageName)
         }
     }
 

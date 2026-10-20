@@ -2,10 +2,15 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <files-path name="reports" path="diagnostic-reports/" />
     <external-files-path name="external_reports" path="diagnostic-reports/" />
-    <!-- The update link's own packages, and only that folder: a package from anywhere else is not
-         one this app downloaded and checked, and must not be openable through its provider. Both
-         roots are listed because the download goes to whichever one the car has: the external cache
-         when there is mounted storage, the internal cache when there is not. -->
-    <external-cache-path name="updates" path="updates/" />
-    <cache-path name="internal_updates" path="updates/" />
+    <!--
+        The app's own cache, which is where the update link writes its package, and the external one
+        for the same folder when the car has mounted storage. Both are inside the app's own sandbox:
+        nothing outside it is reachable through this provider.
+
+        The pattern is the one a file manager already on this car (com.cxinventor.file.explorer)
+        uses for its own cache, and its dex hands a package over with ACTION_INSTALL_PACKAGE. This
+        provider is here for that handover.
+    -->
+    <cache-path name="updates" path="." />
+    <external-cache-path name="external_updates" path="." />
 </paths>
