@@ -32,4 +32,15 @@ class AudioBufferProgressTest {
         assertEquals(40, buffer.queuedBytes(0))
         assertEquals(0, buffer.queuedBytes(20))
     }
+
+    @Test fun aPlatformWithoutUnderrunCountsOnlyCountsADrainOnce() {
+        assertEquals(DrainAction.COUNT, drainAction(drained = true, platformReportsUnderruns = false, alreadyCounted = false))
+        assertEquals(DrainAction.NONE, drainAction(drained = true, platformReportsUnderruns = false, alreadyCounted = true))
+        assertEquals(DrainAction.NONE, drainAction(drained = false, platformReportsUnderruns = false, alreadyCounted = true))
+    }
+
+    @Test fun aPlatformThatReportsUnderrunsPausesWhenMusicDrains() {
+        assertEquals(DrainAction.PAUSE_AND_REBUFFER, drainAction(drained = true, platformReportsUnderruns = true, alreadyCounted = false))
+        assertEquals(DrainAction.NONE, drainAction(drained = false, platformReportsUnderruns = true, alreadyCounted = false))
+    }
 }

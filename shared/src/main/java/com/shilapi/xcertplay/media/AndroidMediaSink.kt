@@ -619,6 +619,7 @@ private class AudioRenderer(
     private var underrunsAtPlaybackStart = 0
     private var lastPcmWriteNs = 0L
     private var rebufferCount = 0
+    private var drainCounted = false
     private val gainLock = Any()
     @Volatile private var mediaGain = 1f
     private val audioBufferInfo = MediaCodec.BufferInfo()
@@ -1082,19 +1083,28 @@ private class AudioRenderer(
 
     private fun maintainPlaybackBuffer() {
         val track = track ?: return
-        val underrunDetected = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+        val platformReportsUnderruns = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+        val underrunDetected = if (platformReportsUnderruns) {
             track.compatUnderruns() > underrunsAtPlaybackStart
         } else {
-            true // On API < 24, underrunCount is unsupported by the platform; rely on bufferProgress.queuedBytes == 0L
+            true
         }
-        if (bufferProgress.shouldRebuffer(format.audioType, playbackStarted,
-                underrunDetected, queue.isEmpty(), track.playbackHeadPosition)) {
-            // The hardware buffer has actually drained. Pause without flushing or discarding PCM,
-            // then use the configured start threshold again when music resumes.
-            track.pause()
-            playbackStarted = false
-            prebufferBytes = 0
-            rebufferCount++
+        val drained = bufferProgress.shouldRebuffer(format.audioType, playbackStarted,
+            underrunDetected, queue.isEmpty(), track.playbackHeadPosition)
+        when (drainAction(drained, platformReportsUnderruns, drainCounted)) {
+            DrainAction.NONE -> if (!drained) drainCounted = false
+            DrainAction.COUNT -> {
+                drainCounted = true
+                rebufferCount++
+            }
+            DrainAction.PAUSE_AND_REBUFFER -> {
+                // The hardware buffer has actually drained. Pause without flushing or discarding PCM,
+                // then use the configured start threshold again when music resumes.
+                track.pause()
+                playbackStarted = false
+                prebufferBytes = 0
+                rebufferCount++
+            }
         }
         // A short final burst may never reach the start threshold. Play it after a bounded wait.
         if (!playbackStarted && prebufferBytes > 0 && queue.isEmpty() &&
