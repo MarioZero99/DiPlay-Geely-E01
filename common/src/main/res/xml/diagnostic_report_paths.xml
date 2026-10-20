@@ -2,4 +2,10 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <files-path name="reports" path="diagnostic-reports/" />
     <external-files-path name="external_reports" path="diagnostic-reports/" />
+    <!-- The update link's own packages, and only that folder: a package from anywhere else is not
+         one this app downloaded and checked, and must not be openable through its provider. Both
+         roots are listed because the download goes to whichever one the car has: the external cache
+         when there is mounted storage, the internal cache when there is not. -->
+    <external-cache-path name="updates" path="updates/" />
+    <cache-path name="internal_updates" path="updates/" />
 </paths>

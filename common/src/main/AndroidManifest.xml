@@ -12,6 +12,10 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" tools:ignore="ScopedStorage" />
     <!-- Optional, owner-enabled Usage Access for the verified DiLink 5.1 cluster profile. -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
+    <!-- Lets the system installer open a package this app downloaded. The app never installs by
+         itself: the installer draws its confirmation and the driver presses it. The permission is
+         unknown below API 26, where nothing asks for it and this app was installed by hand anyway. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application>
         <provider
             android:name="com.shilapi.xcertplay.DiagnosticReportProvider"
