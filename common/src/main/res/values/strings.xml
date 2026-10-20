@@ -539,4 +539,5 @@
     <string name="dismiss">Dismiss</string>
     <string name="update_current_version">Installed: %1$s</string>
     <string name="update_found_release">Latest on GitHub: %1$s</string>
+    <string name="update_install_confirm">DiPlay %1$s will now be installed over the version on this car. Your settings stay as they are. The car opens its installer next and asks you to confirm.</string>
 </resources>

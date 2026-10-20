@@ -9,6 +9,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -64,7 +65,15 @@ class UpdateCardControllerTest {
         ShadowStatFs.unregisterStats(cleaner.updateDir)
     }
 
-    private fun controller(currentVersionCode: Int = 44, onInstall: (File) -> Unit = {}): UpdateCardController =
+    /**
+     * The card with a page behind it. [confirmInstall] stands for the driver at the installer's own
+     * question -- false answers it straight away, which is what the car's service does.
+     */
+    private fun controller(
+        currentVersionCode: Int = 44,
+        confirmInstall: Boolean = false,
+        onInstall: (File) -> Unit = {},
+    ): UpdateCardController =
         UpdateCardController(
             context = context,
             cleaner = cleaner,
@@ -73,6 +82,7 @@ class UpdateCardControllerTest {
             currentVersionCode = currentVersionCode,
             onStateChanged = { states += it },
             onInstall = onInstall,
+            needsInstallerConfirmation = { confirmInstall },
         ).also { controller = it }
 
     /** Lets the main thread run and waits for a state of [type], failing with what it saw instead. */
@@ -245,6 +255,48 @@ class UpdateCardControllerTest {
         assertEquals(cleaner.apkFileName(45), installed.single().name)
     }
 
+    @Test fun installAsksBeforeItOpensTheInstaller() {
+        // On the car, pressing "install now" opens a question first; nothing reaches the installer
+        // until it is answered. The answer itself is a dialog, which a unit test cannot press, so
+        // what is pinned here is that the question is asked and that no installer ran meanwhile.
+        checker.latest = release(45)
+        val installed = Collections.synchronizedList(mutableListOf<File>())
+        val card = controller(confirmInstall = true, onInstall = { installed += it })
+        card.check()
+        await<UpdateCardController.State.UpdateAvailable>()
+        card.download()
+        await<UpdateCardController.State.ReadyToInstall>()
+
+        card.install()
+        settle()
+
+        assertEquals("nothing installs before the question is answered", 0, installed.size)
+        assertTrue("and the package is still there to answer for", card.state is UpdateCardController.State.ReadyToInstall)
+    }
+
+    @Test fun aPackageThatTheSystemCacheTookAwayIsADownloadAgainNotAnInstallError() {
+        // The update folder is a cache: between the download finishing and the press, Android may
+        // reclaim it. The page says what happened and the next press fetches it again.
+        checker.latest = release(45)
+        val installed = Collections.synchronizedList(mutableListOf<File>())
+        val card = controller(onInstall = { installed += it })
+        card.check()
+        await<UpdateCardController.State.UpdateAvailable>()
+        card.download()
+        val ready = await<UpdateCardController.State.ReadyToInstall>()
+        ready.file.delete()
+
+        card.install()
+
+        await<UpdateCardController.State.Error> { it.messageKey == UpdateCardController.ERROR_DOWNLOAD }
+        assertEquals("no installer was opened for a file that is not there", 0, installed.size)
+
+        card.retry()
+        val again = await<UpdateCardController.State.ReadyToInstall> { it.file.isFile }
+        assertEquals("retry fetches it again", 2, downloader.calls)
+        assertTrue(again.file.isFile)
+    }
+
     @Test fun aFailedInstallIsSaidSoAndKeepsThePackage() {
         checker.latest = release(45)
         val card = controller(onInstall = { throw IllegalStateException("no installer") })
@@ -257,6 +309,41 @@ class UpdateCardControllerTest {
 
         await<UpdateCardController.State.Error> { it.messageKey == UpdateCardController.ERROR_INSTALL }
         assertTrue("a package that could not be opened is still worth pressing again", ready.file.exists())
+    }
+
+    // ---- packages that are on disk but not installable -----------------------------------------
+
+    @Test fun aDamagedDownloadIsReplacedRatherThanOfferedAgain() {
+        // A package from an interrupted transfer wearing the release's name and digest is what the
+        // folder can hold: the downloader writes beside it and renames only a verified file, but the
+        // release's name is fixed, so a file already there is the file the next download writes to.
+        // A file whose manifest the package manager cannot read cannot be installed -- and the page
+        // used to take it straight to "install", which is a button that could only fail.
+        checker.latest = release(45)
+        val damaged = File(cleaner.updateDir, cleaner.apkFileName(45)).apply { writeBytes(ByteArray(256)) }
+        downloader.sums[damaged.name] = sha256Of(damaged)
+        val card = controller()
+
+        card.check()
+
+        await<UpdateCardController.State.UpdateAvailable>()
+        assertEquals("it is not taken for an installable package", 0, downloader.calls)
+    }
+
+    @Test fun aPackageManagerThatCannotReadArchivesStillDownloads() {
+        // `getPackageArchiveInfo` answers null in this stand-in -- which is every Robolectric test --
+        // while the checksum matches and the release does not care. The archive's manifest is a
+        // reason to distrust a package, not a reason to refuse one the checksum vouches for.
+        checker.latest = release(45)
+        val ready = downloadable(45)
+        downloader.sums[ready.name] = sha256Of(ready)
+        val card = controller()
+
+        card.check()
+
+        assertEquals(ready, await<UpdateCardController.State.ReadyToInstall>().file)
+        // The cleaner has to have kept it for that to happen at all.
+        assertFalse("the cleaner must not have removed a package whose checksum matches", ready.exists().not())
     }
 
     // ---- retrying ----------------------------------------------------------------------------
@@ -291,6 +378,34 @@ class UpdateCardControllerTest {
         await<UpdateCardController.State.ReadyToInstall>()
         assertEquals("the download is repeated, the check is not", 2, downloader.calls)
         assertEquals("and the release is not looked up again", 1, checker.requests.size)
+    }
+
+    @Test fun aDownloadPressedWithoutACheckDoesNothing() {
+        // "Download" means the release this page found. A page that never found one -- or one that
+        // found the app was current -- has nothing to fetch, and must not go looking for something.
+        checker.latest = release(44)
+        val card = controller()
+        card.check()
+        await<UpdateCardController.State.UpToDate>()
+
+        card.download()
+        settle()
+
+        assertEquals("nothing is fetched without an offer", 0, downloader.calls)
+        assertTrue(card.state is UpdateCardController.State.UpToDate)
+    }
+
+    @Test fun theStateAfterAFinishedDownloadSaysWhichPackageIsReady() {
+        checker.latest = release(45)
+        val card = controller()
+        card.check()
+        await<UpdateCardController.State.UpdateAvailable>()
+        card.download()
+        val ready = await<UpdateCardController.State.ReadyToInstall>()
+
+        // The page says the package's own name. The version it belongs to is the one the offer
+        // named, so the two have to agree even after a rename.
+        assertEquals(downloader.lastApkFileName, ready.file.name)
     }
 
     @Test fun retryAfterAFailedInstallOpensTheInstallerAgain() {
@@ -368,15 +483,8 @@ class UpdateCardControllerTest {
      * a package to survive must give it one. The bytes are not an installable APK -- nothing here
      * installs anything -- but they carry the manifest the package manager is asked for.
      */
-    private fun downloadable(versionCode: Int): File {
-        val file = File(cleaner.updateDir, cleaner.apkFileName(versionCode))
-        file.writeBytes(ByteArray(256) { it.toByte() })
-        shadowOf(context.packageManager).setPackageArchiveInfo(
-            file.absolutePath,
-            android.content.pm.PackageInfo().apply { this.versionCode = versionCode },
-        )
-        return file
-    }
+    private fun downloadable(versionCode: Int): File =
+        readablePackage(context, File(cleaner.updateDir, cleaner.apkFileName(versionCode)), versionCode)
 
     private fun release(versionCode: Int): ReleaseInfo {
         val versionName = "0.${versionCode / 10}.${versionCode % 10}-geely"
@@ -414,12 +522,14 @@ class UpdateCardControllerTest {
         }
     }
 
-    /** Writes [payload] to the target, or -- when [blockUntilCancelled] -- waits to be cancelled. */
-    private class FakeDownloader : UpdateDownloader() {
+    /** Writes a readable package to the target, or -- when [blockUntilCancelled] -- waits to be cancelled. */
+    private inner class FakeDownloader : UpdateDownloader() {
         @Volatile var calls = 0
         @Volatile var blockUntilCancelled = false
         @Volatile var cancelRequested = false
         @Volatile var failure: Exception? = null
+        /** The name the offer asked to be written under. */
+        @Volatile var lastApkFileName: String? = null
         /** Open once the stand-in is inside the download, so a test can cancel a running one. */
         val running = CountDownLatch(1)
         /** Open when the stand-in has returned, whichever way it ended. */
@@ -450,6 +560,7 @@ class UpdateCardControllerTest {
         ): DownloadResult {
             calls++
             writes += targetFile.absolutePath
+            lastApkFileName = targetFile.name
             failure?.let { throw it }
             val payload = ByteArray(1024)
             if (blockUntilCancelled) {
@@ -462,7 +573,7 @@ class UpdateCardControllerTest {
                 }
             }
             onProgress(payload.size / 2L, payload.size.toLong())
-            targetFile.writeBytes(payload)
+            readablePackage(context, targetFile, 45)
             onProgress(payload.size.toLong(), payload.size.toLong())
             return DownloadResult.Success(targetFile, verified = expectedSha256 != null)
         }

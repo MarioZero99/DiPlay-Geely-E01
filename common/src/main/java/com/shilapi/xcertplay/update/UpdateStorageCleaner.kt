@@ -75,11 +75,18 @@ class UpdateStorageCleaner(private val context: Context) {
     }
 
     /**
-     * Removes the fragments and the packages nothing will install, and says how many files went.
+     * Removes the fragments and the packages that are older than the app, and says how many went.
      *
-     * An `.apk` stays only when the package manager can read it and its version is newer than
-     * [currentVersionCode]. [PackageManager.getPackageArchiveInfo] is the only answer that is about
-     * the file itself rather than about its name.
+     * A `.download` fragment is never resumable, so it always goes. An `.apk` goes when the package
+     * manager can read it and its version is no newer than [currentVersionCode] -- reinstalling what
+     * is running buys nothing, and a package for a version that has since been installed is storage
+     * the car does not get back otherwise.
+     *
+     * An `.apk` the package manager *cannot* read is left alone. That was one of the two removals
+     * here, and it rested on "unreadable" meaning "truncated": it also means "this package manager
+     * cannot look inside archives", which is every Robolectric test and a vendor ROM away from being
+     * the car. Nothing is lost by keeping it -- [findReadyApk] and [UpdateInstaller] are what decide
+     * whether a file is installable, and both read the manifest themselves.
      */
     fun cleanOldUpdates(currentVersionCode: Int = getInstalledVersionCode()): Int {
         val dir = updateDir
@@ -87,11 +94,24 @@ class UpdateStorageCleaner(private val context: Context) {
         var removed = 0
         dir.listFiles()?.forEach { file ->
             if (!file.isFile) return@forEach
-            val keep = file.name.endsWith(APK_SUFFIX) && versionCodeOf(file)?.let { it > currentVersionCode } == true
-            if (!keep && file.delete()) removed++
+            val stale = versionCodeOf(file)?.let { it <= currentVersionCode } == true
+            if ((stale || !file.name.endsWith(APK_SUFFIX)) && file.delete()) removed++
         }
         return removed
     }
+
+    /** What the package manager says is inside [file], when it can read it at all. */
+    fun archiveVersionCode(file: File): Int? = versionCodeOf(file)
+
+    /**
+     * Whether [file] is a package the installer would take.
+     *
+     * Read from the archive rather than from its name, because the name is a claim -- and a package
+     * whose manifest cannot be read is exactly the one an install button should not be offered for.
+     * A file that is not there is not one to install either.
+     */
+    fun isInstallable(file: File): Boolean =
+        file.isFile && file.length() > 0 && (versionCodeOf(file) ?: 0) > 0
 
     /**
      * The already-downloaded package for [targetVersionCode], when it is whole.

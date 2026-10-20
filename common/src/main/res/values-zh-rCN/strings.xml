@@ -537,4 +537,5 @@
     <string name="dismiss">知道了</string>
     <string name="update_current_version">当前版本：%1$s</string>
     <string name="update_found_release">GitHub 最新版本：%1$s</string>
+    <string name="update_install_confirm">接下来会用 DiPlay %1$s 覆盖车机上现在的版本，设置保持不变。随后会打开车机的安装界面，请你确认安装。</string>
 </resources>

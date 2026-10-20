@@ -82,14 +82,27 @@ class UpdateStorageCleanerTest {
         assertTrue(newer.exists())
     }
 
-    @Test fun cleanOldUpdatesDeletesFilesThePackageManagerCannotRead() {
-        // A truncated or foreign file wearing an update's name. Nothing can install it, so it is
-        // storage the car does not get back until it goes.
-        val broken = apk(45)
+    @Test fun cleanOldUpdatesKeepsWhatThePackageManagerCannotRead() {
+        // "Unreadable" is not the same as "corrupt": a package manager that cannot look inside
+        // archives answers null for every package there is. Whether a file is installable is asked
+        // where it matters -- [findReadyApk]'s caller and the install press -- and that answer can
+        // end in a download. Deleting on this answer would delete the one package the next launch
+        // was going to offer.
+        val unreadable = apk(45)
 
         cleaner.cleanOldUpdates(currentVersionCode = 44)
 
-        assertFalse(broken.exists())
+        assertTrue(unreadable.exists())
+        assertFalse("and it is not offered as installable", cleaner.isInstallable(unreadable))
+    }
+
+    @Test fun isInstallableIsAboutThePackageNotItsName() {
+        val readable = apk(45).also { declares(it, 45) }
+        val notAPackage = apk(46)
+
+        assertTrue(cleaner.isInstallable(readable))
+        assertFalse("a name and a size are not a package", cleaner.isInstallable(notAPackage))
+        assertFalse("nor is a file that is not there", cleaner.isInstallable(File(cleaner.updateDir, "gone.apk")))
     }
 
     @Test fun cleanOldUpdatesKeepsTheFolderItself() {

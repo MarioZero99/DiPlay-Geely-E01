@@ -3381,7 +3381,11 @@ class DiPlayActivity : ComponentActivity() {
                     card.addView(button(getString(R.string.cancel), false) { controller.cancel() }, matchButton(16, 60))
                 }
                 is UpdateCardController.State.ReadyToInstall -> {
-                    card.addView(label(getString(R.string.update_ready_to_install, state.file.name), 16, TEXT).apply { setPadding(0, dp(8), 0, 0) })
+                    // The version the offer named, not the file's name: the file is named for the
+                    // package manager to read back, and a driver reading "V45.apk" is being shown
+                    // the downloader's bookkeeping rather than the release.
+                    val versionName = state.info?.versionName ?: version()
+                    card.addView(label(getString(R.string.update_ready_to_install, versionName), 16, TEXT).apply { setPadding(0, dp(8), 0, 0) })
                     card.addView(button(getString(R.string.install_now), true) { controller.install() }, matchButton(16, 60))
                 }
                 is UpdateCardController.State.Error -> {

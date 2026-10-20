@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.update
 
+import android.app.AlertDialog
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -8,6 +9,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import com.shilapi.xcertplay.host.R
 
 /**
  * The update card's behaviour, kept apart from how the card is drawn.
@@ -20,6 +22,11 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * [currentVersionCode] is passed in rather than read here because the installed version is a fact
  * about the package the page belongs to, and this class is shared by two packages.
+ *
+ * [needsInstallerConfirmation] is the one difference between the two callers. A page has a driver in
+ * front of it and asks before opening the installer; the service that finishes [UpdateHost]'s
+ * download has no screen, and its install is the system's own. Both run the same sequence, and the
+ * page it draws for is the same [State].
  */
 class UpdateCardController(
     private val context: Context,
@@ -29,6 +36,7 @@ class UpdateCardController(
     private val currentVersionCode: Int,
     private val onStateChanged: (State) -> Unit,
     private val onInstall: (File) -> Unit,
+    private val needsInstallerConfirmation: () -> Boolean = { true },
 ) : AutoCloseable {
 
     /** What the page shows. [Idle] is everything before the driver has asked for anything. */
@@ -61,7 +69,12 @@ class UpdateCardController(
                 get() = if (totalBytes <= 0) 0 else ((bytesRead * 100) / totalBytes).toInt().coerceIn(0, 100)
         }
 
-        data class ReadyToInstall(override val currentVersionCode: Int, val file: File) : State()
+        /** [info] is the release the package belongs to: what the page names as the new version. */
+        data class ReadyToInstall(
+            override val currentVersionCode: Int,
+            val info: ReleaseInfo?,
+            val file: File,
+        ) : State()
 
         /**
          * [messageKey] is one of the `ERROR_*` constants and is what the page translates; [detail] is
@@ -92,8 +105,12 @@ class UpdateCardController(
     /** The step that last failed, so [retry] repeats that step rather than starting over. */
     private enum class Step { CHECK, DOWNLOAD, INSTALL }
 
-    @Volatile
+    /** Main thread only: written when a failure is shown and read by [retry]. */
     private var failedStep = Step.CHECK
+
+    /** The release the [State.Error] was about, for the one retry that needs it. Main thread only. */
+    private var failedRelease: ReleaseInfo? = null
+
 
     val state: State get() = current
 
@@ -112,8 +129,7 @@ class UpdateCardController(
             }
             when (result) {
                 is UpdateChecker.CheckResult.Error -> finish(ticket) {
-                    failedStep = Step.CHECK
-                    publish(State.Error(currentVersionCode, ERROR_NETWORK, result.message))
+                    fail(Step.CHECK, null, ERROR_NETWORK, result.message)
                 }
                 is UpdateChecker.CheckResult.UpToDate -> finish(ticket) {
                     publish(State.UpToDate(currentVersionCode, result.info.versionName))
@@ -134,13 +150,18 @@ class UpdateCardController(
     private fun offer(info: ReleaseInfo, ticket: Int) {
         val versionCode = info.versionCode
         val sums = info.sha256Asset?.let { asset -> runCatching { downloader.fetchChecksum(asset.downloadUrl, info.apkAsset.name) }.getOrNull() }
-        val ready = cleaner.cleanOldUpdates(currentVersionCode).let { cleaner.findReadyApk(versionCode, sums) }
+        val found = cleaner.cleanOldUpdates(currentVersionCode).let { cleaner.findReadyApk(versionCode, sums) }
+        // A file whose checksum matches but whose manifest cannot be read is not the package: the
+        // name and the digest say what it should be, and the archive says it is not. Offering it
+        // would be offering an install button that can only fail, and pressing download would write
+        // the release's name over the file it is about to replace -- which is what happens anyway,
+        // so the offer is the download.
+        val ready = found?.takeIf { cleaner.isInstallable(it) }
         finish(ticket) {
+            offered = info
             if (ready != null) {
-                offered = info
-                publish(State.ReadyToInstall(currentVersionCode, ready))
+                publish(State.ReadyToInstall(currentVersionCode, info, ready))
             } else {
-                offered = info
                 val stored = File(cleaner.updateDir, info.apkAsset.name).length()
                 publish(State.UpdateAvailable(currentVersionCode, info, stored))
             }
@@ -152,8 +173,11 @@ class UpdateCardController(
      * a download stopped half way is worse than one never begun.
      */
     fun download() {
+        // Only the release a check found is ever fetched. After "up to date" there is nothing to
+        // fetch, and [offered] still names the release from before -- downloading that one would be
+        // putting a package on the car that is older than the one it is running.
+        if (current !is State.UpdateAvailable) return
         val info = offered ?: return
-        if (current is State.Downloading) return
         val ticket = generation.incrementAndGet()
         publish(State.Downloading(currentVersionCode, info, 0, info.apkAsset.sizeBytes))
         // A flag from the previous attempt -- including one set by a cancel that landed before that
@@ -162,10 +186,7 @@ class UpdateCardController(
         cancelled.set(false)
         worker.execute {
             if (!cleaner.hasAdequateFreeSpace()) {
-                finish(ticket) {
-                    failedStep = Step.DOWNLOAD
-                    publish(State.Error(currentVersionCode, ERROR_STORAGE, ""))
-                }
+                finish(ticket) { fail(Step.DOWNLOAD, info, ERROR_STORAGE, "") }
                 return@execute
             }
             val apkFile = File(cleaner.updateDir, info.apkAsset.name)
@@ -189,12 +210,9 @@ class UpdateCardController(
             }
             finish(ticket) {
                 when (result) {
-                    is UpdateDownloader.DownloadResult.Success -> publish(State.ReadyToInstall(currentVersionCode, result.file))
+                    is UpdateDownloader.DownloadResult.Success -> publish(State.ReadyToInstall(currentVersionCode, info, result.file))
                     UpdateDownloader.DownloadResult.Cancelled -> publish(State.UpdateAvailable(currentVersionCode, info))
-                    is UpdateDownloader.DownloadResult.Failure -> {
-                        failedStep = Step.DOWNLOAD
-                        publish(State.Error(currentVersionCode, ERROR_DOWNLOAD, result.error))
-                    }
+                    is UpdateDownloader.DownloadResult.Failure -> fail(Step.DOWNLOAD, info, ERROR_DOWNLOAD, result.error)
                 }
             }
         }
@@ -216,14 +234,40 @@ class UpdateCardController(
         publish(State.UpdateAvailable(currentVersionCode, state.info))
     }
 
-    /** Opens the system installer on the package that was downloaded. */
+    /**
+     * Opens the system installer on the package that was downloaded.
+     *
+     * The package is checked once more here, because the folder is a cache the system may reclaim:
+     * between the download finishing and this press, Android can have taken the file away, and a
+     * request for a file that is gone is an install that could only fail. What has gone is a
+     * download away rather than an error to show, so the page goes back to the offer.
+     */
     fun install() {
         val ready = current as? State.ReadyToInstall ?: return
+        if (!cleaner.isInstallable(ready.file)) {
+            fail(Step.DOWNLOAD, ready.info, ERROR_DOWNLOAD, "the package is gone")
+            return
+        }
+        // On the car, an activity calls this and the user is there to answer the installer's own
+        // dialog. The host service calls it with no screen to put a dialog on -- and the installer is
+        // started without its confirmation then, inside the system's own installation session.
+        if (!needsInstallerConfirmation()) {
+            startInstaller(ready)
+            return
+        }
+        AlertDialog.Builder(context)
+            .setTitle(R.string.install_now)
+            .setMessage(context.getString(R.string.update_install_confirm, ready.info?.versionName.orEmpty()))
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.install_now) { _, _ -> startInstaller(ready) }
+            .show()
+    }
+
+    private fun startInstaller(ready: State.ReadyToInstall) {
         try {
             onInstall(ready.file)
         } catch (e: Exception) {
-            failedStep = Step.INSTALL
-            publish(State.Error(currentVersionCode, ERROR_INSTALL, reasonOf(e)))
+            fail(Step.INSTALL, ready.info, ERROR_INSTALL, reasonOf(e))
         }
     }
 
@@ -238,17 +282,35 @@ class UpdateCardController(
         if (current !is State.Error) return
         when (failedStep) {
             Step.CHECK -> check()
-            Step.DOWNLOAD -> download()
+            Step.DOWNLOAD -> {
+                // The offer is published before the download starts, so the page says which release
+                // is being fetched while it is; [offered] is already the one the failure was about.
+                val info = failedRelease ?: return
+                offered = info
+                publish(State.UpdateAvailable(currentVersionCode, info))
+                download()
+            }
             Step.INSTALL -> {
-                val file = File(cleaner.updateDir, offered?.apkAsset?.name ?: "")
-                if (file.isFile) {
-                    publish(State.ReadyToInstall(currentVersionCode, file))
+                val info = failedRelease
+                val file = info?.let { File(cleaner.updateDir, it.apkAsset.name) }
+                if (info != null && file != null && cleaner.isInstallable(file)) {
+                    publish(State.ReadyToInstall(currentVersionCode, info, file))
                     install()
                 } else {
+                    val retryInfo = info ?: return
+                    offered = retryInfo
+                    publish(State.UpdateAvailable(currentVersionCode, retryInfo))
                     download()
                 }
             }
         }
+    }
+
+    /** Records what failed and says so. Main thread only: [retry] reads what this writes. */
+    private fun fail(step: Step, info: ReleaseInfo?, messageKey: String, detail: String) {
+        failedStep = step
+        failedRelease = info
+        publish(State.Error(currentVersionCode, messageKey, detail))
     }
 
     /**
