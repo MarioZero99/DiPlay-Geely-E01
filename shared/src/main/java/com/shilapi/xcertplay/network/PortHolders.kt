@@ -16,6 +16,18 @@ internal object PortHolders {
 
     fun tcp(port: Int, packageOf: ((Int) -> String?)? = null): String = describe(TABLES_TCP, port, packageOf)
 
+    fun isUdpPortHeld(port: Int): Boolean = isPortHeld(TABLES_UDP, port)
+
+    fun isTcpPortHeld(port: Int): Boolean = isPortHeld(TABLES_TCP, port)
+
+    fun isRowHoldingPort(row: String, port: Int): Boolean = holderOf(row, port) != null
+
+    private fun isPortHeld(tables: List<Pair<String, String>>, port: Int): Boolean =
+        tables.any { (_, path) ->
+            val text = runCatching { readBoundedDiagnosticFile(path, MAX_PROC_BYTES) }.getOrNull() ?: return@any false
+            text.lineSequence().any { isRowHoldingPort(it, port) }
+        }
+
     private fun describe(tables: List<Pair<String, String>>, port: Int, packageOf: ((Int) -> String?)?): String =
         tables.joinToString("; ") { (name, path) ->
             val text = runCatching { readBoundedDiagnosticFile(path, MAX_PROC_BYTES) }.getOrNull()

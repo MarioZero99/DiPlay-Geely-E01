@@ -197,10 +197,16 @@ internal enum class NsdPublishResult { REGISTERED, REFUSED, TIMED_OUT }
  * still land, and binding beside it gives the phone two AirPlay answers. The bundled responder
  * waits until that register is confirmed gone.
  */
-internal fun bundledMdnsAfterNsd(result: NsdPublishResult, unregistered: Boolean): Boolean = when (result) {
-    NsdPublishResult.REGISTERED -> false
-    NsdPublishResult.REFUSED -> true
-    NsdPublishResult.TIMED_OUT -> unregistered
+internal fun bundledMdnsAfterNsd(
+    result: NsdPublishResult,
+    unregistered: Boolean,
+    port5353Held: Boolean = false,
+): Boolean = when {
+    port5353Held -> false
+    result == NsdPublishResult.REGISTERED -> false
+    result == NsdPublishResult.REFUSED -> true
+    result == NsdPublishResult.TIMED_OUT -> unregistered
+    else -> false
 }
 
 /**
@@ -506,8 +512,16 @@ class CarPlayBonjour(
             NsdPublishResult.REGISTERED -> false
         }
         if (closed) return false
-        if (!bundledMdnsAfterNsd(result, unregistered)) {
-            DiagLog.w(TAG, "NSD registration was not confirmed gone; leaving 5353 with the system daemon")
+        val port5353Held = PortHolders.isUdpPortHeld(MDNS_PORT)
+        if (!bundledMdnsAfterNsd(result, unregistered, port5353Held)) {
+            DiagLog.w(
+                TAG,
+                if (port5353Held) {
+                    "mDNS 5353 is already held (${PortHolders.udp(MDNS_PORT)}); skipping bundled JmDNS bind to prevent EADDRINUSE conflict"
+                } else {
+                    "NSD registration was not confirmed gone; leaving 5353 with the system daemon"
+                },
+            )
             return true
         }
         val mayUseBundled = useInterfaceMdns ||
@@ -704,6 +718,7 @@ class CarPlayBonjour(
 
     @Suppress("DEPRECATION")
     private fun registerAirPlay() {
+        require(config.port in 1..65535) { "AirPlay service port must be in 1..65535, was ${config.port}" }
         val serviceInfo = NsdServiceInfo().apply {
             serviceName = config.deviceName
             serviceType = AIRPLAY_SERVICE_TYPE

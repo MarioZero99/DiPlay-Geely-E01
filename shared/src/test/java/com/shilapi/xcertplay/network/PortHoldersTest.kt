@@ -53,4 +53,10 @@ class PortHoldersTest {
 
         assertEquals("uid=0 st=07 inode=54321", PortHolders.holderOf(row, 5353) { null })
     }
+
+    @Test fun detectsPortHoldingFromTableContent() {
+        val row = "   0: 00000000:14E9 00000000:0000 07 00000000:00000000 00:00000000 00000000  1020        0 108314 2 0000000000000000 0"
+        org.junit.Assert.assertTrue(PortHolders.isRowHoldingPort(row, 5353))
+        org.junit.Assert.assertFalse(PortHolders.isRowHoldingPort(row, 7000))
+    }
 }

@@ -190,4 +190,10 @@ class CarPlayBonjourTest {
         assertFalse(bundledMdnsAfterNsd(NsdPublishResult.TIMED_OUT, unregistered = false))
         assertTrue(bundledMdnsAfterNsd(NsdPublishResult.TIMED_OUT, unregistered = true))
     }
+
+    @Test fun port5353HeldKeepsTheBundledResponderOffEvenIfRefusedOrTimedOut() {
+        assertFalse(bundledMdnsAfterNsd(NsdPublishResult.REFUSED, unregistered = true, port5353Held = true))
+        assertFalse(bundledMdnsAfterNsd(NsdPublishResult.TIMED_OUT, unregistered = true, port5353Held = true))
+        assertFalse(bundledMdnsAfterNsd(NsdPublishResult.REGISTERED, unregistered = true, port5353Held = true))
+    }
 }
