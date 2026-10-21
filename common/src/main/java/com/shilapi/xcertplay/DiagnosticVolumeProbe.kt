@@ -32,46 +32,85 @@ internal object DiagnosticVolumeProbe {
     private val vendorMountRoots = listOf(
         "/storage/usbotg",
         "/storage/udisk",
+        "/storage/sdcard1",
+        "/storage/sdcard2",
         "/mnt/usb_storage",
         "/mnt/udisk",
         "/mnt/usb",
         "/mnt/media_rw",
     )
 
-    fun probe(context: Context, extraMountPaths: Collection<String> = emptySet()): ProbeSummary {
+    internal fun parseMountPoints(mountsContent: String): List<File> {
+        val candidates = mutableListOf<File>()
+        val systemPrefixes = listOf(
+            "/system", "/data", "/dev", "/proc", "/sys", "/mnt/secure", "/mnt/asec", "/mnt/obb", "/cache", "/config"
+        )
+        val targetFs = setOf("vfat", "exfat", "ntfs", "fuse", "ext4")
+        for (line in mountsContent.lineSequence()) {
+            val parts = line.trim().split(Regex("\\s+"))
+            if (parts.size < 3) continue
+            val mountPoint = parts[1]
+            val fsType = parts[2].lowercase()
+            if (fsType !in targetFs) continue
+            if (mountPoint == "/" || mountPoint.startsWith("/storage/emulated") || systemPrefixes.any { mountPoint.startsWith(it) }) continue
+            val file = File(mountPoint)
+            if (file.isDirectory && !isPrimaryStorage(file)) {
+                candidates.add(file)
+            }
+        }
+        return candidates
+    }
+
+    fun probe(
+        context: Context,
+        extraMountPaths: Collection<String> = emptySet(),
+        procMountsFile: File = File("/proc/mounts"),
+    ): ProbeSummary {
         val candidates = linkedMapOf<String, File>()
 
-        // Source 1: the system's own contract. The second entry onwards is another volume; the
-        // first is this app's own external directory, which is always writable and proves nothing.
+        // Source 1: /proc/mounts, the kernel's own mount table.
+        // This is the primary source: it names all currently mounted filesystems directly,
+        // without guessing names or depending on broadcast timing.
+        runCatching {
+            if (procMountsFile.exists() && procMountsFile.canRead()) {
+                val mountsContent = procMountsFile.readText()
+                for (mount in parseMountPoints(mountsContent)) {
+                    candidates[mount.absolutePath] = mount
+                }
+            }
+        }
+
+        // Source 2: the system's own contract getExternalFilesDirs.
+        // The second entry onwards is another volume; the first is this app's own external directory.
         runCatching {
             val dirs = context.getExternalFilesDirs(null) ?: emptyArray()
             for (i in 1 until dirs.size) {
                 val dir = dirs[i] ?: continue
-                candidates[extractVolumeName(dir)] = dir
+                val root = extractVolumeRoot(dir) ?: dir
+                if (!isPrimaryStorage(root)) {
+                    candidates[root.absolutePath] = dir
+                }
             }
         }
 
-        // Source 2: the path ACTION_MEDIA_MOUNTED carried, recorded when the stick was plugged in.
-        // The same action is broadcast for the head unit's own storage, and a report written to
-        // /storage/emulated/0/DiPlay is not "saved to a USB drive" — that would be the exact false
-        // claim this whole path exists to stop, so the device's own volume is refused here.
+        // Source 3: the path ACTION_MEDIA_MOUNTED carried, recorded when the stick was plugged in.
         for (path in extraMountPaths) {
             val file = File(path)
             if (!file.isDirectory || isPrimaryStorage(file)) continue
-            candidates[file.name] = file
+            candidates[file.absolutePath] = file
         }
 
-        // Source 3: vendor roots, last and only as a fallback — these names are guesses, the two
-        // sources above are not.
-        for (rootPath in vendorMountRoots) {
-            val root = File(rootPath)
-            if (!root.isDirectory) continue
-            root.listFiles()?.filter { it.isDirectory }?.forEach { sub ->
-                if (sub.name !in candidates) candidates[sub.name] = sub
+        // Source 4: static vendor roots, only as a fallback when /proc/mounts yielded nothing.
+        // Each root directory itself is probed; we do NOT split its subdirectories into separate volumes.
+        if (candidates.isEmpty()) {
+            for (rootPath in vendorMountRoots) {
+                val root = File(rootPath)
+                if (!root.isDirectory || isPrimaryStorage(root)) continue
+                candidates[root.absolutePath] = root
             }
         }
 
-        val results = candidates.map { (name, target) -> probeVolume(context, name, target) }
+        val results = candidates.map { (_, target) -> probeVolume(context, extractVolumeName(target), target) }
         return ProbeSummary(results, formatSummary(results))
     }
 

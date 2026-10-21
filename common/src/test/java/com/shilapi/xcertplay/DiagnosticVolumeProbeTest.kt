@@ -92,4 +92,41 @@ class DiagnosticVolumeProbeTest {
         val summary = DiagnosticVolumeProbe.probe(context, setOf(primary.absolutePath))
         assertFalse(summary.volumes.any { it.rootDir?.absolutePath == primary.absolutePath })
     }
+
+    @Test fun parsesProcMountsAndFiltersNonExternalFs() {
+        val fakeMount1 = temp.newFolder("usbotg")
+        val fakeMount2 = temp.newFolder("emulated")
+        val mountsContent = """
+            rootfs / rootfs ro,relatime 0 0
+            tmpfs /dev tmpfs rw,nosuid,relatime,mode=755 0 0
+            proc /proc proc rw,relatime 0 0
+            sysfs /sys sysfs rw,relatime 0 0
+            /dev/block/bootdevice/by-name/system /system ext4 ro,relatime 0 0
+            /dev/block/bootdevice/by-name/userdata /data ext4 rw,nosuid,nodev 0 0
+            /dev/block/vold/public:8,1 ${fakeMount1.absolutePath} vfat rw,dirsync,nosuid,nodev,noexec 0 0
+            /data/media ${fakeMount2.absolutePath} fuse rw,nosuid,nodev 0 0
+        """.trimIndent()
+
+        val parsed = DiagnosticVolumeProbe.parseMountPoints(mountsContent)
+        assertTrue(parsed.any { it.absolutePath == fakeMount1.absolutePath })
+        assertFalse(parsed.any { it.absolutePath == "/system" })
+        assertFalse(parsed.any { it.absolutePath == "/data" })
+        assertFalse(parsed.any { it.absolutePath == "/dev" })
+    }
+
+    @Test fun probeTreatsMountPointItselfAsDiscreteVolumeWithoutSplittingSubdirectories() {
+        val usbRoot = temp.newFolder("real-usb")
+        val subDir = File(usbRoot, "MyMusic").apply { mkdirs() }
+        val pkgDir = File(usbRoot, "Android/data/${context.packageName}/files").apply { mkdirs() }
+
+        val mountsFile = temp.newFile("mounts")
+        mountsFile.writeText("/dev/block/vold/8_1 ${usbRoot.absolutePath} vfat rw 0 0\n")
+
+        val summary = DiagnosticVolumeProbe.probe(context, procMountsFile = mountsFile)
+        assertEquals(1, summary.volumes.size)
+        val vol = summary.volumes.first()
+        assertEquals(usbRoot.absolutePath, vol.rootDir?.absolutePath)
+        assertEquals(pkgDir.absolutePath, vol.packageDir?.absolutePath)
+        assertFalse("Subdirectory must not become its own volume", summary.volumes.any { it.rootDir?.absolutePath == subDir.absolutePath })
+    }
 }
