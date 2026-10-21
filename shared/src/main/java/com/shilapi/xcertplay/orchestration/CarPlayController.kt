@@ -2665,6 +2665,13 @@ class CarPlayController(
                     fail(ex)
                     return@Thread
                 }
+                if (peers != null && peers.isEmpty()) {
+                    debugLog(
+                        "wireless first TCP timeout on existing Wi-Fi with empty ARP: " +
+                            "ignoring empty ARP because alternate family candidate is available " +
+                            "(${wirelessAlternateAddress?.hostAddress}), flipping family to retry",
+                    )
+                }
                 flipWirelessAddressFamily()
                 closeWirelessStack()
                 fail(

@@ -40,16 +40,26 @@ internal object DiagnosticVolumeProbe {
         "/mnt/media_rw",
     )
 
+    internal fun unescapeMountPoint(raw: String): String {
+        if (!raw.contains('\\')) return raw
+        val regex = Regex("\\\\([0-7]{3})")
+        return regex.replace(raw) { match ->
+            val octal = match.groupValues[1].toInt(8)
+            octal.toChar().toString()
+        }
+    }
+
     internal fun parseMountPoints(mountsContent: String): List<File> {
         val candidates = mutableListOf<File>()
         val systemPrefixes = listOf(
-            "/system", "/data", "/dev", "/proc", "/sys", "/mnt/secure", "/mnt/asec", "/mnt/obb", "/cache", "/config"
+            "/system", "/data", "/dev", "/proc", "/sys", "/mnt/secure", "/mnt/asec", "/mnt/obb",
+            "/mnt/shell", "/mnt/runtime", "/cache", "/config",
         )
-        val targetFs = setOf("vfat", "exfat", "ntfs", "fuse", "ext4")
+        val targetFs = setOf("vfat", "exfat", "texfat", "ntfs", "fuse", "fuseblk", "ext4", "ext3", "ext2", "f2fs")
         for (line in mountsContent.lineSequence()) {
             val parts = line.trim().split(Regex("\\s+"))
             if (parts.size < 3) continue
-            val mountPoint = parts[1]
+            val mountPoint = unescapeMountPoint(parts[1])
             val fsType = parts[2].lowercase()
             if (fsType !in targetFs) continue
             if (mountPoint == "/" || mountPoint.startsWith("/storage/emulated") || systemPrefixes.any { mountPoint.startsWith(it) }) continue
@@ -117,7 +127,8 @@ internal object DiagnosticVolumeProbe {
     private fun isPrimaryStorage(candidate: File): Boolean {
         val primary = runCatching { android.os.Environment.getExternalStorageDirectory() }.getOrNull()
             ?: return false
-        return candidate.absolutePath == primary.absolutePath
+        if (candidate.absolutePath == primary.absolutePath) return true
+        return runCatching { candidate.canonicalPath == primary.canonicalPath }.getOrDefault(false)
     }
 
     private fun extractVolumeName(packageDir: File): String {

@@ -18,8 +18,6 @@ internal object PortHolders {
 
     fun isUdpPortHeld(port: Int): Boolean = isPortHeld(TABLES_UDP, port)
 
-    fun isTcpPortHeld(port: Int): Boolean = isPortHeld(TABLES_TCP, port)
-
     fun isRowHoldingPort(row: String, port: Int): Boolean = holderOf(row, port) != null
 
     private fun isPortHeld(tables: List<Pair<String, String>>, port: Int): Boolean =

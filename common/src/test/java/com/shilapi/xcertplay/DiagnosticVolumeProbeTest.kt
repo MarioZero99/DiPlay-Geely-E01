@@ -95,7 +95,8 @@ class DiagnosticVolumeProbeTest {
 
     @Test fun parsesProcMountsAndFiltersNonExternalFs() {
         val fakeMount1 = temp.newFolder("usbotg")
-        val fakeMount2 = temp.newFolder("emulated")
+        val fakeMountWithSpace = temp.newFolder("usb disk")
+        val fakeMountFuseblk = temp.newFolder("ntfs_disk")
         val mountsContent = """
             rootfs / rootfs ro,relatime 0 0
             tmpfs /dev tmpfs rw,nosuid,relatime,mode=755 0 0
@@ -104,14 +105,27 @@ class DiagnosticVolumeProbeTest {
             /dev/block/bootdevice/by-name/system /system ext4 ro,relatime 0 0
             /dev/block/bootdevice/by-name/userdata /data ext4 rw,nosuid,nodev 0 0
             /dev/block/vold/public:8,1 ${fakeMount1.absolutePath} vfat rw,dirsync,nosuid,nodev,noexec 0 0
-            /data/media ${fakeMount2.absolutePath} fuse rw,nosuid,nodev 0 0
+            /dev/block/vold/public:8,2 ${fakeMountWithSpace.absolutePath.replace(" ", "\\040")} texfat rw 0 0
+            /dev/block/vold/public:8,3 ${fakeMountFuseblk.absolutePath} fuseblk rw 0 0
+            /data/media /storage/emulated/0 fuse rw,nosuid,nodev 0 0
+            /data/media /mnt/shell/emulated/0 fuse rw 0 0
         """.trimIndent()
 
         val parsed = DiagnosticVolumeProbe.parseMountPoints(mountsContent)
         assertTrue(parsed.any { it.absolutePath == fakeMount1.absolutePath })
+        assertTrue(parsed.any { it.absolutePath == fakeMountWithSpace.absolutePath })
+        assertTrue(parsed.any { it.absolutePath == fakeMountFuseblk.absolutePath })
+        assertFalse(parsed.any { it.absolutePath.startsWith("/storage/emulated") })
+        assertFalse(parsed.any { it.absolutePath.startsWith("/mnt/shell") })
         assertFalse(parsed.any { it.absolutePath == "/system" })
         assertFalse(parsed.any { it.absolutePath == "/data" })
         assertFalse(parsed.any { it.absolutePath == "/dev" })
+    }
+
+    @Test fun unescapesOctalSequencesInMountPath() {
+        assertEquals("/storage/USB DISK", DiagnosticVolumeProbe.unescapeMountPoint("/storage/USB\\040DISK"))
+        assertEquals("/mnt/media_rw/USB 1", DiagnosticVolumeProbe.unescapeMountPoint("/mnt/media_rw/USB\\0401"))
+        assertEquals("/normal/path", DiagnosticVolumeProbe.unescapeMountPoint("/normal/path"))
     }
 
     @Test fun probeTreatsMountPointItselfAsDiscreteVolumeWithoutSplittingSubdirectories() {
