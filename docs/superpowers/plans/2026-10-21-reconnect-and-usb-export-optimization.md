@@ -71,20 +71,20 @@ flowchart TD
 - Consumes: `DiagnosticVolumeProbe.probe(context: Context, extraMountPaths: Collection<String>): ProbeSummary`
 - Produces: 优先从 `/proc/mounts` 解析的外置卷，挂载点自身作为唯一探测根，杜绝子目录二次卷爆炸。
 
-- [ ] **Step 1: 编写新增测试用例**
+- [x] **Step 1: 编写新增测试用例**
   在 `DiagnosticVolumeProbeTest.kt` 中添加单测：
   - 测试 `/proc/mounts` 内容解析（过滤系统虚拟文件系统，提取 vfat/exfat/fuse/ntfs 挂载点）；
   - 测试以完整路径作为键，挂载点自身被探测，而不把挂载点子目录拆分成伪独立卷；
   - 测试主存储 `/storage/emulated/0` 被正确排除。
-- [ ] **Step 2: 运行测试并验证失败**
+- [x] **Step 2: 运行测试并验证失败**
   运行 `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.DiagnosticVolumeProbeTest`。
-- [ ] **Step 3: 重构 `DiagnosticVolumeProbe.kt` 探测逻辑**
+- [x] **Step 3: 重构 `DiagnosticVolumeProbe.kt` 探测逻辑**
   1. 增加 `/proc/mounts` 解析器，提取合法外置存储挂载点（过滤类型如 vfat, exfat, fuse, ntfs, ext4，排除 `/storage/emulated`、`/system`、`/data` 等内部路径）。
   2. 候选列表以 `mountPoint.absolutePath` 为 Key，每个挂载点仅自身进行可写性与应用目录探测（检查根目录测试文件与 `<mount>/Android/data/<pkg>/files`）。
   3. 保留静态路径（`/storage/usbotg`、`/storage/sdcard1` 等）作为 `/proc/mounts` 读取失败时的兜底降级源。
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
   运行 `./gradlew :common:testDebugUnitTest --tests com.shilapi.xcertplay.DiagnosticVolumeProbeTest`。
-- [ ] **Step 5: 提交更改**
+- [x] **Step 5: 提交更改**
   `git commit -m "fix(diag): parse mounts from /proc/mounts and probe mount points as discrete volumes"`
 
 ---
@@ -100,12 +100,12 @@ flowchart TD
 - Consumes: `WirelessStartupPolicy.FIRST_TCP_EXISTING_WIFI_MILLIS`, `CarPlayController.onFirstTcpTimedOut()`
 - Produces: 同网模式 5 秒看门狗超时；有备用地址族时空 ARP 依然翻族重试。
 
-- [ ] **Step 1: 编写单测**
+- [x] **Step 1: 编写单测**
   - 在 `FirstTcpWatchdogTest.kt` 中：测试支持传入自定义超时（5,000ms），并在 5 秒到期时按期触发 `expire()`。
   - 在 `FirstTcpWatchdogTest.kt` 中：测试默认超时仍为 30,000ms，差异化超时配置生效。
-- [ ] **Step 2: 运行测试并验证失败**
+- [x] **Step 2: 运行测试并验证失败**
   运行 `./gradlew :shared:testDebugUnitTest --tests com.shilapi.xcertplay.orchestration.FirstTcpWatchdogTest`。
-- [ ] **Step 3: 实现差异化超时与空 ARP 翻族逻辑**
+- [x] **Step 3: 实现差异化超时与空 ARP 翻族逻辑**
   1. 在 `WirelessStartupPolicy` 中定义：
      ```kotlin
      const val FIRST_TCP_EXISTING_WIFI_MILLIS = 5_000L
@@ -126,9 +126,9 @@ flowchart TD
      closeWirelessStack()
      fail(FirstTcpTimeoutException(...))
      ```
-- [ ] **Step 4: 运行全部相关单测**
+- [x] **Step 4: 运行全部相关单测**
   运行 `./gradlew :shared:testDebugUnitTest --tests com.shilapi.xcertplay.orchestration.*`。
-- [ ] **Step 5: 提交更改**
+- [x] **Step 5: 提交更改**
   `git commit -m "perf(wireless): 5s first-tcp timeout for existing wifi with empty-arp family flip"`
 
 ---
@@ -145,12 +145,12 @@ flowchart TD
 - Consumes: `PortHolders.isUdpPortHeld(port: Int)`, `CarPlayBonjour.publishAirPlay()`, `bundledMdnsAfterNsd()`
 - Produces: 5353 被外部占用时抑制 JmDNS 强行绑定；校验广播业务端口有效性。
 
-- [ ] **Step 1: 编写单测**
+- [x] **Step 1: 编写单测**
   - 在 `PortHoldersTest.kt` 中添加单测：测试 `PortHolders.isUdpPortHeld(5353)` 能正确从 `/proc/net/udp` 与 `udp6` 模拟文本中判断端口占用状态。
   - 在 `CarPlayBonjourTest.kt` 中添加单测：测试 `bundledMdnsAfterNsd(..., port5353Held = true)` 必定返回 `false`，确保在 5353 已被系统进程占用时绝不拉起 JmDNS。
-- [ ] **Step 2: 运行测试并验证失败**
+- [x] **Step 2: 运行测试并验证失败**
   运行 `./gradlew :shared:testDebugUnitTest --tests com.shilapi.xcertplay.network.PortHoldersTest`。
-- [ ] **Step 3: 实现端口有效性与防冲突判断**
+- [x] **Step 3: 实现端口有效性与防冲突判断**
   1. 在 `PortHolders.kt` 中增加判断方法：
      ```kotlin
      fun isUdpPortHeld(port: Int): Boolean {
@@ -178,18 +178,18 @@ flowchart TD
        ```
      - 在 `publishAirPlay()` 中传递 `PortHolders.isUdpPortHeld(MDNS_PORT)`。若 5353 已被占用，日志记录留存系统守护进程，抑制 `startInterfaceMdns()` 调用，彻底杜绝 `EADDRINUSE` 冲突。
      - 在 `registerAirPlay()` 中校验业务端口有效性（`require(config.port in 1..65535)`）。
-- [ ] **Step 4: 运行全部相关单测**
+- [x] **Step 4: 运行全部相关单测**
   运行 `./gradlew :shared:testDebugUnitTest --tests com.shilapi.xcertplay.network.*`。
-- [ ] **Step 5: 提交更改**
+- [x] **Step 5: 提交更改**
   `git commit -m "fix(bonjour): suppress bundled mDNS when 5353 is occupied and validate service port"`
 
 ---
 
 ### Task 4: 全量回归测试与发布产物核验
 
-- [ ] **Step 1: 运行全量单元测试**
+- [x] **Step 1: 运行全量单元测试**
   运行 `./gradlew :common:testDebugUnitTest :shared:testDebugUnitTest`。
-- [ ] **Step 2: 编译 local release 安装包**
+- [x] **Step 2: 编译 local release 安装包**
   运行 `./gradlew :mobile:assembleStandaloneRelease -Pexperimental=on`。
-- [ ] **Step 3: 校验 APK 产物**
+- [x] **Step 3: 校验 APK 产物**
   验证产物并将最终安装包复制到 `/Users/g/Downloads/xr/DiPlay-Legacy-Geely-V044-local.apk`。
