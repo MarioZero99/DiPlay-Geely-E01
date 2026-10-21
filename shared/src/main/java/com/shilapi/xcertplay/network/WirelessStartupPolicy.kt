@@ -18,10 +18,15 @@ internal object WirelessStartupPolicy {
     /**
      * How long the phone gets to open the AirPlay port after it was told where to find us.
      *
-     * Thirty seconds, and it is a measurement rather than a preference: a phone that can reach the
-     * published address opens the port within a second or two of CarPlay StartSession, and one that
-     * cannot never opens it at all. Waiting longer buys nothing and costs the driver the whole wait.
-     * This is the window the address-family flip is decided in, so its magnitude is the point.
+     * Thirty seconds on car-hosted access point: the phone has to associate with the Wi-Fi AP,
+     * obtain an IP through DHCP, and complete routing before reaching the port.
      */
     const val FIRST_TCP_MILLIS = 30_000L
+
+    /**
+     * On existing Wi-Fi (Same LAN), both phone and head unit are already on the same local network.
+     * The phone reaches the port within 1-2 seconds if reachable; five seconds is enough to confirm
+     * an unreachable route and flip to the alternate family without keeping the driver waiting.
+     */
+    const val FIRST_TCP_EXISTING_WIFI_MILLIS = 5_000L
 }

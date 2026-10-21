@@ -74,4 +74,20 @@ class FirstTcpWatchdogTest {
 
         assertEquals(1, scheduled.size)
     }
+
+    @Test
+    fun existingWifiTimeoutSchedulesShortWindowAndExpires() {
+        val watchdog = FirstTcpWatchdog(
+            schedule = { delay, body -> scheduled += delay to body },
+            onTimeout = { timeouts++ },
+            nowNanos = { now },
+            timeoutMillis = WirelessStartupPolicy.FIRST_TCP_EXISTING_WIFI_MILLIS,
+        )
+        watchdog.startSessionSent()
+        assertEquals(listOf(WirelessStartupPolicy.FIRST_TCP_EXISTING_WIFI_MILLIS), scheduled.map { (delay, _) -> delay })
+        assertEquals(0, timeouts)
+
+        runScheduled()
+        assertEquals(1, timeouts)
+    }
 }

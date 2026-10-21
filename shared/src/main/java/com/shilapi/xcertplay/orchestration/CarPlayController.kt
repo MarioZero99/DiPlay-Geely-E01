@@ -1253,9 +1253,15 @@ class CarPlayController(
             wirelessAddressRecovery = addressRecovery
             // Built here rather than at the 0x4301, because the port it watches is bound before then and
             // a phone that finds us through Bonjour may open it first. See [FirstTcpWatchdog].
+            val firstTcpTimeout = if (hotspotInfo.backend == WirelessHotspotBackend.EXISTING_WIFI) {
+                WirelessStartupPolicy.FIRST_TCP_EXISTING_WIFI_MILLIS
+            } else {
+                WirelessStartupPolicy.FIRST_TCP_MILLIS
+            }
             val firstTcpWatchdog = FirstTcpWatchdog(
                 schedule = { delay, body -> mainHandler.postDelayed(body, delay) },
                 onTimeout = { onFirstTcpTimedOut(generation) },
+                timeoutMillis = firstTcpTimeout,
                 log = { message -> if (!isStaleWirelessRun(generation)) debugLog(message) },
             )
             // A link-local IPv6 has to carry a scope to be useful at all: the scope is what says
@@ -2624,25 +2630,34 @@ class CarPlayController(
                 val ssid = wirelessAirPlayEndpoint?.ssid
                 val interfaceName = wirelessHotspotInterface
                 val peers = ipv4PeersOnAccessPoint()
-                if (peers != null && peers.isEmpty()) {
+                val isExistingWifi = wirelessHotspotBackend == WirelessHotspotBackend.EXISTING_WIFI
+                val timeoutMillis = if (isExistingWifi) {
+                    WirelessStartupPolicy.FIRST_TCP_EXISTING_WIFI_MILLIS
+                } else {
+                    WirelessStartupPolicy.FIRST_TCP_MILLIS
+                }
+                val hasAlternate = wirelessAlternateAddress != null
+                if (peers != null && peers.isEmpty() && !hasAlternate) {
                     // Nobody ever resolved an address on this access point, so the address this
                     // receiver published was never in play: moving it to the other family would
                     // change the next attempt in a way that cannot help, and would spend the family
                     // budget learning the same thing again.
+                    // Only do this when there is no alternate family candidate: on existing Wi-Fi
+                    // with IPv6 link-local available, IPv6 neighbors are in NDP (not /proc/net/arp),
+                    // and with a short timeout the IPv4 ARP cache may legitimately be empty.
                     closeWirelessStack()
-                    val isExistingWifi = wirelessHotspotBackend == WirelessHotspotBackend.EXISTING_WIFI
                     val ex = if (isExistingWifi) {
                         ExistingWifiPhoneNotOnNetworkException(
                             ssid,
                             "no device joined Wi-Fi network ${ssid ?: "unknown"} within " +
-                                "${WirelessStartupPolicy.FIRST_TCP_MILLIS} ms of CarPlay StartSession: " +
+                                "$timeoutMillis ms of CarPlay StartSession: " +
                                 "check whether the Wi-Fi password in DiPlay settings is correct",
                         )
                     } else {
                         WirelessPhoneNotOnNetworkException(
                             "no device joined ${ssid ?: "the access point"} " +
                                 "(${interfaceName ?: "unknown interface"}) within " +
-                                "${WirelessStartupPolicy.FIRST_TCP_MILLIS} ms of CarPlay StartSession: " +
+                                "$timeoutMillis ms of CarPlay StartSession: " +
                                 "no IPv4 peer was ever resolved on it, so the phone either did not " +
                                 "join the network or never got an address from it",
                         )
@@ -2654,7 +2669,7 @@ class CarPlayController(
                 closeWirelessStack()
                 fail(
                     FirstTcpTimeoutException(
-                        "no AirPlay TCP within ${WirelessStartupPolicy.FIRST_TCP_MILLIS} ms of CarPlay StartSession",
+                        "no AirPlay TCP within $timeoutMillis ms of CarPlay StartSession",
                     ),
                 )
             },
