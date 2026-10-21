@@ -832,16 +832,30 @@ class CarPlayBonjour(
 
     @Suppress("DEPRECATION")
     private fun preferredAddress(serviceInfo: NsdServiceInfo): InetAddress? {
-        val addresses = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            serviceInfo.hostAddresses.orEmpty()
-        } else {
-            listOfNotNull(serviceInfo.host)
-        }
+        val addresses = hostAddressesCompat(serviceInfo)
         return addresses.firstOrNull { it is Inet6Address && it.isLinkLocalAddress }
             ?.let(::applyLocalScope)
             ?: addresses.firstOrNull { it is Inet4Address }
             ?: addresses.firstOrNull { it is Inet6Address }
             ?: addresses.firstOrNull()
+    }
+
+    @Suppress("DEPRECATION", "UNCHECKED_CAST")
+    private fun hostAddressesCompat(serviceInfo: NsdServiceInfo): List<InetAddress> {
+        // [NsdServiceInfo.getHostAddresses] was added in API 34 (Android 14). Referencing it directly
+        // in bytecode causes the ART method verifier on Android 5.0/5.1 (API 21/22) to reject
+        // [CarPlayBonjour] at class loading time with java.lang.VerifyError because the method does
+        // not exist on the platform's NsdServiceInfo. Accessing via reflection keeps the symbolic
+        // reference out of DEX, protecting Dalvik and early ART from class verification failure.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            try {
+                val method = NsdServiceInfo::class.java.getMethod("getHostAddresses")
+                val result = method.invoke(serviceInfo) as? List<InetAddress>
+                if (!result.isNullOrEmpty()) return result
+            } catch (_: Throwable) {
+            }
+        }
+        return listOfNotNull(serviceInfo.host)
     }
 
     private fun applyLocalScope(address: InetAddress): InetAddress {

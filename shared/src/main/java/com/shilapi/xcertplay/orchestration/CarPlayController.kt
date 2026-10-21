@@ -1460,7 +1460,7 @@ class CarPlayController(
                     // is one it will not use, and discovery is where it decides that.
                     additionalAddresses = additionalAddresses,
                 )
-            } catch (error: Exception) {
+            } catch (error: Throwable) {
                 debugLog("wireless Bonjour unavailable, carrying on without an advertisement: ${error.message}")
                 null
             }
@@ -1476,7 +1476,7 @@ class CarPlayController(
                     bonjourClient.start()
                     startedBonjour = bonjourClient
                     debugLog("wireless Bonjour services started mode=interface iface=${hotspotInfo.interfaceName ?: "unknown"}")
-                } catch (error: Exception) {
+                } catch (error: Throwable) {
                     debugLog("wireless Bonjour unavailable, carrying on without an advertisement: ${error.message}")
                 }
             }
