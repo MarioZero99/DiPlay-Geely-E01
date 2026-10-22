@@ -89,6 +89,11 @@ class CarPlayRuntimeConfig(
      * one-task-per-event path verbatim.
      */
     val coalesceTouchMoves: Boolean = true,
+    /**
+     * How many times this session has been retried within the host activity reconnect loop.
+     * 0 indicates a fresh / cold attempt; > 0 indicates subsequent reconnect retry.
+     */
+    val reconnectAttempts: Int = 0,
 ) {
     init {
         require(iphoneDevices.all { it.vendorId == APPLE_VENDOR_ID }) {

@@ -1258,11 +1258,13 @@ class CarPlayController(
             wirelessAddressRecovery = addressRecovery
             // Built here rather than at the 0x4301, because the port it watches is bound before then and
             // a phone that finds us through Bonjour may open it first. See [FirstTcpWatchdog].
-            val firstTcpTimeout = if (hotspotInfo.backend == WirelessHotspotBackend.EXISTING_WIFI) {
-                WirelessStartupPolicy.FIRST_TCP_EXISTING_WIFI_MILLIS
-            } else {
-                WirelessStartupPolicy.FIRST_TCP_MILLIS
-            }
+            val firstTcpTimeout = WirelessStartupPolicy.firstTcpTimeoutMillis(
+                isExistingWifi = hotspotInfo.backend == WirelessHotspotBackend.EXISTING_WIFI,
+                reconnectAttempts = config.reconnectAttempts,
+                generation = generation,
+                wirelessAddressFamily = config.wirelessAddressFamily,
+            )
+            debugLog("wireless first-tcp watchdog armed timeout=${firstTcpTimeout}ms")
             val firstTcpWatchdog = FirstTcpWatchdog(
                 schedule = { delay, body -> mainHandler.postDelayed(body, delay) },
                 onTimeout = { onFirstTcpTimedOut(generation) },
@@ -2636,11 +2638,12 @@ class CarPlayController(
                 val interfaceName = wirelessHotspotInterface
                 val peers = ipv4PeersOnAccessPoint()
                 val isExistingWifi = wirelessHotspotBackend == WirelessHotspotBackend.EXISTING_WIFI
-                val timeoutMillis = if (isExistingWifi) {
-                    WirelessStartupPolicy.FIRST_TCP_EXISTING_WIFI_MILLIS
-                } else {
-                    WirelessStartupPolicy.FIRST_TCP_MILLIS
-                }
+                val timeoutMillis = WirelessStartupPolicy.firstTcpTimeoutMillis(
+                    isExistingWifi = isExistingWifi,
+                    reconnectAttempts = config.reconnectAttempts,
+                    generation = generation,
+                    wirelessAddressFamily = config.wirelessAddressFamily,
+                )
                 val hasAlternate = wirelessAlternateAddress != null
                 if (peers != null && peers.isEmpty() && !hasAlternate) {
                     // Nobody ever resolved an address on this access point, so the address this

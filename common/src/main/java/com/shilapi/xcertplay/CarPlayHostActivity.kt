@@ -252,6 +252,7 @@ class CarPlayHostActivity : ComponentActivity() {
         existingWifiCredentials = existingWifiCredentials,
         wirelessAddressFamily = wirelessAddressFamilyGuess.family(wirelessHotspotMode),
         locationReportingEnabled = locationReportingEnabled,
+        reconnectAttempts = reconnectAttempts,
     )
 
     private val vpnConsent =
