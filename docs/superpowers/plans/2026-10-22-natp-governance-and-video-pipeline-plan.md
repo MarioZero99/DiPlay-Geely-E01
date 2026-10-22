@@ -1,128 +1,256 @@
-# 吉利 E01 (MT6735) natp 与 xiaoka 后台语音治理及投屏管线优化 Implementation Plan
+# 吉利 E01 (MT6735) 后台语音独立治理模块 (`:governance`) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 
-1. 解决吉利 E01 车机（MT6735）因后台原生语音服务 `natp`（PSS 263MB、占一核 40% CPU、`SCHED_FIFO` 实时优先级）与 `com.ecarx.xiaoka` 抢占造成的性能瓶颈，通过东软原生 `ExtraUtilsService` Binder（纯内存无脚本 uid-0 提取通道）实现按需抑制与安全自愈，释放 320MB+ 物理内存与半核 CPU。
-2. 在 DiPlay 设置页的「实验性功能」中挂载「抑制后台语音 (natp)」开关，严格实现完整的生命周期交互设计：**启动 APP 发现开启立即生效、设置页开启立刻生效、设置页关闭立刻恢复、退出 APP (onDestroy) 自动恢复原厂、异常断电重启天然自愈**。
-3. 投屏组件专项优化：锁定 100% 原生点对点分辨率（1920×720 / 1920×590），重构解码流水线为 Feeder / Drainer 双线程解耦架构，并在启动时下发 MTK VDEC 私有低延迟驱动属性。
+创建完全解耦的独立 Gradle 子模块 `:governance`，通过东软原生 `ExtraUtilsService` Binder 接口（纯内存无脚本 uid-0 提权），实现吉利 E01（MT6735，Android 5.1）车机后台语音内核 `natp`（PSS 263MB、占一核 40% CPU）与前台应用 `com.ecarx.xiaoka`（PSS 62MB）的端到端联合治理，释放 320MB+ 物理内存与半核 CPU；并在 DiPlay 实验性设置中以完全解耦的独立门面完成生命周期挂载与安全自愈。
 
----
+**Architecture:** 
+1. 模块边界：新建 `:governance` 模块，对外暴露单例 `VehicleGovernance` 门面与 `IVehicleGovernor` SPI，主工程单向依赖，模块内部零依赖任何 CarPlay 业务逻辑。
+2. 提权下发：利用 Android 5.1 init 原生机制（`ctl.stop` 会在内核底层直接发送 `SIGKILL` 杀死 natp 进程），使用纯 AOSP 原生命令（`setprop` + `pm`，无 `pidof` / `killall` 依赖），命令长度压至 66 字节（远低于 220 字节限额）。
+3. 退出生命周期：在 `DiPlayActivity.closeTheApp()` 主动退出前及 `onDestroy` 中触发恢复，杜绝因 `killProcess()` 导致恢复指令未下发。
 
-## 事实核实与边界对齐 (Fact Alignment)
-
-1. **`video/decode` 指标真相**：
-   - 指标中位数 `p50=123ms` 衡量的是 MediaCodec 的 FIFO 管线排队延迟（MTK 固件默认维持约 3.7 帧重排缓冲，3.7 × 33.3ms ≈ 123ms），而非单帧硬件解码计算耗时（3~8ms）。
-   - 80% 与 100% 分辨率在 MT6735 上管线延迟天然一致。80% 降分辨率不仅无法降低管线延迟，还会导致双线性插值画面发虚。**坚决保持 100% 原生点对点分辨率**。
-   - `over=17422/27971` 是由于警报阈值误设为 120ms（小于中位数 123ms）导致的统计假象，实测 `shown ≈ rx`，`recoveries=0`，硬解一帧未丢。
-2. **`natp` 与 `com.ecarx.xiaoka` 的真实依赖**：
-   - `natp`（`/system/bin/natp`）是 Nuance Dragon Drive 语音内核，`init.rc` 中服务名为 `run_natp`，带有 `disabled` 标志。
-   - `com.ecarx.xiaoka`（晓咖，62MB）是语音交互前台与守护者，在开机 29.7 秒及语音键触发时调用 `ctl.start run_natp`。
-   - **必须两者同时治理**：单停 `run_natp` 可能会被晓咖的心跳重拉；同时执行 `pm disable-user` 才能彻底掐灭复活源头。
-3. **无脚本化 uid-0 提取通道**：
-   - 依赖项目已有的 `com.shilapi.xcertplay.system.E01RootBridge`，通过 Binder 向东软 `ExtraUtilsService` 发送单行指令以 uid 0 执行。
-   - 抑制指令（96 字节，远低于 220 字节限制）：
-     `setprop ctl.stop run_natp && kill -STOP $(pidof natp) && pm disable-user --user 0 com.ecarx.xiaoka`
-   - 恢复指令（86 字节）：
-     `pm enable com.ecarx.xiaoka && kill -CONT $(pidof natp) && setprop ctl.start run_natp`
-   - 纯内存执行，零 `.sh` 脚本落盘，不伤 Flash，无 SELinux / 执行权限问题。
-4. **生命周期关键决策**：
-   - **启动 APP 即生效**：如果持久化配置中开关为打开状态，在 App 冷启动 / 热启动阶段立即执行抑制命令，保障最敏感的蓝牙 iAP2 握手与 Wi-Fi 组网阶段。
-   - **退出 APP 恢复**：在 `onDestroy` 或用户主动退出时执行恢复命令。
-   - **自愈对齐**：若用户未开启开关，启动时执行一次容错巡检（`pm enable com.ecarx.xiaoka`），防止异常断电后原车语音处于禁用状态。
-
----
-
-## Architecture & Core Decisions
-
-```mermaid
-flowchart TD
-    subgraph UI["Task 1: 设置与持久化 (ExperimentalFeatures / Settings)"]
-        S1["Switch: 抑制后台语音 (natp)"] --> S2["持久化至 SharedPreferences (KEY_SUPPRESS_VOICE_NATP)"]
-        S2 --> S3["即时切换: 打开触发 applyStop(), 关闭触发 applyRestore()"]
-    end
-
-    subgraph Governance["Task 2: 核心治理单例 (NatpGovernance)"]
-        G1["applyStop(): 执行 setprop ctl.stop + kill -STOP + pm disable-user"]
-        G2["applyRestore(): 执行 pm enable + kill -CONT + setprop ctl.start"]
-        G3["通过 E01RootBridge.execute() 内存单行下发 (uid 0)"]
-    end
-
-    subgraph Lifecycle["Task 3: 全局生命周期绑定 (DiPlayApplication / Activity)"]
-        L1["App 启动 (Application.onCreate / Activity.onCreate)"] --> L2{"开关是否开启?"}
-        L2 -- 是 --> G1
-        L2 -- 否 --> L3["容错检查 pm enable 确保原厂自愈"]
-        L4["App 退出 (onDestroy / finish)"] --> G2
-    end
-
-    subgraph VideoPipeline["Task 4: 投屏组件流水线解耦与低延迟驱动"]
-        V1["AndroidMediaSink: 拆分为 Feeder 与 Drainer 双线程"]
-        V2["启动注入 MTK 低延迟属性 (debug.mtk.vdec.lowlatency=1)"]
-        V3["固定 100% 原生点对点分辨率"]
-    end
-
-    S3 --> G1
-    S3 --> G2
-    L2 --> Governance
-    L4 --> Governance
-```
+**Tech Stack:** Kotlin 1.9, Coroutines 1.7.3, Android API 22 (minSdk 19), Gradle Kotlin DSL, JUnit4, Robolectric.
 
 ---
 
 ## Global Constraints
 
-- **最低 API 支持**：minSdk 19，E01 为 API 22（Android 5.1）。不可使用 Android 6.0+（API 23+）公共 API。
-- **命令行长度硬限制**：所有由 `E01RootBridge` 执行的单行 Shell 命令长度必须严格 $\le 220$ 字节。
+- **最低 API 支持**：minSdk 19，E01 目标运行环境为 API 22（Android 5.1）。严禁引入 Android 6.0+（API 23+）公共类库。
+- **Shell 依赖绝对纯净**：Android 5.1 toolbox 只有基础工具，**严禁依赖 `pidof`、`killall`、`pkill`**。抑制与恢复命令只能使用 `setprop` 与 `pm`。
+- **命令行长度硬限制**：所有由 `E01RootBridge` 执行的单行 Shell 命令经过包装后长度必须严格 $\le 220$ 字节。
 - **主线程零阻塞**：所有 Binder 提权执行与属性查询必须通过后台协程或工作线程执行。
 - **安全第一**：严禁修改 `/system` 或刷写闪存；严禁禁用 `ecarx.controlboard` 与 `ecarx.hvac.app`。
 
 ---
 
+## File Structure
+
+```
+settings.gradle.kts                                                  (Modify: 注册 :governance)
+governance/
+├── build.gradle.kts                                                 (Create: 独立子模块构建)
+└── src/
+    ├── main/
+    │   ├── AndroidManifest.xml                                      (Create: 库清单)
+    │   └── java/com/shilapi/governance/
+    │       ├── VehicleGovernance.kt                                 (Create: 对外门面单例)
+    │       ├── core/
+    │       │   ├── IVehicleGovernor.kt                              (Create: 治理驱动接口)
+    │       │   ├── GovernorFactory.kt                               (Create: 平台探测分发)
+    │       │   ├── E01Mtk6735Governor.kt                            (Create: E01 专属实现)
+    │       │   ├── NoOpGovernor.kt                                  (Create: 降级空实现)
+    │       │   └── CommandQueue.kt                                  (Create: 协程串行防抖队列)
+    │       ├── platform/
+    │       │   └── E01RootBridge.kt                                 (Create: 纯内存 uid-0 桥接)
+    │       └── store/
+    │           └── GovernancePersistence.kt                         (Create: 独立持久化存储)
+    └── test/
+        └── java/com/shilapi/governance/
+            ├── E01Mtk6735GovernorTest.kt                            (Create: 指令与状态测试)
+            └── CommandQueueTest.kt                                  (Create: 串行队列测试)
+common/
+├── build.gradle.kts                                                 (Modify: 添加 governance 依赖)
+└── src/main/java/com/shilapi/xcertplay/
+    ├── DiPlayBootstrap.kt                                           (Modify: 全局注入 install)
+    └── DiPlayActivity.kt                                            (Modify: closeTheApp 恢复 & experimentalCards 挂载)
+```
+
+---
+
 ## Implementation Tasks
 
-### Task 1: 创建 `NatpGovernance` 治理核心组件
-- [ ] 在 `shared` 模块的 `com.shilapi.xcertplay.system` 包下创建 `NatpGovernance.kt`。
-- [ ] 封装抑制命令：
-  `setprop ctl.stop run_natp && kill -STOP $(pidof natp) && pm disable-user --user 0 com.ecarx.xiaoka`
-- [ ] 封装恢复命令：
-  `pm enable com.ecarx.xiaoka && kill -CONT $(pidof natp) && setprop ctl.start run_natp`
-- [ ] 封装自愈命令：
-  `pm enable com.ecarx.xiaoka`（确保未开启状态下晓咖状态正常）。
-- [ ] 实现状态查询方法 `isSuppressed()`：通过 `getprop init.svc.run_natp` 与包状态判定。
-- [ ] 编写对应的单元测试 `NatpGovernanceTest.kt`，验证命令拼装长度 $\le 220$ 字节与状态解析逻辑。
+### Task 1: 搭建 `:governance` 独立子模块骨架与构建脚本
 
-### Task 2: 绑定 App 启动与退出完整生命周期
-- [ ] 在 `DiPlayApplication.kt` 或 `DiPlayActivity.kt` 的启动初始化流程中：
-  - 读取持久化配置 `KEY_SUPPRESS_VOICE_NATP`；
-  - 若开启，立即在后台线程触发 `NatpGovernance.applyStop()`；
-  - 若未开启，执行自愈保障 `NatpGovernance.ensureSelfHealed()`。
-- [ ] 在 `DiPlayActivity.onDestroy()` 与退出确认逻辑中：
-  - 若曾执行过抑制，在后台触发 `NatpGovernance.applyRestore()`。
-- [ ] 编写生命周期单元测试与状态切换测试。
+**Files:**
+- Modify: `settings.gradle.kts:27`
+- Create: `governance/build.gradle.kts`
+- Create: `governance/src/main/AndroidManifest.xml`
 
-### Task 3: 设置页（ExperimentalFeatures）UI 与持久化挂载
-- [ ] 在 `AirPlayPersistence.kt` 中添加 `voiceNatpSuppressionEnabled` 键值读写。
-- [ ] 在 `DiPlayActivity.kt` 的实验性功能设置界面中：
-  - 增加 Switch 设置项：`抑制后台语音 (natp)`；
-  - 副标题：`释放 260MB 内存与 40% CPU，退出本应用或车机重启后自动恢复`；
-  - 绑定开关切换事件：开启立刻调用 `applyStop()`，关闭立刻调用 `applyRestore()`。
-- [ ] 编写 UI 测试 `NatpGovernanceUiTest.kt` 验证开关状态展示与持久化联动。
+**Interfaces:**
+- Consumes: None
+- Produces: Gradle 模块 `:governance`
 
-### Task 4: 投屏组件优化与 MTK 低延迟驱动属性注入
-- [ ] 固化投屏分辨率为 100% 原生点对点（1920×720 / 1920×590），移除无收益的 80% 降级逻辑。
-- [ ] 在 `AndroidMediaSink.configureDecoder` 中注入 MTK 私有低延迟系统属性（通过 `E01RootBridge.execute("setprop debug.mtk.vdec.lowlatency 1")`）。
-- [ ] 重构 `AndroidMediaSink.kt` 的解码调度，解耦网络喂帧（Feeder）与屏幕出队渲染（Drainer），消除串行轮询导致的互相卡顿。
-- [ ] 调整 `video/decode` 监控报警阈值（由 120ms 调整为 160ms），使其正确反映异常抖动而非正常管线排队。
+- [ ] **Step 1: 在 `settings.gradle.kts` 中添加 `include(":governance")`**
+- [ ] **Step 2: 创建 `governance/src/main/AndroidManifest.xml`**
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.shilapi.governance" />
+```
+- [ ] **Step 3: 创建 `governance/build.gradle.kts`**
+```kotlin
+plugins {
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.shilapi.governance"
+    compileSdk { version = release(37) }
+    defaultConfig { minSdk = 19 }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    kotlinOptions { jvmTarget = "11" }
+}
+
+dependencies {
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.17")
+}
+```
+- [ ] **Step 4: 运行 `./gradlew :governance:assemble` 验证模块构建成功**
+- [ ] **Step 5: Commit: "governance: scaffold independent gradle subproject"**
+
+---
+
+### Task 2: 实现底层提权桥接 `E01RootBridge.kt` 与指令测试
+
+**Files:**
+- Create: `governance/src/main/java/com/shilapi/governance/platform/E01RootBridge.kt`
+- Create: `governance/src/test/java/com/shilapi/governance/platform/E01RootBridgeTest.kt`
+
+**Interfaces:**
+- Consumes: `android.os.IBinder`, `android.os.Parcel`
+- Produces: `E01RootBridge.execute(command): Result`
+
+- [ ] **Step 1: 编写失败测试 `E01RootBridgeTest.kt`**
+  - 验证命令包装外壳 `{ <cmd>; } 2>&1; rc=$?; echo __GEEKPLAY_ROOT_RC:$rc` 格式；
+  - 验证超出 220 字节时抛出 `IllegalArgumentException`；
+  - 验证多行命令防御拦截。
+- [ ] **Step 2: 运行测试并验证失败**
+- [ ] **Step 3: 实现 `E01RootBridge.kt`**
+  - 封装东软 `ExtraUtilsService` Binder 通信逻辑；
+  - 实现命令安全检查与退出码解析。
+- [ ] **Step 4: 运行测试并验证通过**
+- [ ] **Step 5: Commit: "governance: implement E01RootBridge for uid-0 execution"**
+
+---
+
+### Task 3: 实现协程串行防抖队列 `CommandQueue.kt` 与独立存储
+
+**Files:**
+- Create: `governance/src/main/java/com/shilapi/governance/core/CommandQueue.kt`
+- Create: `governance/src/main/java/com/shilapi/governance/store/GovernancePersistence.kt`
+- Create: `governance/src/test/java/com/shilapi/governance/core/CommandQueueTest.kt`
+
+**Interfaces:**
+- Consumes: Kotlin Coroutines, `Mutex`, `SharedPreferences`
+- Produces: `CommandQueue.execute(block): T`, `GovernancePersistence.isSuppressionConfigured(): Boolean`
+
+- [ ] **Step 1: 编写失败测试 `CommandQueueTest.kt` 验证串行互斥**
+- [ ] **Step 2: 运行测试验证失败**
+- [ ] **Step 3: 实现 `CommandQueue.kt`（内置 Mutex 互斥与 300ms 保护）**
+- [ ] **Step 4: 实现 `GovernancePersistence.kt`，使用 `e01_governance_prefs.xml` 独立命名空间**
+- [ ] **Step 5: 运行测试验证通过**
+- [ ] **Step 6: Commit: "governance: implement serialized CommandQueue and isolated persistence"**
+
+---
+
+### Task 4: 实现治理驱动核心 `IVehicleGovernor`、`E01Mtk6735Governor` 与降级兜底
+
+**Files:**
+- Create: `governance/src/main/java/com/shilapi/governance/core/IVehicleGovernor.kt`
+- Create: `governance/src/main/java/com/shilapi/governance/core/NoOpGovernor.kt`
+- Create: `governance/src/main/java/com/shilapi/governance/core/E01Mtk6735Governor.kt`
+- Create: `governance/src/main/java/com/shilapi/governance/core/GovernorFactory.kt`
+- Create: `governance/src/test/java/com/shilapi/governance/core/E01Mtk6735GovernorTest.kt`
+
+**Interfaces:**
+- Consumes: `E01RootBridge`, `CommandQueue`, `GovernancePersistence`
+- Produces: `IVehicleGovernor` 统一接口实现
+
+- [ ] **Step 1: 编写失败测试 `E01Mtk6735GovernorTest.kt`**
+  - 严格校验抑制命令（66 字节）：
+    `setprop ctl.stop run_natp; pm disable-user --user 0 com.ecarx.xiaoka`（wrapped 105 字节 $\le 220$ 字节）
+  - 严格校验恢复命令（53 字节）：
+    `pm enable com.ecarx.xiaoka; setprop ctl.start run_natp`（wrapped 92 字节 $\le 220$ 字节）
+  - 严格校验自愈命令（27 字节）：
+    `pm enable com.ecarx.xiaoka`（wrapped 66 字节 $\le 220$ 字节）
+- [ ] **Step 2: 运行测试验证失败**
+- [ ] **Step 3: 实现 `IVehicleGovernor.kt`、`NoOpGovernor.kt` 与 `E01Mtk6735Governor.kt`**
+- [ ] **Step 4: 实现 `GovernorFactory.kt`，通过 `Build.HARDWARE` / `E01RootBridge.isAvailable()` 自动探测与降级**
+- [ ] **Step 5: 运行测试验证通过**
+- [ ] **Step 6: Commit: "governance: implement E01Mtk6735Governor with 66B bulletproof commands"**
+
+---
+
+### Task 5: 封装门面单例 `VehicleGovernance.kt` 与编译期物理熔断
+
+**Files:**
+- Create: `governance/src/main/java/com/shilapi/governance/VehicleGovernance.kt`
+- Create: `governance/src/test/java/com/shilapi/governance/VehicleGovernanceTest.kt`
+
+**Interfaces:**
+- Consumes: `GovernorFactory`, `GovernancePersistence`
+- Produces: `VehicleGovernance.install()`, `setSuppressionEnabled()`, `onAppExit()`
+
+- [ ] **Step 1: 编写失败测试 `VehicleGovernanceTest.kt`**
+  - 验证当 `isExperimentalAllowed == false` 时，门面强制绑定 `NoOpGovernor` 并执行一次自愈巡检；
+  - 验证状态变更回调与 StateFlow。
+- [ ] **Step 2: 运行测试验证失败**
+- [ ] **Step 3: 实现 `VehicleGovernance.kt` 门面**
+- [ ] **Step 4: 运行测试验证通过**
+- [ ] **Step 5: Commit: "governance: expose VehicleGovernance facade with build-time gating"**
+
+---
+
+### Task 6: 主工程集成、启动感知与 `closeTheApp` 干净恢复
+
+**Files:**
+- Modify: `common/build.gradle.kts`
+- Modify: `common/src/main/java/com/shilapi/xcertplay/DiPlayBootstrap.kt`
+- Modify: `common/src/main/java/com/shilapi/xcertplay/DiPlayActivity.kt`
+
+**Interfaces:**
+- Consumes: `com.shilapi.governance.VehicleGovernance`
+- Produces: 主工程无感接入生命周期
+
+- [ ] **Step 1: 在 `common/build.gradle.kts` 中添加 `implementation(project(":governance"))`**
+- [ ] **Step 2: 在 `DiPlayBootstrap.kt` 中注入 `VehicleGovernance.install(this, ExperimentalFeatures.enabled)`**
+- [ ] **Step 3: 在 `DiPlayActivity.closeTheApp()` 中（即退出杀进程前）同步触发恢复：**
+  ```kotlin
+  private fun closeTheApp() {
+      VehicleGovernance.onAppExit()
+      releaseProcessWirelessResources(applicationContext)
+      CarPlayBackgroundSession.exit { android.os.Process.killProcess(android.os.Process.myPid()) }
+  }
+  ```
+- [ ] **Step 4: 在 `DiPlayActivity.onDestroy()` 中追加 `VehicleGovernance.onAppExit()` 兜底**
+- [ ] **Step 5: 运行 `./gradlew test` 确保全量测试通过**
+- [ ] **Step 6: Commit: "common: integrate VehicleGovernance and bind to closeTheApp lifecycle"**
+
+---
+
+### Task 7: 设置页（ExperimentalFeatures）UI 挂载与确认弹窗
+
+**Files:**
+- Modify: `common/src/main/java/com/shilapi/xcertplay/DiPlayActivity.kt:1010` (`experimentalCards`)
+
+**Interfaces:**
+- Consumes: `VehicleGovernance.isSupported`, `VehicleGovernance.isSuppressedFlow`
+- Produces: 实验性功能设置 Switch 卡片
+
+- [ ] **Step 1: 在 `experimentalCards(columns: CardColumns)` 中挂载语音治理卡片**
+  - 只有当 `VehicleGovernance.isSupported && ExperimentalFeatures.enabled` 为 true 时才绘制；
+  - 开启 Switch 时弹出警告确认弹窗：“将临时停用原车语音交互并释放 320MB 内存，退出应用自动恢复”；
+  - 用户确认后调用 `VehicleGovernance.setSuppressionEnabled(true)`；关闭时直接调用 `false`。
+- [ ] **Step 2: 编译并在真机/AVD 上验证设置页 UI 布局**
+- [ ] **Step 3: Commit: "ui: mount voice governance switch in experimental settings card"**
 
 ---
 
 ## Verification & Acceptance Checklist
 
-1. **静态验证**：
-   - 运行 `./gradlew test` 确保所有单元测试全部通过。
-   - 验证单行命令字符集与长度全部在 220 字节安全预算内。
+1. **构建与字节预算验证**：
+   - 运行 `./gradlew :governance:test` 全部通过；
+   - 抑制指令 66 字节（包装后 105 字节 $\le 220$ 字节）；
+   - 恢复指令 53 字节（包装后 92 字节 $\le 220$ 字节）；
+   - 绝无 `pidof` 或 `killall` 外部命令依赖。
 2. **车端实车验证**：
-   - 开启开关后，adb 执行 `ps | grep -E "natp|xiaoka"`：确认 `natp` 为 T 状态（挂起）或不存在，`xiaoka` 为 disabled。
-   - 检查系统内存：`dumpsys meminfo` 验证可用物理内存释放 300MB+。
-   - 跑 CarPlay 投屏 15 分钟：验证 `video/decode` 的 p95 / max 延迟显著下降，`shown` 稳定在 28~30fps。
-   - 正常退出 DiPlay：验证 `natp` 恢复 running，晓咖恢复正常交互。
+   - 开启 Switch：执行 `ps | grep -E "natp|xiaoka"`，确认 `natp` 进程彻底消亡，`xiaoka` 为 disabled；
+   - 内存核验：`dumpsys meminfo` 验证物理可用内存暴增 320MB+（超过 340MB 可用）；
+   - 退出应用：点击顶部退出按钮，车机执行 `closeTheApp()`，确认原厂晓咖与 natp 在 1 秒内完全复活。
