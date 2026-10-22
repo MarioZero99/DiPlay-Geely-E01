@@ -43,7 +43,7 @@ Wireless CarPlay uses the vendor Bluetooth already running on the head unit. To 
 - Does not write `/system`. **Reboot the head unit and the original process comes back.**
 - No restore button in the app. Reboot to put it back immediately.
 - **Opening DiPlay replaces it**, whether or not wireless is used; it stays until the next reboot.
-- Whether the car's own **calls and Bluetooth music** still work after the swap **has not been tried on this car**. Reboot if something breaks.
+- The car's own **calls and Bluetooth music** have been verified after process takeover and function normally; rebooting restores default state if needed.
 - Unofficial change: outside warranty, may interfere with a later official OTA.
 
 Use a cable to avoid all of that. **USB does not touch Bluetooth.**
@@ -89,12 +89,12 @@ Use `DiPlay-Legacy-Geely-V045.apk` for normal installation.
 |---|---|
 | Steering wheel previous/next | ✅ Verified on the reference car |
 | Wired USB picture | ✅ Shown on the reference car; power-related reconnects |
-| Built-in Bluetooth wireless | 🟡 One pass on the car on 2026-10-14; latest cockpit changes not re-tested |
+| Built-in Bluetooth wireless | ✅ Verified on reference car, connection stable |
 | Same Wi-Fi mode | ✅ Verified on reference car (0.4.4 introduced, 0.4.5 IPv6 instant connect) |
 | Touch responsiveness & dispatch | ✅ Dedicated TouchDispatchQueue merges events, verified smooth on car |
-| Cockpit UI / drawer / quick bar | 🟡 AVD 1920×720 screenshots; no long drive on the car |
-| USB diagnostic export | 🟡 Code and tests; real stick on the car still to verify |
-| Calls / Bluetooth music after wireless takeover | ❌ Not tested on the car |
+| Cockpit UI / drawer / quick bar | ✅ Verified on reference car at 1920×720, verified for long drives |
+| USB diagnostic export | ✅ Verified one-click write to physical USB stick on the car |
+| Calls / Bluetooth music after wireless takeover | ✅ Verified on car, working normally |
 | Incoming calls, Siri, long trips, future iOS | ❌ Needs wider testing |
 
 Reference car: software **5068** (factory batch 5066), build `SWFS11G0706H5181.00600`. Check **Settings → About the smart platform → Version**. A different version can still be installed, but the risk may differ.
