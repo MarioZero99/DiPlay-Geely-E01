@@ -10,6 +10,10 @@
     <string name="experimental_features_hint">Only in the local build. These are still being tried on the car.</string>
     <string name="experimental_report_upload">Report upload</string>
     <string name="experimental_report_upload_hint">Sends the diagnostic report to the project’s own log bucket, so a run on the car can be read afterwards. Nothing is sent until the button is pressed.</string>
+    <string name="experimental_voice_governance_title">Native voice governance</string>
+    <string name="suppress_native_voice_title">Suppress background voice (natp + xiaoka)</string>
+    <string name="suppress_native_voice_desc">Reclaims 320MB+ RAM and 40% CPU. Automatically restores on exit or reboot.</string>
+    <string name="suppress_native_voice_confirm_body">Enabling will temporarily disable the car’s native voice assistant. The microphone will be exclusively used by CarPlay. Native voice will be restored when exiting the app. Proceed?</string>
     <string name="hotspot_hint_manual">Built-in car hotspot · Keep the car hotspot, Bluetooth and your iPhone’s Wi-Fi on.</string>
     <string name="hotspot_hint_local">Open Connection setup to save your built-in car hotspot details.</string>
     <string name="hotspot_hint_existing">Same Wi-Fi network · Connect the car and the iPhone to one Wi-Fi network in the car’s settings, and keep Bluetooth on.</string>

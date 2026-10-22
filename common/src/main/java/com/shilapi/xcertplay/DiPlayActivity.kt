@@ -47,6 +47,7 @@ import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.shilapi.governance.VehicleGovernance
 import com.shilapi.xcertplay.airplay.AirPlayDisplaySettings
 import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeBasis
 import com.shilapi.xcertplay.airplay.CarPlayClusterDisplay
@@ -266,6 +267,7 @@ class DiPlayActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         DiagCrashHandler.install(this)
+        VehicleGovernance.install(application, isExperimentalAllowed = ExperimentalFeatures.enabled)
         languagePreferenceAtCreate = AppLocale.preference(this)
         WindowCompat.setDecorFitsSystemWindows(window, true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -436,6 +438,7 @@ class DiPlayActivity : ComponentActivity() {
         updateLink?.close()
         updateLink = null
         releaseAdapterPage()
+        VehicleGovernance.onAppExit()
         super.onDestroy()
     }
 
@@ -1010,6 +1013,7 @@ class DiPlayActivity : ComponentActivity() {
     private fun experimentalCards(columns: CardColumns) {
         updateCard(columns)
         hopMaintenanceCards(columns)
+        voiceGovernanceCard(columns)
         columns.card(R.string.experimental_report_upload, R.drawable.ic_dp_diagnostics) { card ->
             card.addView(label(getString(R.string.experimental_report_upload_hint), 16, MUTED))
             if (SupabaseLogUpload.enabled(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_KEY)) {
@@ -1018,6 +1022,36 @@ class DiPlayActivity : ComponentActivity() {
                     false,
                 ) { uploadGeneratedReport() }.apply { isEnabled = !uploadInProgress }
                 card.addView(uploadButton, matchButton(16, 60))
+            }
+        }
+    }
+
+    private fun voiceGovernanceCard(columns: CardColumns) {
+        if (!VehicleGovernance.isSupported || !ExperimentalFeatures.enabled) return
+        columns.card(R.string.experimental_voice_governance_title, R.drawable.ic_dp_permissions) { card ->
+            val isSuppressed = VehicleGovernance.isSuppressedFlow.value
+            toggle(
+                parent = card,
+                title = getString(R.string.suppress_native_voice_title),
+                description = getString(R.string.suppress_native_voice_desc),
+                value = isSuppressed,
+            ) { requested ->
+                if (requested) {
+                    AlertDialog.Builder(this)
+                        .setTitle(getString(R.string.suppress_native_voice_title))
+                        .setMessage(getString(R.string.suppress_native_voice_confirm_body))
+                        .setNegativeButton(getString(R.string.cancel)) { _, _ -> render() }
+                        .setPositiveButton(getString(R.string.maintenance_continue)) { _, _ ->
+                            VehicleGovernance.setSuppressionEnabled(true) {
+                                runOnUiThread { render() }
+                            }
+                        }
+                        .show()
+                } else {
+                    VehicleGovernance.setSuppressionEnabled(false) {
+                        runOnUiThread { render() }
+                    }
+                }
             }
         }
     }
@@ -1031,6 +1065,7 @@ class DiPlayActivity : ComponentActivity() {
      * what frees the socket when no session is running at all.
      */
     private fun closeTheApp() {
+        VehicleGovernance.onAppExit()
         releaseProcessWirelessResources(applicationContext)
         CarPlayBackgroundSession.exit { android.os.Process.killProcess(android.os.Process.myPid()) }
     }
