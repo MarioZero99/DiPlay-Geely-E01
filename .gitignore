@@ -39,5 +39,9 @@ release-signing.properties
 *.apk
 *.aab
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Locally packaged car-test artifacts (scripts/package-geely.sh)
 /dist/
