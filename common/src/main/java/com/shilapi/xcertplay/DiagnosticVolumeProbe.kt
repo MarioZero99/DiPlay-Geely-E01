@@ -49,6 +49,9 @@ internal object DiagnosticVolumeProbe {
         }
     }
 
+    internal fun defaultProcMounts(): File? =
+        if (Build.FINGERPRINT == "robolectric") null else File("/proc/mounts")
+
     internal fun parseMountPoints(mountsContent: String): List<File> {
         val candidates = mutableListOf<File>()
         val systemPrefixes = listOf(
@@ -59,10 +62,16 @@ internal object DiagnosticVolumeProbe {
         for (line in mountsContent.lineSequence()) {
             val parts = line.trim().split(Regex("\\s+"))
             if (parts.size < 3) continue
+            val dev = parts[0]
             val mountPoint = unescapeMountPoint(parts[1])
             val fsType = parts[2].lowercase()
             if (fsType !in targetFs) continue
-            if (mountPoint == "/" || mountPoint.startsWith("/storage/emulated") || systemPrefixes.any { mountPoint.startsWith(it) }) continue
+            if (mountPoint == "/" || mountPoint == "/mnt" || mountPoint.startsWith("/storage/emulated") || systemPrefixes.any { mountPoint.startsWith(it) }) continue
+            // An external volume either comes from Android vold, or is mounted under /storage/ or /mnt/
+            val isLikelyExternal = dev.startsWith("/dev/block/vold/") ||
+                mountPoint.startsWith("/storage/") ||
+                mountPoint.startsWith("/mnt/")
+            if (!isLikelyExternal) continue
             val file = File(mountPoint)
             if (file.isDirectory && !isPrimaryStorage(file)) {
                 candidates.add(file)
@@ -74,7 +83,7 @@ internal object DiagnosticVolumeProbe {
     fun probe(
         context: Context,
         extraMountPaths: Collection<String> = emptySet(),
-        procMountsFile: File = File("/proc/mounts"),
+        procMountsFile: File? = defaultProcMounts(),
     ): ProbeSummary {
         val candidates = linkedMapOf<String, File>()
 
@@ -82,7 +91,7 @@ internal object DiagnosticVolumeProbe {
         // This is the primary source: it names all currently mounted filesystems directly,
         // without guessing names or depending on broadcast timing.
         runCatching {
-            if (procMountsFile.exists() && procMountsFile.canRead()) {
+            if (procMountsFile != null && procMountsFile.exists() && procMountsFile.canRead()) {
                 val mountsContent = procMountsFile.readText()
                 for (mount in parseMountPoints(mountsContent)) {
                     candidates[mount.absolutePath] = mount

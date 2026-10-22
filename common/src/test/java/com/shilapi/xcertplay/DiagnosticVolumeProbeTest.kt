@@ -143,4 +143,16 @@ class DiagnosticVolumeProbeTest {
         assertEquals(pkgDir.absolutePath, vol.packageDir?.absolutePath)
         assertFalse("Subdirectory must not become its own volume", summary.volumes.any { it.rootDir?.absolutePath == subDir.absolutePath })
     }
+
+    @Test fun filtersOutLinuxHostMountsLikeHomeAndBoot() {
+        val fakeBoot = temp.newFolder("boot")
+        val fakeHome = temp.newFolder("home")
+        val mountsContent = """
+            /dev/root / ext4 rw,relatime 0 0
+            /dev/sda1 ${fakeBoot.absolutePath} ext4 rw,relatime 0 0
+            /dev/sdb1 ${fakeHome.absolutePath} ext4 rw,relatime 0 0
+        """.trimIndent()
+        val parsed = DiagnosticVolumeProbe.parseMountPoints(mountsContent)
+        assertTrue("Linux host mounts must be ignored", parsed.isEmpty())
+    }
 }
