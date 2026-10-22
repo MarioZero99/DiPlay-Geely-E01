@@ -69,6 +69,7 @@ import com.shilapi.xcertplay.airplay.CarPlayClusterDisplay
 import com.shilapi.xcertplay.airplay.AirPlaySafeArea
 import com.shilapi.xcertplay.airplay.AirPlaySession
 import com.shilapi.xcertplay.airplay.AirPlaySessionListener
+import java.net.Inet6Address
 import com.shilapi.xcertplay.airplay.CarPlayMediaEngine
 import com.shilapi.xcertplay.airplay.SafeAreaRect
 import com.shilapi.xcertplay.carhop.CarBluetoothHops
@@ -249,7 +250,7 @@ class CarPlayHostActivity : ComponentActivity() {
         manualHotspotChannel = manualHotspotChannel,
         manualHotspotSecurity = manualHotspotSecurity,
         existingWifiCredentials = existingWifiCredentials,
-        wirelessAddressFamily = wirelessAddressFamilyGuess.family,
+        wirelessAddressFamily = wirelessAddressFamilyGuess.family(wirelessHotspotMode),
         locationReportingEnabled = locationReportingEnabled,
     )
 
@@ -390,14 +391,7 @@ class CarPlayHostActivity : ComponentActivity() {
     private var manualHotspotChannel = 0
     private var manualHotspotSecurity = ManualHotspotSecurity.OPEN
     private var existingWifiCredentials: List<ExistingWifiDriverCredentials> = emptyList()
-    /**
-     * Which address family this connect has moved to, and nothing that outlives it.
-     *
-     * Held here rather than in storage on purpose: the retry ladder reads it on every attempt it makes
-     * by itself, which is all the reach it needs, and the next connect starts from the default order
-     * again. See [WirelessAddressFamilyGuess].
-     */
-    private val wirelessAddressFamilyGuess = WirelessAddressFamilyGuess()
+    // Address family guess is held in companion object to persist in process memory across activity restarts.
     private var awaitingVpnConsent = false
     private var awaitingWirelessPermissions = false
     private var awaitingLocationPermission = false
@@ -2130,11 +2124,11 @@ class CarPlayHostActivity : ComponentActivity() {
                     activeAirPlaySession = session
                     CarPlayBackgroundSession.active = true
                     reconnectAttempts = 0
-                    // The guess answered itself: this connect arrived, so nothing it concluded belongs
-                    // to whatever comes next.
-                    wirelessAddressFamilyGuess.clear()
+                    // Remember the successful family in memory for subsequent reconnects in this session.
+                    val boundFamily = if (session.localAddress is Inet6Address) "IPv6" else "IPv4"
+                    wirelessAddressFamilyGuess.onSessionActive(boundFamily, wirelessHotspotMode)
                     syncAirPlayDarkMode()
-                    appendLog("AirPlay session active")
+                    appendLog("AirPlay session active ($boundFamily)")
                 }
             }
 
@@ -2369,7 +2363,7 @@ class CarPlayHostActivity : ComponentActivity() {
             // about the address this run published on this network, not a fact about the head unit, so
             // it is neither written down nor carried into the next connect.
             onWirelessAddressFamilyUnusable = { family ->
-                val taken = wirelessAddressFamilyGuess.onUnusable(family) != null
+                val taken = wirelessAddressFamilyGuess.onUnusable(family, wirelessHotspotMode) != null
                 appendLog(
                     if (taken) {
                         "wireless address family move to $family taken for the next attempt"
@@ -2868,9 +2862,8 @@ class CarPlayHostActivity : ComponentActivity() {
         reconnectEpoch += 1
         reconnectScheduled = false
         reconnectAttempts = 0
-        // The driver is asking for a new connection, so this one starts from the front of the order
-        // again whatever the last one concluded about the address family.
-        wirelessAddressFamilyGuess.clear()
+        // Allow family moves again on this new attempt without forgetting the in-memory preference.
+        wirelessAddressFamilyGuess.onNewAttempt()
         showHandshakeLine("manual retry: start a new handshake")
         appendLog("manual retry: start a new handshake")
         if (handshakeResetInProgress) {
@@ -3086,6 +3079,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     private companion object {
+        val wirelessAddressFamilyGuess = WirelessAddressFamilyGuess()
         const val TAG = "xcertplay-usb"
         const val SCREEN_TYPE_MAIN = 110
         const val SCREEN_TYPE_ALT = 111

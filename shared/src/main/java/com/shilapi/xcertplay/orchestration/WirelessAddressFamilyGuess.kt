@@ -1,41 +1,50 @@
 package com.shilapi.xcertplay.orchestration
 
+import com.shilapi.xcertplay.transport.WirelessHotspotMode
+
 /**
- * What one connect has learned about which address family to publish — and nothing beyond it.
+ * In-memory tracking of the address family to publish for wireless CarPlay connects.
  *
- * The first-TCP watchdog's finding, "the phone never answered on the address we published", is a fact
- * about *this* connect. Kept past the connect it turns into a claim about the head unit, and a claim
- * that is never re-examined is how a network that works on IPv4 comes to be published on IPv6 for
- * every attempt that follows, including the ones after an app restart. So the move lives here, in
- * memory, for exactly as long as the connect does:
- *
- * - **One move per connect.** With both families tried, the attempt after that is the first one again
- *   — a coin being flipped rather than a failure being read.
- * - **Cleared, the next connect starts from the front of the order again** — that is what a driver
- *   asking for a new connection, and a session that actually arrived, both mean.
- *
- * Nothing here is written to storage. The retry ladder holds this one object, which is all the reach a
- * per-connect answer needs; a value that outlives the process is a value nobody re-derives.
+ * Persisted in process memory across activity recreations and connection attempts so that
+ * an established or flipped family preference is not repeatedly forgotten and re-discovered.
+ * Preferences are isolated per [WirelessHotspotMode] so that conclusions reached on one backend
+ * (such as an existing Wi-Fi LAN preferring IPv6) do not bleed into others (such as manual APs).
  */
 class WirelessAddressFamilyGuess {
-    private var moved: String? = null
+    private val lock = Any()
+    private val rememberedFamilies = mutableMapOf<WirelessHotspotMode, String>()
+    private var movedInCurrentConnect: Boolean = false
 
-    /** The family to publish this connect, or null to let the backends' own order decide. */
-    val family: String?
-        get() = moved
+    /** The family to publish for [mode], or null to let the mode's own default decide. */
+    fun family(mode: WirelessHotspotMode = WirelessHotspotMode.EXISTING_WIFI): String? = synchronized(lock) {
+        rememberedFamilies[mode]
+    }
 
     /**
      * The published family was not reachable: [next] is what to publish instead, or null when this
      * connect has already moved once and the caller has to report the failure rather than move again.
      */
-    fun onUnusable(next: String): String? {
-        if (moved != null) return null
-        moved = next
-        return next
+    fun onUnusable(next: String, mode: WirelessHotspotMode = WirelessHotspotMode.EXISTING_WIFI): String? = synchronized(lock) {
+        if (movedInCurrentConnect) return null
+        movedInCurrentConnect = true
+        rememberedFamilies[mode] = next
+        next
     }
 
-    /** A session arrived, or a new connect is starting: the guess has nothing left to say. */
-    fun clear() {
-        moved = null
+    /** Records that an AirPlay session was successfully established using [family] on [mode]. */
+    fun onSessionActive(family: String, mode: WirelessHotspotMode = WirelessHotspotMode.EXISTING_WIFI) = synchronized(lock) {
+        rememberedFamilies[mode] = family
+        movedInCurrentConnect = false
+    }
+
+    /** Allows a new attempt (e.g. manual retry) to move families again if needed, without forgetting preferences. */
+    fun onNewAttempt() = synchronized(lock) {
+        movedInCurrentConnect = false
+    }
+
+    /** Clears the in-memory state. */
+    fun clear() = synchronized(lock) {
+        rememberedFamilies.clear()
+        movedInCurrentConnect = false
     }
 }
