@@ -49,6 +49,7 @@ object DiagCrashHandler {
         onRecord: (Thread, Throwable) -> Unit,
     ): Thread.UncaughtExceptionHandler = Thread.UncaughtExceptionHandler { thread, error ->
         runCatching { onRecord(thread, error) }
+        runCatching { com.shilapi.governance.VehicleGovernance.onAppExit() }
         previous?.uncaughtException(thread, error)
     }
 
