@@ -18,7 +18,7 @@
 
 - **最低 API 支持**：minSdk 19，E01 目标运行环境为 API 22（Android 5.1）。严禁引入 Android 6.0+（API 23+）公共类库。
 - **Shell 依赖绝对纯净**：Android 5.1 toolbox 只有基础工具，**严禁依赖 `pidof`、`killall`、`pkill`**。抑制与恢复命令只能使用 `setprop` 与 `pm`。
-- **命令行长度硬限制**：所有由 `E01RootBridge` 执行的单行 Shell 命令经过包装后长度必须严格 $\le 220$ 字节。
+- **命令行长度硬限制**：所有由 `E01PrivilegedBridge` 执行的单行 Shell 命令经过包装后长度必须严格 $\le 220$ 字节。
 - **主线程零阻塞**：所有 Binder 提权执行与属性查询必须通过后台协程或工作线程执行。
 - **安全第一**：严禁修改 `/system` 或刷写闪存；严禁禁用 `ecarx.controlboard` 与 `ecarx.hvac.app`。
 
@@ -42,7 +42,7 @@ governance/
     │       │   ├── NoOpGovernor.kt                                  (Create: 降级空实现)
     │       │   └── CommandQueue.kt                                  (Create: 协程串行防抖队列)
     │       ├── platform/
-    │       │   └── E01RootBridge.kt                                 (Create: 纯内存 uid-0 桥接)
+    │       │   └── E01PrivilegedBridge.kt                                 (Create: 纯内存 uid-0 桥接)
     │       └── store/
     │           └── GovernancePersistence.kt                         (Create: 独立持久化存储)
     └── test/
@@ -52,8 +52,11 @@ governance/
 common/
 ├── build.gradle.kts                                                 (Modify: 添加 governance 依赖)
 └── src/main/java/com/shilapi/xcertplay/
-    ├── DiPlayBootstrap.kt                                           (Modify: 全局注入 install)
-    └── DiPlayActivity.kt                                            (Modify: closeTheApp 恢复 & experimentalCards 挂载)
+    ├── DiPlayActivity.kt                                            (Modify: closeTheApp 恢复 & experimentalCards 挂载)
+    └── DiagCrashHandler.kt                                          (Modify: 崩溃自愈拦截)
+mobile/
+└── src/main/java/com/shilapi/xcertplay/
+    └── DiPlayApplication.kt                                         (Modify: 全局注入 install)
 ```
 
 ---
@@ -71,13 +74,13 @@ common/
 - Consumes: None
 - Produces: Gradle 模块 `:governance`
 
-- [ ] **Step 1: 在 `settings.gradle.kts` 中添加 `include(":governance")`**
-- [ ] **Step 2: 创建 `governance/src/main/AndroidManifest.xml`**
+- [x] **Step 1: 在 `settings.gradle.kts` 中添加 `include(":governance")`**
+- [x] **Step 2: 创建 `governance/src/main/AndroidManifest.xml`**
 ```xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.shilapi.governance" />
 ```
-- [ ] **Step 3: 创建 `governance/build.gradle.kts`**
+- [x] **Step 3: 创建 `governance/build.gradle.kts`**
 ```kotlin
 plugins {
     id("com.android.library")
@@ -102,31 +105,31 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.17")
 }
 ```
-- [ ] **Step 4: 运行 `./gradlew :governance:assemble` 验证模块构建成功**
-- [ ] **Step 5: Commit: "governance: scaffold independent gradle subproject"**
+- [x] **Step 4: 运行 `./gradlew :governance:assemble` 验证模块构建成功**
+- [x] **Step 5: Commit: "governance: scaffold independent gradle subproject"**
 
 ---
 
-### Task 2: 实现底层提权桥接 `E01RootBridge.kt` 与指令测试
+### Task 2: 实现底层提权桥接 `E01PrivilegedBridge.kt` 与指令测试
 
 **Files:**
-- Create: `governance/src/main/java/com/shilapi/governance/platform/E01RootBridge.kt`
-- Create: `governance/src/test/java/com/shilapi/governance/platform/E01RootBridgeTest.kt`
+- Create: `governance/src/main/java/com/shilapi/governance/platform/E01PrivilegedBridge.kt`
+- Create: `governance/src/test/java/com/shilapi/governance/platform/E01PrivilegedBridgeTest.kt`
 
 **Interfaces:**
 - Consumes: `android.os.IBinder`, `android.os.Parcel`
-- Produces: `E01RootBridge.execute(command): Result`
+- Produces: `E01PrivilegedBridge.execute(command): Result`
 
-- [ ] **Step 1: 编写失败测试 `E01RootBridgeTest.kt`**
+- [x] **Step 1: 编写失败测试 `E01PrivilegedBridgeTest.kt`**
   - 验证命令包装外壳 `{ <cmd>; } 2>&1; rc=$?; echo __GEEKPLAY_ROOT_RC:$rc` 格式；
   - 验证超出 220 字节时抛出 `IllegalArgumentException`；
   - 验证多行命令防御拦截。
-- [ ] **Step 2: 运行测试并验证失败**
-- [ ] **Step 3: 实现 `E01RootBridge.kt`**
+- [x] **Step 2: 运行测试并验证失败**
+- [x] **Step 3: 实现 `E01PrivilegedBridge.kt`**
   - 封装东软 `ExtraUtilsService` Binder 通信逻辑；
   - 实现命令安全检查与退出码解析。
-- [ ] **Step 4: 运行测试并验证通过**
-- [ ] **Step 5: Commit: "governance: implement E01RootBridge for uid-0 execution"**
+- [x] **Step 4: 运行测试并验证通过**
+- [x] **Step 5: Commit: "governance: implement E01PrivilegedBridge for uid-0 execution"**
 
 ---
 
@@ -141,12 +144,12 @@ dependencies {
 - Consumes: Kotlin Coroutines, `Mutex`, `SharedPreferences`
 - Produces: `CommandQueue.execute(block): T`, `GovernancePersistence.isSuppressionConfigured(): Boolean`
 
-- [ ] **Step 1: 编写失败测试 `CommandQueueTest.kt` 验证串行互斥**
-- [ ] **Step 2: 运行测试验证失败**
-- [ ] **Step 3: 实现 `CommandQueue.kt`（内置 Mutex 互斥与 300ms 保护）**
-- [ ] **Step 4: 实现 `GovernancePersistence.kt`，使用 `e01_governance_prefs.xml` 独立命名空间**
-- [ ] **Step 5: 运行测试验证通过**
-- [ ] **Step 6: Commit: "governance: implement serialized CommandQueue and isolated persistence"**
+- [x] **Step 1: 编写失败测试 `CommandQueueTest.kt` 验证串行互斥**
+- [x] **Step 2: 运行测试验证失败**
+- [x] **Step 3: 实现 `CommandQueue.kt`（内置 Mutex 互斥与 300ms 保护）**
+- [x] **Step 4: 实现 `GovernancePersistence.kt`，使用 `e01_governance_prefs.xml` 独立命名空间**
+- [x] **Step 5: 运行测试验证通过**
+- [x] **Step 6: Commit: "governance: implement serialized CommandQueue and isolated persistence"**
 
 ---
 
@@ -160,21 +163,21 @@ dependencies {
 - Create: `governance/src/test/java/com/shilapi/governance/core/E01Mtk6735GovernorTest.kt`
 
 **Interfaces:**
-- Consumes: `E01RootBridge`, `CommandQueue`, `GovernancePersistence`
+- Consumes: `E01PrivilegedBridge`, `CommandQueue`, `GovernancePersistence`
 - Produces: `IVehicleGovernor` 统一接口实现
 
-- [ ] **Step 1: 编写失败测试 `E01Mtk6735GovernorTest.kt`**
-  - 严格校验抑制命令（66 字节）：
-    `setprop ctl.stop run_natp; pm disable-user --user 0 com.ecarx.xiaoka`（wrapped 105 字节 $\le 220$ 字节）
-  - 严格校验恢复命令（53 字节）：
-    `pm enable com.ecarx.xiaoka; setprop ctl.start run_natp`（wrapped 92 字节 $\le 220$ 字节）
-  - 严格校验自愈命令（27 字节）：
-    `pm enable com.ecarx.xiaoka`（wrapped 66 字节 $\le 220$ 字节）
-- [ ] **Step 2: 运行测试验证失败**
-- [ ] **Step 3: 实现 `IVehicleGovernor.kt`、`NoOpGovernor.kt` 与 `E01Mtk6735Governor.kt`**
-- [ ] **Step 4: 实现 `GovernorFactory.kt`，通过 `Build.HARDWARE` / `E01RootBridge.isAvailable()` 自动探测与降级**
-- [ ] **Step 5: 运行测试验证通过**
-- [ ] **Step 6: Commit: "governance: implement E01Mtk6735Governor with 66B bulletproof commands"**
+- [x] **Step 1: 编写失败测试 `E01Mtk6735GovernorTest.kt`**
+  - 严格校验抑制命令（68 字节）：
+    `setprop ctl.stop run_natp; pm disable-user --user 0 com.ecarx.xiaoka`（wrapped 114 字节 $\le 220$ 字节）
+  - 严格校验恢复命令（54 字节）：
+    `pm enable com.ecarx.xiaoka; setprop ctl.start run_natp`（wrapped 100 字节 $\le 220$ 字节）
+  - 严格校验自愈命令（26 字节）：
+    `pm enable com.ecarx.xiaoka`（wrapped 72 字节 $\le 220$ 字节）
+- [x] **Step 2: 运行测试验证失败**
+- [x] **Step 3: 实现 `IVehicleGovernor.kt`、`NoOpGovernor.kt` 与 `E01Mtk6735Governor.kt`**
+- [x] **Step 4: 实现 `GovernorFactory.kt`，通过 `Build.HARDWARE` / `E01PrivilegedBridge.isAvailable()` 自动探测与降级**
+- [x] **Step 5: 运行测试验证通过**
+- [x] **Step 6: Commit: "governance: implement E01Mtk6735Governor with 66B bulletproof commands"**
 
 ---
 
@@ -188,13 +191,13 @@ dependencies {
 - Consumes: `GovernorFactory`, `GovernancePersistence`
 - Produces: `VehicleGovernance.install()`, `setSuppressionEnabled()`, `onAppExit()`
 
-- [ ] **Step 1: 编写失败测试 `VehicleGovernanceTest.kt`**
+- [x] **Step 1: 编写失败测试 `VehicleGovernanceTest.kt`**
   - 验证当 `isExperimentalAllowed == false` 时，门面强制绑定 `NoOpGovernor` 并执行一次自愈巡检；
   - 验证状态变更回调与 StateFlow。
-- [ ] **Step 2: 运行测试验证失败**
-- [ ] **Step 3: 实现 `VehicleGovernance.kt` 门面**
-- [ ] **Step 4: 运行测试验证通过**
-- [ ] **Step 5: Commit: "governance: expose VehicleGovernance facade with build-time gating"**
+- [x] **Step 2: 运行测试验证失败**
+- [x] **Step 3: 实现 `VehicleGovernance.kt` 门面**
+- [x] **Step 4: 运行测试验证通过**
+- [x] **Step 5: Commit: "governance: expose VehicleGovernance facade with build-time gating"**
 
 ---
 
@@ -209,9 +212,9 @@ dependencies {
 - Consumes: `com.shilapi.governance.VehicleGovernance`
 - Produces: 主工程无感接入生命周期
 
-- [ ] **Step 1: 在 `common/build.gradle.kts` 中添加 `implementation(project(":governance"))`**
-- [ ] **Step 2: 在 `DiPlayBootstrap.kt` 中注入 `VehicleGovernance.install(this, ExperimentalFeatures.enabled)`**
-- [ ] **Step 3: 在 `DiPlayActivity.closeTheApp()` 中（即退出杀进程前）同步触发恢复：**
+- [x] **Step 1: 在 `common/build.gradle.kts` 中添加 `implementation(project(":governance"))`**
+- [x] **Step 2: 在 `DiPlayApplication.kt` 与 `DiPlayActivity.kt` 中注入 `VehicleGovernance.install(this, ExperimentalFeatures.enabled)`**
+- [x] **Step 3: 在 `DiPlayActivity.closeTheApp()` 中（即退出杀进程前）同步触发恢复：**
   ```kotlin
   private fun closeTheApp() {
       VehicleGovernance.onAppExit()
@@ -219,9 +222,9 @@ dependencies {
       CarPlayBackgroundSession.exit { android.os.Process.killProcess(android.os.Process.myPid()) }
   }
   ```
-- [ ] **Step 4: 在 `DiPlayActivity.onDestroy()` 中追加 `VehicleGovernance.onAppExit()` 兜底**
-- [ ] **Step 5: 运行 `./gradlew test` 确保全量测试通过**
-- [ ] **Step 6: Commit: "common: integrate VehicleGovernance and bind to closeTheApp lifecycle"**
+- [x] **Step 4: 在 `DiPlayActivity.onDestroy()` 中追加 `VehicleGovernance.onAppExit()` 并在 `DiagCrashHandler` 中注入崩溃自愈拦截**
+- [x] **Step 5: 运行 `./gradlew test` 确保全量测试通过**
+- [x] **Step 6: Commit: "common: integrate VehicleGovernance and bind to closeTheApp lifecycle"**
 
 ---
 
@@ -234,12 +237,12 @@ dependencies {
 - Consumes: `VehicleGovernance.isSupported`, `VehicleGovernance.isSuppressedFlow`
 - Produces: 实验性功能设置 Switch 卡片
 
-- [ ] **Step 1: 在 `experimentalCards(columns: CardColumns)` 中挂载语音治理卡片**
+- [x] **Step 1: 在 `experimentalCards(columns: CardColumns)` 中挂载语音治理卡片**
   - 只有当 `VehicleGovernance.isSupported && ExperimentalFeatures.enabled` 为 true 时才绘制；
   - 开启 Switch 时弹出警告确认弹窗：“将临时停用原车语音交互并释放 320MB 内存，退出应用自动恢复”；
   - 用户确认后调用 `VehicleGovernance.setSuppressionEnabled(true)`；关闭时直接调用 `false`。
-- [ ] **Step 2: 编译并在真机/AVD 上验证设置页 UI 布局**
-- [ ] **Step 3: Commit: "ui: mount voice governance switch in experimental settings card"**
+- [x] **Step 2: 编译并在真机/AVD 上验证设置页 UI 布局**
+- [x] **Step 3: Commit: "ui: mount voice governance switch in experimental settings card"**
 
 ---
 
