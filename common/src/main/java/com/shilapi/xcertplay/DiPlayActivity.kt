@@ -1014,6 +1014,7 @@ class DiPlayActivity : ComponentActivity() {
         updateCard(columns)
         hopMaintenanceCards(columns)
         voiceGovernanceCard(columns)
+        clusterMediaMetadataCard(columns)
         columns.card(R.string.experimental_report_upload, R.drawable.ic_dp_diagnostics) { card ->
             card.addView(label(getString(R.string.experimental_report_upload_hint), 16, MUTED))
             if (SupabaseLogUpload.enabled(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_KEY)) {
@@ -1052,6 +1053,19 @@ class DiPlayActivity : ComponentActivity() {
                         runOnUiThread { render() }
                     }
                 }
+            }
+        }
+    }
+
+    private fun clusterMediaMetadataCard(columns: CardColumns) {
+        columns.card(R.string.cluster_media_metadata_title, R.drawable.ic_dp_display) { card ->
+            toggle(
+                parent = card,
+                title = getString(R.string.cluster_media_metadata_title),
+                description = getString(R.string.cluster_media_metadata_description),
+                value = AirPlayPersistence.loadClusterMediaMetadataEnabled(this),
+            ) { enabled ->
+                AirPlayPersistence.saveClusterMediaMetadataEnabled(this, enabled)
             }
         }
     }

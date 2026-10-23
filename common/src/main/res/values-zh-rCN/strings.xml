@@ -11,6 +11,8 @@
     <string name="experimental_report_upload">报告上传</string>
     <string name="experimental_report_upload_hint">把诊断报告传到项目自己的日志仓，方便事后看车上那一次跑出了什么。不按按钮就不会发送。</string>
     <string name="experimental_voice_governance_title">原厂语音治理</string>
+    <string name="cluster_media_metadata_title">仪表多媒体卡片 (实验性)</string>
+    <string name="cluster_media_metadata_description">播放音乐时向仪表盘多媒体卡片同步歌名、歌手与专辑封面。切换歌曲或封面更新时即时下发，不影响主屏投屏。</string>
     <string name="suppress_native_voice_title">抑制后台语音 (natp + 晓咖)</string>
     <string name="suppress_native_voice_desc">释放 320MB 物理内存与 40% CPU，退出应用或熄火自动恢复</string>
     <string name="suppress_native_voice_confirm_body">开启后将临时停用原车语音交互（如语音开关空调、车窗），麦克风将由 CarPlay 独占。退出本应用后将自动恢复原厂状态。确定开启吗？</string>
