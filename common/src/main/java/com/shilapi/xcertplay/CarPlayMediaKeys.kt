@@ -48,6 +48,10 @@ internal object CarPlayMediaKeys {
 
     fun onMediaAudioChanged(active: Boolean) = mainHandler.post { backend.update(active) }
 
+    fun onClusterMetadataEnabledChanged(enabled: Boolean) = mainHandler.post {
+        backend.onClusterMetadataEnabledChanged(enabled)
+    }
+
     /** Receives the same focus callbacks as the media-button session. Cleared by [detach]. */
     fun bindAudioFocusTarget(target: ((Int) -> Unit)?) {
         audioFocusTarget = target
@@ -105,6 +109,7 @@ internal object CarPlayMediaKeys {
         fun update(active: Boolean)
         fun regainFocus()
         fun dispatch(event: KeyEvent): Boolean
+        fun onClusterMetadataEnabledChanged(enabled: Boolean)
     }
 
     private abstract class FocusBackend : Backend {
@@ -116,6 +121,8 @@ internal object CarPlayMediaKeys {
             if (change == AudioManager.AUDIOFOCUS_LOSS) focusHeld = false
             audioFocusTarget?.invoke(change)
         }
+
+        override fun onClusterMetadataEnabledChanged(enabled: Boolean) {}
 
         override fun attach(context: Context, controller: CarPlayController) {
             if (this.controller !== controller) release()
@@ -247,6 +254,7 @@ internal object CarPlayMediaKeys {
         override fun update(active: Boolean) {
             val currentContext = context ?: return
             if (controller == null) return
+            val wasNull = session == null
             val currentSession = ensureSession(currentContext)
             if (active) regainFocus()
             val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
@@ -259,10 +267,20 @@ internal object CarPlayMediaKeys {
                     1f,
                 ).build(),
             )
+            if (wasNull && AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) {
+                lastPublishedNowPlaying?.let { publishMetadata(it, currentArtwork) }
+            }
         }
 
         private fun onNowPlaying(info: CarPlayNowPlaying) {
             mainHandler.post {
+                val currentContext = context ?: return@post
+                if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) {
+                    if (lastPublishedNowPlaying != null || currentArtwork != null) {
+                        clearClusterMetadata()
+                    }
+                    return@post
+                }
                 val previous = lastPublishedNowPlaying
                 if (!metadataChanged(previous, info)) {
                     // Filter out 2Hz elapsed time or status ticks to protect system_server heap
@@ -279,6 +297,8 @@ internal object CarPlayMediaKeys {
         }
 
         private fun onArtworkReceived(transferId: Int, bytes: ByteArray) {
+            val currentContext = context ?: return
+            if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) return
             val token = sessionToken ?: return
             artworkQueue.submit(token, transferId, bytes)
         }
@@ -305,17 +325,39 @@ internal object CarPlayMediaKeys {
             }
         }
 
+        override fun onClusterMetadataEnabledChanged(enabled: Boolean) {
+            if (!enabled) {
+                clearClusterMetadata()
+            } else {
+                val currentContext = context ?: return
+                if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) return
+                controller?.currentNowPlaying?.let { info ->
+                    if (info.title != null || info.artist != null || info.album != null) {
+                        lastPublishedNowPlaying = info
+                        publishMetadata(info, currentArtwork)
+                    }
+                }
+            }
+        }
+
+        private fun clearClusterMetadata() {
+            artworkQueue.clear()
+            updateArtwork(null)
+            lastPublishedNowPlaying = null
+            session?.let { sess ->
+                runCatching { sess.setMetadata(null) }
+                    .onFailure { DiagLog.w(TAG, "failed to clear cluster metadata", it) }
+            }
+        }
+
         private fun publishMetadata(nowPlaying: CarPlayNowPlaying?, artwork: Bitmap?) {
             val currentContext = context ?: return
             if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) {
-                if (session != null) {
-                    runCatching { session?.setMetadata(null) }
-                        .onFailure { DiagLog.w(TAG, "failed to clear cluster metadata", it) }
-                }
+                clearClusterMetadata()
                 return
             }
+            val currentSession = session ?: return
             runCatching {
-                val currentSession = ensureSession(currentContext)
                 val hasContent = nowPlaying != null && (nowPlaying.title != null || nowPlaying.artist != null || nowPlaying.album != null || artwork != null)
                 val metadata = if (hasContent) buildMetadata(nowPlaying!!, artwork) else null
                 currentSession.setMetadata(metadata)

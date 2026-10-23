@@ -237,16 +237,24 @@ class Iap2LinkChannel private constructor(
 
                 is Iap2LinkEngine.Event.Session -> {
                     if (event.sessionId == Iap2LinkEngine.FILE_TRANSFER_SESSION_ID) {
-                        val outcome = fileTransferReceiver.accept(event.bytes)
-                        outcome.replies.forEach { reply ->
-                            engine.sendSession(Iap2LinkEngine.FILE_TRANSFER_SESSION_ID, reply, nowMillis())
-                        }
-                        outcome.completed?.let { completed ->
-                            try {
-                                onArtwork(completed)
-                            } catch (e: Throwable) {
-                                onTrace("iap2 onArtwork error: ${e.message}")
+                        try {
+                            val outcome = fileTransferReceiver.accept(event.bytes)
+                            outcome.replies.forEach { reply ->
+                                try {
+                                    engine.sendSession(Iap2LinkEngine.FILE_TRANSFER_SESSION_ID, reply, nowMillis())
+                                } catch (e: Throwable) {
+                                    onTrace("iap2 sendSession error: ${e.message}")
+                                }
                             }
+                            outcome.completed?.let { completed ->
+                                try {
+                                    onArtwork(completed)
+                                } catch (e: Throwable) {
+                                    onTrace("iap2 onArtwork error: ${e.message}")
+                                }
+                            }
+                        } catch (t: Throwable) {
+                            onTrace("iap2 file-transfer error ignored: ${t.message}")
                         }
                     }
                 }
@@ -285,6 +293,7 @@ class Iap2LinkChannel private constructor(
         commandBytes = 0
         controls.clear()
         controlBytes = 0
+        fileTransferReceiver.clear()
         terminalFailure = combineFailures(terminalFailure, failure)
         lock.notifyAll()
     }

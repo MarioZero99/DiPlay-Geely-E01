@@ -443,6 +443,8 @@ class Iap2LinkEngine(
                 if (packet.sessionId == CONTROL_SESSION_ID) {
                     lastReceivedSequenceCarriedPayload = true
                     enqueueEvent(Event.Control(packet.payload))
+                } else if (packet.sessionId == FILE_TRANSFER_SESSION_ID) {
+                    enqueueEvent(Event.Session(packet.sessionId, packet.payload))
                 } else {
                     // Traced, not counted. Only a control-session payload takes the sequence: if a
                     // frame this layer cannot deliver marked the number as carried, a control frame

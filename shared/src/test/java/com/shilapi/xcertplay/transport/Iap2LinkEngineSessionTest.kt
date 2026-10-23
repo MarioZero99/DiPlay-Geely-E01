@@ -63,6 +63,7 @@ class Iap2LinkEngineSessionTest {
         )
         engine.feed(peerSync, 2)
         engine.takeOutput() // drain ack
+        while (engine.pollEvent() != null) {} // drain setup events (e.g. Writable)
 
         // Feed payload on session 11 (EA) with next in-order sequence
         val eaPayload = byteArrayOf(0x01, 0x02, 0x03)
@@ -79,6 +80,68 @@ class Iap2LinkEngineSessionTest {
             "Expected trace for unhandled session 11, but got: $traces",
             traces.any { it.contains("iap2 rx unhandled session=11 payload_bytes=3") },
         )
+    }
+
+    @Test
+    fun fileTransferPayloadOnDistanceZeroEmptyThenDataArrivalIsDelivered() {
+        val engine = Iap2LinkEngine(Iap2LinkConfig(declareOptionalSessions = true))
+        engine.start(wiredInitiator = false, nowMillis = 0)
+        engine.takeOutput() // drain marker
+        engine.feed(IAP2_MARKER, 1)
+        engine.takeOutput() // drain sync
+
+        val peerSync = frame(
+            control = 0x80 or 0x40,
+            sequence = PEER_SEQUENCE,
+            acknowledgement = OUR_SEQUENCE,
+            sessionId = 0,
+            payload = PEER_SYNCHRONIZATION,
+        )
+        engine.feed(peerSync, 2)
+        engine.takeOutput() // drain ack
+        while (engine.pollEvent() != null) {} // drain setup events (e.g. Writable)
+
+        // 1. Peer sends empty ACK frame consuming sequence PEER_SEQUENCE + 1
+        val emptyFrame = frame(
+            control = 0x00,
+            sequence = PEER_SEQUENCE + 1,
+            acknowledgement = OUR_SEQUENCE,
+            sessionId = 0,
+            payload = ByteArray(0),
+        )
+        engine.feed(emptyFrame, 3)
+        engine.takeOutput() // drain ack
+
+        // 2. Peer delivers data on session 12 (file transfer) under the same sequence (distance 0)
+        val filePayload = byteArrayOf(0x01, 0x80.toByte(), 0xAA.toByte(), 0xBB.toByte())
+        val fileFrame = frame(
+            control = 0x00,
+            sequence = PEER_SEQUENCE + 1,
+            acknowledgement = OUR_SEQUENCE,
+            sessionId = Iap2LinkEngine.FILE_TRANSFER_SESSION_ID,
+            payload = filePayload,
+        )
+        engine.feed(fileFrame, 4)
+
+        val event = engine.pollEvent()
+        assertTrue("Event must be Session, but was: $event", event is Iap2LinkEngine.Event.Session)
+        assertEquals(Iap2LinkEngine.FILE_TRANSFER_SESSION_ID, (event as Iap2LinkEngine.Event.Session).sessionId)
+        org.junit.Assert.assertArrayEquals(filePayload, event.bytes)
+
+        // 3. Subsequent control frame under next sequence must still be delivered normally
+        val controlPayload = byteArrayOf(0x10, 0x20)
+        val controlFrame = frame(
+            control = 0x00,
+            sequence = PEER_SEQUENCE + 2,
+            acknowledgement = OUR_SEQUENCE,
+            sessionId = Iap2LinkEngine.CONTROL_SESSION_ID,
+            payload = controlPayload,
+        )
+        engine.feed(controlFrame, 5)
+
+        val nextEvent = engine.pollEvent()
+        assertTrue("Next event must be Control", nextEvent is Iap2LinkEngine.Event.Control)
+        org.junit.Assert.assertArrayEquals(controlPayload, (nextEvent as Iap2LinkEngine.Event.Control).bytes)
     }
 
     private fun frame(

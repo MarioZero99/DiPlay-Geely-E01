@@ -1066,6 +1066,7 @@ class DiPlayActivity : ComponentActivity() {
                 value = AirPlayPersistence.loadClusterMediaMetadataEnabled(this),
             ) { enabled ->
                 AirPlayPersistence.saveClusterMediaMetadataEnabled(this, enabled)
+                CarPlayMediaKeys.onClusterMetadataEnabledChanged(enabled)
             }
         }
     }

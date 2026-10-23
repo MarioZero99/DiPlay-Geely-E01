@@ -436,6 +436,9 @@ class CarPlayController(
     /** Told when retained iPhone now-playing metadata changes; may run on any thread. */
     @Volatile var nowPlayingListener: ((com.shilapi.xcertplay.media.CarPlayNowPlaying) -> Unit)? = null
 
+    val currentNowPlaying: com.shilapi.xcertplay.media.CarPlayNowPlaying
+        get() = synchronized(playbackStatus) { playbackStatus.nowPlaying }
+
     /** Told when an iAP2 Now Playing artwork transfer completes; may run on the link worker. */
     @Volatile var artworkListener: ((Int, ByteArray) -> Unit)? = null
     @Volatile private var hotspot: WirelessHotspotManager? = null
@@ -540,6 +543,7 @@ class CarPlayController(
             // arrive on the UI thread; assigning first would let a DOWN slip in between and be wiped
             // by the clear, and a drag without its DOWN is ignored by the phone — the gesture dies.
             touchDispatch.clear()
+            synchronized(playbackStatus) { playbackStatus.startSession() }
             activeSession = session
             debugLog(
                 "AirPlay session active controller=${session.controllerId ?: "unknown"} " +
@@ -554,8 +558,11 @@ class CarPlayController(
                 // that is already over and count a perfectly good packet as dropped.
                 activeSession = null
                 touchDispatch.clear()
-                synchronized(playbackStatus) { playbackStatus.clear() }?.let { playing -> playbackListener?.invoke(playing) }
-                synchronized(playbackStatus) { playbackStatus.clearAll() }?.let { cleared -> nowPlayingListener?.invoke(cleared) }
+                val (playingResult, clearedMetadata) = synchronized(playbackStatus) {
+                    playbackStatus.endSession()
+                }
+                playingResult?.let { playbackListener?.invoke(it) }
+                clearedMetadata?.let { nowPlayingListener?.invoke(it) }
             }
             debugLog("AirPlay session ended peer=${session.host}")
             uiListener?.onSessionEnded(session)
@@ -730,6 +737,13 @@ class CarPlayController(
         wirelessGeneration.incrementAndGet()
         permissionPollGeneration += 1
         touchDispatch.clear()
+        val (playingResult, clearedMetadata) = synchronized(playbackStatus) {
+            playbackStatus.endSession()
+        }
+        playingResult?.let { playbackListener?.invoke(it) }
+        clearedMetadata?.let { nowPlayingListener?.invoke(it) }
+        nowPlayingListener = null
+        artworkListener = null
         touchExecutor.shutdownNow()
         tunnelExecutor.shutdownNow()
         val service = vpnService
@@ -782,15 +796,21 @@ class CarPlayController(
     }
 
     private fun onRouteFrame(frame: com.shilapi.xcertplay.iap2.wire.Iap2Frame) {
+        if (closed || activeSession == null) return
         if (frame.messageId == com.shilapi.xcertplay.media.CarPlayPlaybackStatus.NOW_PLAYING_UPDATE) {
             try {
                 val update = synchronized(playbackStatus) {
-                    val previousPlaying = playbackStatus.playing
-                    playbackStatus.acceptUpdate(frame)?.let { it to (it.playing != previousPlaying) }
+                    if (!playbackStatus.sessionActive) null
+                    else {
+                        val previousPlaying = playbackStatus.playing
+                        playbackStatus.acceptUpdate(frame)?.let { it to (it.playing != previousPlaying) }
+                    }
                 }
                 update?.let { (info, playingChanged) ->
-                    nowPlayingListener?.invoke(info)
-                    if (playingChanged) playbackListener?.invoke(info.playing)
+                    if (activeSession != null && !closed) {
+                        nowPlayingListener?.invoke(info)
+                        if (playingChanged) playbackListener?.invoke(info.playing)
+                    }
                 }
             } catch (e: Throwable) {
                 DiagLog.w("DiPlay-CarPlayController", "NowPlayingUpdate error ignored: ${e.message}")
@@ -799,9 +819,12 @@ class CarPlayController(
     }
 
     private fun onArtworkTransfer(transfer: com.shilapi.xcertplay.transport.Iap2ArtworkTransfer) {
+        if (closed || activeSession == null) return
         debugLog("iap2 artwork transfer id=0x${transfer.id.toString(16)} bytes=${transfer.bytes.size}")
         try {
-            artworkListener?.invoke(transfer.id, transfer.bytes)
+            if (activeSession != null && !closed) {
+                artworkListener?.invoke(transfer.id, transfer.bytes)
+            }
         } catch (e: Throwable) {
             DiagLog.w("DiPlay-CarPlayController", "artworkListener error ignored: ${e.message}")
         }

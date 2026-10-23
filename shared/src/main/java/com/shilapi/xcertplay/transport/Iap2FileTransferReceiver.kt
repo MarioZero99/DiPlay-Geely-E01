@@ -22,7 +22,7 @@ class Iap2FileTransferReceiver(
 
     private data class Pending(
         val expectedBytes: Int,
-        val output: ByteArrayOutputStream = ByteArrayOutputStream(expectedBytes),
+        val output: ByteArrayOutputStream = ByteArrayOutputStream(expectedBytes.coerceAtMost(INITIAL_BUFFER_BYTES)),
     )
 
     private val pending = LinkedHashMap<Int, Pending>()
@@ -65,8 +65,13 @@ class Iap2FileTransferReceiver(
             )
         }
         pending[id] = Pending(size.toInt())
-        while (pending.size > MAXIMUM_PENDING_TRANSFERS) pending.remove(pending.keys.first())
-        return Outcome(replies = listOf(start(id)))
+        val replies = mutableListOf(start(id))
+        while (pending.size > MAXIMUM_PENDING_TRANSFERS) {
+            val evicted = pending.keys.first()
+            pending.remove(evicted)
+            replies.add(cancel(evicted))
+        }
+        return Outcome(replies = replies)
     }
 
     private fun data(id: Int, flags: Int, datagram: ByteArray): Outcome {
@@ -121,6 +126,7 @@ class Iap2FileTransferReceiver(
         private const val OPCODE_SUCCESS = 5
         private const val NOW_PLAYING_ARTWORK_TYPE = 2
         private const val MAXIMUM_PENDING_TRANSFERS = 4
-        const val DEFAULT_MAXIMUM_ARTWORK_BYTES = 2 * 1024 * 1024
+        private const val INITIAL_BUFFER_BYTES = 16 * 1024
+        const val DEFAULT_MAXIMUM_ARTWORK_BYTES = 512 * 1024
     }
 }

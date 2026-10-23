@@ -24,11 +24,14 @@ class CarPlayPlaybackStatus {
     var nowPlaying = CarPlayNowPlaying()
         private set
 
+    var sessionActive: Boolean = true
+        private set
+
     val playing: Boolean get() = nowPlaying.playing
 
     /** The complete new retained state when this frame changed it, otherwise null. */
     fun acceptUpdate(frame: Iap2Frame): CarPlayNowPlaying? {
-        if (frame.messageId != NOW_PLAYING_UPDATE) return null
+        if (!sessionActive || frame.messageId != NOW_PLAYING_UPDATE) return null
         val body = runCatching { Iap2BodyReader.of(frame) }.getOrNull() ?: return null
         val media = runCatching { body.optionalGroup(MEDIA_ITEM) }.getOrNull()
         val playback = runCatching { body.optionalGroup(PLAYBACK) }.getOrNull()
@@ -60,6 +63,20 @@ class CarPlayPlaybackStatus {
         if (!playing) return null
         nowPlaying = nowPlaying.copy(playing = false)
         return false
+    }
+
+    /** Ends the playback session atomically, clearing playing state and metadata. */
+    fun endSession(): Pair<Boolean?, CarPlayNowPlaying?> {
+        sessionActive = false
+        val playingResult = clear()
+        val clearedNowPlaying = clearAll()
+        return playingResult to clearedNowPlaying
+    }
+
+    /** Prepares a new playback session. */
+    fun startSession() {
+        sessionActive = true
+        nowPlaying = CarPlayNowPlaying()
     }
 
     /** Clears all retained metadata at the end of a CarPlay session. */
