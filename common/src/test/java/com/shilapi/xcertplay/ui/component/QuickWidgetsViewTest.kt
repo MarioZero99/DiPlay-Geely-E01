@@ -53,15 +53,25 @@ class QuickWidgetsViewTest {
     }
 
     /**
-     * In the official package the same-network route is not in the build, so the card is the car
-     * hotspot alone: no second segment to press, and no row about a network it cannot join.
+     * When same-network Wi-Fi is disabled (e.g. Wi-Fi chip missing or Android < 5.0), the card is the
+     * car hotspot alone: no second segment to press, and no row about a network it cannot join.
      */
     @Test
-    fun `the official package draws no same-network segment`() {
+    fun `when same-network is disabled draws no same-network segment`() {
         val view = card(WirelessHotspotMode.MANUAL, sameWifiOffered = false)
         val shown = visibleButtons(view)
         assertTrue(shown.contains(context.getString(R.string.built_in_car_hotspot)))
         assertFalse(shown.contains(context.getString(R.string.same_wifi_network)))
+        assertFalse(shown.contains(wifiSettings()))
+        assertTrue(shown.contains(hotspotSettings()))
+    }
+
+    @Test
+    fun `default package with same-network enabled draws both segments`() {
+        val view = card(WirelessHotspotMode.MANUAL, sameWifiOffered = true)
+        val shown = visibleButtons(view)
+        assertTrue(shown.contains(context.getString(R.string.built_in_car_hotspot)))
+        assertTrue(shown.contains(context.getString(R.string.same_wifi_network)))
         assertFalse(shown.contains(wifiSettings()))
         assertTrue(shown.contains(hotspotSettings()))
     }

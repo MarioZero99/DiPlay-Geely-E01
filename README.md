@@ -4,7 +4,7 @@
 
 给 **2021 款吉利星瑞（星瑞）** 车机用的 CarPlay 接收端。车机是亿咖通 E01，联发科 MT6735，GKUI 19，系统 **Android 5.1（API 22）**。装在车机上，不用越狱，不用 Mac，也不用转接盒。
 
-当前版本 **`0.4.5-geely`**，包名 `com.shihab.diplay`。日常安装用 `DiPlay-Legacy-Geely-V045.apk`。
+当前版本 **`0.4.6-geely`**，包名 `com.shihab.diplay`。日常安装用 `DiPlay-Legacy-Geely-V046.apk`。
 
 没有 Apple 认证，和吉利、亿咖通也没有关系。CarPlay 的名字和图标属于 Apple。
 
@@ -81,7 +81,7 @@ adb install -r DiPlay-Legacy-Geely-V045.apk
 
 ### 下哪个包
 
-日常安装用 `DiPlay-Legacy-Geely-V045.apk`。
+日常安装用 `DiPlay-Legacy-Geely-V046.apk`。
 
 ---
 
@@ -172,6 +172,7 @@ adb install -r DiPlay-Legacy-Geely-V045.apk
 
 - [4.1 之后改了什么（新增 / 改进 / 优化 / 修复）](CHANGELOG-4.1-to-HEAD.md)
 - [完整更新日志](CHANGELOG.md)
+- [0.4.6 发版说明](docs/release-notes/v0.4.6-geely.md)
 - [0.4.5 发版说明](docs/release-notes/v0.4.5-geely.md)
 - [0.4.4 发版说明](docs/release-notes/v0.4.4-geely.md)
 - [0.4.3 发版说明](docs/release-notes/v0.4.3-geely.md)

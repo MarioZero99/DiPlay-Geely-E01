@@ -19,8 +19,8 @@ android {
         minSdk = 19
         targetSdk = 37
         multiDexEnabled = true
-        versionCode = 45
-        versionName = "0.4.5-geely"
+        versionCode = 46
+        versionName = "0.4.6-geely"
 
         // Package only the two ABIs the E01 reports. This is what keeps the bundled
         // conscrypt-android native libraries (2.15 + 2.39 MB for x86/x86_64) out of the APK; the

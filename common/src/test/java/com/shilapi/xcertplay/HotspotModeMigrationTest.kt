@@ -50,16 +50,15 @@ class HotspotModeMigrationTest {
     }
 
     /**
-     * Same-network is experimental, so an official package reads a selection made in a local one as
-     * the car hotspot and writes that back. Without the write-back the page would say car hotspot —
-     * it no longer draws the other mode — while the connection kept running the experimental route.
+     * Same-network Wi-Fi is an official mode, so an official package retains an EXISTING_WIFI selection
+     * without demoting it to the car hotspot.
      */
-    @Test fun anOfficialPackageReadsASameNetworkSelectionAsTheCarHotspot() {
+    @Test fun anOfficialPackageKeepsASameNetworkSelection() {
         ExperimentalFeatures.override(false)
         try {
             prefs.edit().putString("wireless_hotspot_mode", "EXISTING_WIFI").apply()
-            assertEquals(WirelessHotspotMode.MANUAL, AirPlayPersistence.loadWirelessHotspotMode(context))
-            assertEquals("MANUAL", prefs.getString("wireless_hotspot_mode", null))
+            assertEquals(WirelessHotspotMode.EXISTING_WIFI, AirPlayPersistence.loadWirelessHotspotMode(context))
+            assertEquals("EXISTING_WIFI", prefs.getString("wireless_hotspot_mode", null))
         } finally {
             ExperimentalFeatures.resetOverride()
         }

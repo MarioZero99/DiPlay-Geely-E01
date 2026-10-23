@@ -648,7 +648,7 @@ class DiPlayActivity : ComponentActivity() {
             },
             onAudioSelect = { openSettings(SettingsTab.AUDIO) },
             onOpenDrawer = { openSettings(SettingsTab.CONNECTION) },
-            sameWifiOffered = ExperimentalFeatures.enabled,
+            sameWifiOffered = WirelessHotspotMode.EXISTING_WIFI in connectionReport().wirelessModes,
         )
         widgets = quick
 

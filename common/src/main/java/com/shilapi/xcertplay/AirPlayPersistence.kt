@@ -273,10 +273,9 @@ object AirPlayPersistence {
             .apply()
     }
 
-    /** The mode this package can actually run: the two that are gone read as the car hotspot. */
+    /** The mode this package can actually run: the one that is gone reads as the car hotspot. */
     private fun supportedHotspotMode(mode: WirelessHotspotMode): WirelessHotspotMode = when {
         mode == WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> WirelessHotspotMode.MANUAL
-        mode == WirelessHotspotMode.EXISTING_WIFI && !ExperimentalFeatures.enabled -> WirelessHotspotMode.MANUAL
         else -> mode
     }
 

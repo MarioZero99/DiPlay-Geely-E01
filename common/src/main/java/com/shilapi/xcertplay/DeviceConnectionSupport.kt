@@ -138,11 +138,8 @@ internal object DeviceConnectionSupport {
             // available here, not whether the route can be configured at all.
             if (probe.wifiManager) add(WirelessHotspotMode.MANUAL)
             // Joining a network that already exists needs no hotspot call of ours and no radio of
-            // ours, so it would be offered wherever there is Wi-Fi at all and the platform is new
-            // enough to describe one network at a time (Android 5). It is experimental, though: the
-            // attempts on the car stopped in the network layer, and the mode spends the car's own
-            // hotspot to try. Only the local package offers it; the official one keeps the car
-            // hotspot, which is the route that has carried a session on this head unit.
+            // ours, offered wherever there is Wi-Fi at all and the platform is new enough to describe
+            // one network at a time (Android 5+).
             if (sameWifiOffered && probe.wifiManager && probe.sdkInt >= Build.VERSION_CODES.LOLLIPOP) {
                 add(WirelessHotspotMode.EXISTING_WIFI)
             }
@@ -170,7 +167,7 @@ internal object DeviceConnectionSupport {
     }
 
     fun inspect(context: Context): ConnectionSupportReport =
-        assess(probe(context), sameWifiOffered = ExperimentalFeatures.enabled)
+        assess(probe(context), sameWifiOffered = true)
 
     @SuppressLint("MissingPermission")
     fun probe(context: Context): HeadUnitProbe {
