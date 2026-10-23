@@ -60,6 +60,42 @@ class CarPlayMediaCallbackTest {
         assertEquals(listOf(CarPlayMediaButton.NEXT), sent)
     }
 
+    @Test
+    fun elapsedProgressTicksDoNotTriggerMetadataChanged() {
+        val song = com.shilapi.xcertplay.media.CarPlayNowPlaying(
+            title = "Sky",
+            artist = "Artist",
+            album = "Album",
+            sourceApp = "Music",
+            artworkTransferId = 1,
+            durationMillis = 180000L,
+            elapsedMillis = 1000L,
+            playing = true,
+        )
+        // Progress tick: elapsedMillis and playing status differences must be ignored
+        val progressTick = song.copy(elapsedMillis = 1500L, playing = false)
+        assertFalse(CarPlayMediaKeys.metadataChanged(song, progressTick))
+
+        // Changes in song info must trigger metadataChanged
+        org.junit.Assert.assertTrue(CarPlayMediaKeys.metadataChanged(song, song.copy(title = "New Song")))
+        org.junit.Assert.assertTrue(CarPlayMediaKeys.metadataChanged(song, song.copy(artist = "New Artist")))
+        org.junit.Assert.assertTrue(CarPlayMediaKeys.metadataChanged(song, song.copy(album = "New Album")))
+        org.junit.Assert.assertTrue(CarPlayMediaKeys.metadataChanged(song, song.copy(sourceApp = "Podcasts")))
+        org.junit.Assert.assertTrue(CarPlayMediaKeys.metadataChanged(song, song.copy(artworkTransferId = 2)))
+        org.junit.Assert.assertTrue(CarPlayMediaKeys.metadataChanged(song, song.copy(durationMillis = 200000L)))
+
+        // Null checks
+        assertFalse(CarPlayMediaKeys.metadataChanged(song, song))
+        assertFalse(CarPlayMediaKeys.metadataChanged(null, null))
+        org.junit.Assert.assertTrue(CarPlayMediaKeys.metadataChanged(null, song))
+        org.junit.Assert.assertTrue(CarPlayMediaKeys.metadataChanged(song, null))
+    }
+
+    @Test
+    fun decodeArtworkEmptyBytesReturnsNull() {
+        org.junit.Assert.assertNull(CarPlayMediaKeys.decodeArtwork(ByteArray(0)))
+    }
+
     private fun press(keyCode: Int, repeat: Int = 0) {
         for (count in 0..repeat) {
             callback.onMediaButtonEvent(button(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, keyCode, count)))

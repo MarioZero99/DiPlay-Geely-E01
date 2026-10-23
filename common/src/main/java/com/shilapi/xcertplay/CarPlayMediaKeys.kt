@@ -5,7 +5,10 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.AudioManager
+import android.media.MediaMetadata
 import android.media.RemoteControlClient
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
@@ -17,7 +20,10 @@ import android.util.Log
 import android.view.KeyEvent
 import androidx.annotation.RequiresApi
 import com.shilapi.xcertplay.airplay.CarPlayMediaButton
+import com.shilapi.xcertplay.media.CarPlayNowPlaying
 import com.shilapi.xcertplay.orchestration.CarPlayController
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 /**
  * The wheel, with equivalent API 19 and API 21+ backends.
@@ -52,6 +58,45 @@ internal object CarPlayMediaKeys {
 
     internal fun dispatch(event: KeyEvent): Boolean = backend.dispatch(event)
 
+    internal fun metadataChanged(previous: CarPlayNowPlaying?, next: CarPlayNowPlaying?): Boolean {
+        if (previous === next) return false
+        if (previous == null) return next != null
+        if (next == null) return true
+        return previous.title != next.title ||
+            previous.artist != next.artist ||
+            previous.album != next.album ||
+            previous.sourceApp != next.sourceApp ||
+            previous.durationMillis != next.durationMillis ||
+            previous.artworkTransferId != next.artworkTransferId
+    }
+
+    internal fun decodeArtwork(bytes: ByteArray, maxDim: Int = 384): Bitmap? {
+        if (bytes.isEmpty()) return null
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            val width = bounds.outWidth
+            val height = bounds.outHeight
+            if (width <= 0 || height <= 0) return null
+            var sampleSize = 1
+            var w = width
+            var h = height
+            while (w > maxDim || h > maxDim) {
+                w /= 2
+                h /= 2
+                sampleSize *= 2
+            }
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        } catch (t: Throwable) {
+            DiagLog.w(TAG, "decode artwork failed: size=${bytes.size}", t)
+            null
+        }
+    }
+
     @Volatile private var audioFocusTarget: ((Int) -> Unit)? = null
 
     private interface Backend {
@@ -82,6 +127,8 @@ internal object CarPlayMediaKeys {
         override fun detach(expected: CarPlayController?) {
             if (expected == null || controller !== expected) return
             expected.playbackListener = null
+            expected.nowPlayingListener = null
+            expected.artworkListener = null
             release()
         }
 
@@ -150,38 +197,62 @@ internal object CarPlayMediaKeys {
     @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
     private class Api21Backend : FocusBackend() {
         private var session: MediaSession? = null
+        private var sessionToken: Any? = null
+        private var lastPublishedNowPlaying: CarPlayNowPlaying? = null
+        private var currentArtwork: Bitmap? = null
+
+        private val artworkWorker = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "DiPlay-ArtworkQueue").apply { isDaemon = true; priority = Thread.NORM_PRIORITY - 1 }
+        }
+        private val mainExecutor = Executor { command ->
+            if (Looper.myLooper() == Looper.getMainLooper()) command.run() else mainHandler.post(command)
+        }
+        private val artworkQueue = NowPlayingArtworkQueue<Bitmap>(
+            worker = artworkWorker,
+            main = mainExecutor,
+            decode = { bytes -> decodeArtwork(bytes) },
+            publish = { owner, id, image -> onArtworkDecoded(owner, id, image) },
+            discard = { image -> if (!image.isRecycled) image.recycle() },
+        )
+
+        override fun attach(context: Context, controller: CarPlayController) {
+            super.attach(context, controller)
+            sessionToken = artworkQueue.newSession()
+            controller.nowPlayingListener = ::onNowPlaying
+            controller.artworkListener = ::onArtworkReceived
+        }
+
+        private fun ensureSession(currentContext: Context): MediaSession {
+            session?.let { return it }
+            val mediaButtonReceiver = PendingIntent.getBroadcast(
+                currentContext,
+                0,
+                Intent(Intent.ACTION_MEDIA_BUTTON).setComponent(
+                    ComponentName(currentContext, CarPlayMediaButtonReceiver::class.java),
+                ),
+                PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            return MediaSession(currentContext, "DiPlay CarPlay").apply {
+                setFlags(
+                    MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or
+                        MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS,
+                )
+                setMediaButtonReceiver(mediaButtonReceiver)
+                setCallback(CarPlayMediaCallback { index, _ -> send(index) }, mainHandler)
+                isActive = true
+                session = this
+            }
+        }
 
         override fun update(active: Boolean) {
             val currentContext = context ?: return
             if (controller == null) return
-            if (session == null) {
-                // A car that hands the wheel over through its own input service sends the press on
-                // as an ACTION_MEDIA_BUTTON aimed at whichever receiver the framework considers the
-                // media button one. A session without these declares no interest and is passed over,
-                // leaving the wheel on the head unit's own player.
-                val mediaButtonReceiver = PendingIntent.getBroadcast(
-                    currentContext,
-                    0,
-                    Intent(Intent.ACTION_MEDIA_BUTTON).setComponent(
-                        ComponentName(currentContext, CarPlayMediaButtonReceiver::class.java),
-                    ),
-                    PendingIntent.FLAG_UPDATE_CURRENT,
-                )
-                session = MediaSession(currentContext, "DiPlay CarPlay").apply {
-                    setFlags(
-                        MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or
-                            MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS,
-                    )
-                    setMediaButtonReceiver(mediaButtonReceiver)
-                    setCallback(CarPlayMediaCallback { index, _ -> send(index) }, mainHandler)
-                    isActive = true
-                }
-            }
+            val currentSession = ensureSession(currentContext)
             if (active) regainFocus()
             val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
                 PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or
                 PlaybackState.ACTION_SKIP_TO_PREVIOUS
-            session?.setPlaybackState(
+            currentSession.setPlaybackState(
                 PlaybackState.Builder().setActions(actions).setState(
                     if (active) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
                     PlaybackState.PLAYBACK_POSITION_UNKNOWN,
@@ -190,8 +261,98 @@ internal object CarPlayMediaKeys {
             )
         }
 
+        private fun onNowPlaying(info: CarPlayNowPlaying) {
+            mainHandler.post {
+                val previous = lastPublishedNowPlaying
+                if (!metadataChanged(previous, info)) {
+                    // Filter out 2Hz elapsed time or status ticks to protect system_server heap
+                    return@post
+                }
+                val previousArtworkId = previous?.artworkTransferId
+                val newArtworkId = info.artworkTransferId
+                if (newArtworkId != previousArtworkId) {
+                    updateArtwork(null)
+                }
+                lastPublishedNowPlaying = info
+                publishMetadata(info, currentArtwork)
+            }
+        }
+
+        private fun onArtworkReceived(transferId: Int, bytes: ByteArray) {
+            val token = sessionToken ?: return
+            artworkQueue.submit(token, transferId, bytes)
+        }
+
+        private fun onArtworkDecoded(owner: Any, id: Int, image: Bitmap?) {
+            if (owner !== sessionToken) {
+                image?.let { if (!it.isRecycled) it.recycle() }
+                return
+            }
+            val current = lastPublishedNowPlaying
+            if (current == null || current.artworkTransferId != id) {
+                image?.let { if (!it.isRecycled) it.recycle() }
+                return
+            }
+            updateArtwork(image)
+            publishMetadata(current, currentArtwork)
+        }
+
+        private fun updateArtwork(bmp: Bitmap?) {
+            val old = currentArtwork
+            currentArtwork = bmp
+            if (old != null && old !== bmp && !old.isRecycled) {
+                old.recycle()
+            }
+        }
+
+        private fun publishMetadata(nowPlaying: CarPlayNowPlaying?, artwork: Bitmap?) {
+            val currentContext = context ?: return
+            if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) {
+                if (session != null) {
+                    runCatching { session?.setMetadata(null) }
+                        .onFailure { DiagLog.w(TAG, "failed to clear cluster metadata", it) }
+                }
+                return
+            }
+            runCatching {
+                val currentSession = ensureSession(currentContext)
+                val metadata = if (nowPlaying == null) null else buildMetadata(nowPlaying, artwork)
+                currentSession.setMetadata(metadata)
+                DiagLog.d(TAG, "cluster metadata published: title=${nowPlaying?.title} artist=${nowPlaying?.artist} hasArt=${artwork != null}")
+            }.onFailure { e ->
+                DiagLog.w(TAG, "failed to publish cluster metadata", e)
+            }
+        }
+
+        private fun buildMetadata(nowPlaying: CarPlayNowPlaying, artwork: Bitmap?): MediaMetadata {
+            val builder = MediaMetadata.Builder()
+            nowPlaying.title?.let { builder.putString(MediaMetadata.METADATA_KEY_TITLE, it) }
+            nowPlaying.artist?.let { builder.putString(MediaMetadata.METADATA_KEY_ARTIST, it) }
+            nowPlaying.album?.let { builder.putString(MediaMetadata.METADATA_KEY_ALBUM, it) }
+            nowPlaying.durationMillis?.let { duration ->
+                if (duration > 0) {
+                    builder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
+                }
+            }
+            if (artwork != null && !artwork.isRecycled) {
+                builder.putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
+                builder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
+            }
+            return builder.build()
+        }
+
         override fun release() {
-            session?.apply { isActive = false; release() }
+            sessionToken = null
+            artworkQueue.clear()
+            controller?.nowPlayingListener = null
+            controller?.artworkListener = null
+            lastPublishedNowPlaying = null
+            updateArtwork(null)
+            session?.apply {
+                runCatching { setMetadata(null) }
+                isActive = false
+                release()
+            }
             session = null
             super.release()
         }
