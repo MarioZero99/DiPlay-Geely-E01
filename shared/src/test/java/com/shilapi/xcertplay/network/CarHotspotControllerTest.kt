@@ -2,20 +2,25 @@ package com.shilapi.xcertplay.network
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CarHotspotControllerTest {
     @Test
     fun aSwitchNobodyAskedForNeverSpendsTheDriversWifi() {
-        // Opening the app is not the driver asking for a session, so an attempt that cannot turn the
-        // hotspot on must leave their Wi-Fi -- and on this head unit their ADB over it -- where it was.
-        assertEquals(
-            listOf(false),
-            hotspotEnableAttempts(
-                mayReleaseStationMode(spendDriverWifi = false, stationEnabled = true),
-            ),
-        )
+        assertFalse(mayReleaseStationMode(spendDriverWifi = false, stationEnabled = true))
+        val calls = mutableListOf<String>()
+        val result = enableHotspot(
+            spendStation = false,
+            releaseStationMode = { calls += "release"; true },
+            restoreStationMode = { calls += "restore" },
+        ) {
+            calls += "enable"
+            HotspotStartResult.PERMISSION_REQUIRED
+        }
+        assertEquals(HotspotStartResult.PERMISSION_REQUIRED, result)
+        assertEquals(listOf("enable"), calls)
     }
 
     @Test
@@ -29,90 +34,91 @@ class CarHotspotControllerTest {
     }
 
     @Test
-    fun leavesStationModeAloneWhenItIsAlreadyOff() {
-        assertEquals(listOf(false), hotspotEnableAttempts(stationEnabled = false))
-    }
-
-    @Test
-    fun triesAgainWithStationModeReleasedWhenItIsOn() {
-        // Turning the driver's Wi-Fi off is a visible side effect, so it is the second attempt only.
-        assertEquals(listOf(false, true), hotspotEnableAttempts(stationEnabled = true))
-    }
-
-    @Test
-    fun doesNotSpendTheDriversWifiOnARefusalReleasingItCannotChange() {
-        // The firmware gated the permission; station mode had nothing to do with it. Turning the
-        // driver's Wi-Fi off here buys nothing and takes their connection with it.
-        var attempts = 0
-        var releases = 0
-        var restores = 0
+    fun doesNotAskForTheHotspotWhileStationModeIsStillOn() {
+        var enables = 0
         val result = enableHotspot(
-            stationEnabled = true,
-            releaseStationMode = { releases += 1 },
-            restoreStationMode = { restores += 1 },
+            spendStation = true,
+            releaseStationMode = { false },
+            restoreStationMode = { throw AssertionError("station mode was never confirmed off") },
         ) {
-            attempts += 1
-            HotspotStartResult.PERMISSION_REQUIRED
+            enables += 1
+            HotspotStartResult.READY
         }
-
-        assertEquals(HotspotStartResult.PERMISSION_REQUIRED, result)
-        assertEquals("a refusal the firmware owns must be reported after one attempt", 1, attempts)
-        assertEquals("the driver's Wi-Fi must not be switched off for it", 0, releases)
-        assertEquals(0, restores)
+        assertEquals(HotspotStartResult.RADIO_BUSY, result)
+        assertEquals(0, enables)
     }
 
     @Test
-    fun releasesStationModeForOneRetryAndPutsItBackWhenThatFailsToo() {
+    fun releasesStationBeforeTheHotspotAndPutsItBackWhenTheHotspotFails() {
         val calls = mutableListOf<String>()
         val result = enableHotspot(
-            stationEnabled = true,
-            releaseStationMode = { calls += "release" },
+            spendStation = true,
+            releaseStationMode = { calls += "release"; true },
             restoreStationMode = { calls += "restore" },
         ) {
-            calls += "attempt"
-            HotspotStartResult.FAILED
+            calls += "enable"
+            HotspotStartResult.PERMISSION_REQUIRED
         }
+        assertEquals(HotspotStartResult.PERMISSION_REQUIRED, result)
+        assertEquals(listOf("release", "enable", "restore"), calls)
+    }
 
-        assertEquals(HotspotStartResult.FAILED, result)
+    @Test
+    fun keepsStationModeOffOnceTheHotspotComesOn() {
+        val calls = mutableListOf<String>()
+        val result = enableHotspot(
+            spendStation = true,
+            releaseStationMode = { calls += "release"; true },
+            restoreStationMode = { calls += "restore" },
+        ) {
+            calls += "enable"
+            HotspotStartResult.READY
+        }
+        assertEquals(HotspotStartResult.READY, result)
+        assertEquals(listOf("release", "enable"), calls)
+    }
+
+    @Test
+    fun nativeAcceptanceKeepsTheWholeBudgetAndDoesNotEscalate() {
+        val plan = apWaitPlan(nativeAccepted = true, timeoutMillis = 15_000L)
+        assertFalse(plan.escalateToRoot)
+        assertEquals(15_000L, plan.waitMillis)
+    }
+
+    @Test
+    fun aRefusalEscalatesAtOnceAndStillWaitsTheWholeBudget() {
+        val plan = apWaitPlan(nativeAccepted = false, timeoutMillis = 15_000L)
+        assertTrue(plan.escalateToRoot)
+        assertEquals(15_000L, plan.waitMillis)
+    }
+
+    @Test
+    fun stationRootConfirmationKeepsTheRemainderOfTheBudget() {
+        assertEquals(800L to 1_200L, stationPollSplit(2_000L))
+        assertTrue(stationPollSplit(2_000L).second > 0L)
+    }
+
+    @Test
+    fun anAcceptedDisableThatIsNotConfirmedYetIsNotARefusal() {
+        assertNull(sessionReleaseResult(callAccepted = true, confirmedOff = false, timeoutMillis = 2_000L))
+        assertNull(sessionReleaseResult(callAccepted = true, confirmedOff = true, timeoutMillis = 2_000L))
+    }
+
+    @Test
+    fun aRefusedDisableThatIsStillOnIsReported() {
         assertEquals(
-            "a failed switch must not leave the driver without their Wi-Fi",
-            listOf("attempt", "release", "attempt", "restore"),
-            calls,
+            "the car did not report hotspot disabled within 2000ms",
+            sessionReleaseResult(callAccepted = false, confirmedOff = false, timeoutMillis = 2_000L),
         )
     }
 
     @Test
-    fun keepsStationModeOffOnceItIsWhatMadeTheHotspotComeOn() {
-        var attempts = 0
-        val calls = mutableListOf<String>()
-        val result = enableHotspot(
-            stationEnabled = true,
-            releaseStationMode = { calls += "release" },
-            restoreStationMode = { calls += "restore" },
-        ) {
-            attempts += 1
-            calls += "attempt"
-            if (attempts == 2) HotspotStartResult.READY else HotspotStartResult.FAILED
-        }
-
-        assertEquals(HotspotStartResult.READY, result)
-        // The hotspot holds the radio now, so station mode stays down — only a failure puts it back.
-        assertEquals(listOf("attempt", "release", "attempt"), calls)
-    }
-
-    @Test
-    fun makesASingleAttemptAndTouchesNoWifiWhenStationModeIsAlreadyOff() {
-        var attempts = 0
-        val result = enableHotspot(
-            stationEnabled = false,
-            releaseStationMode = { throw AssertionError("station mode is already off") },
-            restoreStationMode = { throw AssertionError("nothing was released") },
-        ) {
-            attempts += 1
-            HotspotStartResult.READY
-        }
-
-        assertEquals(HotspotStartResult.READY, result)
-        assertEquals(1, attempts)
+    fun disablingAndEnablingAreNotFullyOff() {
+        assertEquals(ApPhase.TRANSITION, classifyApPhase(WIFI_AP_STATE_DISABLING, null))
+        assertEquals(ApPhase.TRANSITION, classifyApPhase(WIFI_AP_STATE_ENABLING, null))
+        assertEquals(ApPhase.OFF, classifyApPhase(WIFI_AP_STATE_DISABLED, null))
+        assertEquals(ApPhase.ON, classifyApPhase(WIFI_AP_STATE_ENABLED, null))
+        assertEquals(ApPhase.OFF, classifyApPhase(null, false))
+        assertEquals(ApPhase.UNKNOWN, classifyApPhase(null, null))
     }
 }

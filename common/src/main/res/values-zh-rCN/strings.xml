@@ -131,6 +131,7 @@
     <string name="audio">音频</string>
     <string name="audio_routing">音频路由</string>
     <string name="auto">自动</string>
+    <string name="opening_car_hotspot">正在打开车机热点…</string>
     <string name="auto_open_car_hotspot">启动时打开车机热点</string>
     <string name="auto_open_car_hotspot_help">DiPlay 启动时自动打开车机自带热点，省得你手动开。热点开着期间，车机连不上别的 Wi-Fi。</string>
     <string name="auto_start_on_boot">开机后自动启动</string>

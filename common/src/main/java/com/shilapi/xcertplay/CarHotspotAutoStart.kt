@@ -10,8 +10,8 @@ import com.shilapi.xcertplay.transport.WirelessHotspotMode
  * `startWirelessHotspot`), so waking one at app start would either do nothing or start an access point
  * the driver is not using yet.
  *
- * The driver's Wi-Fi is never spent on this: see
- * [com.shilapi.xcertplay.network.CarHotspotController.ensureEnabled]'s `spendDriverWifi`.
+ * Turning that hotspot on spends station mode. The switch is the driver asking for it; with the
+ * switch off, opening the app leaves the radio alone.
  */
 internal fun shouldWakeCarHotspotOnStartup(autoEnabled: Boolean, mode: WirelessHotspotMode): Boolean =
     autoEnabled && mode == WirelessHotspotMode.MANUAL

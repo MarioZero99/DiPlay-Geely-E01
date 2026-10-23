@@ -60,6 +60,7 @@ import com.shilapi.xcertplay.host.BuildConfig
 import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.media.NavigationAudioStream
 import com.shilapi.xcertplay.network.CarHotspotController
+import com.shilapi.xcertplay.network.HotspotStartResult
 import com.shilapi.xcertplay.network.sameWifiNetworkName
 import com.shilapi.xcertplay.transport.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
@@ -411,6 +412,7 @@ class DiPlayActivity : ComponentActivity() {
         // Opening the app never starts a connection. Wireless or USB is chosen on the connect button.
         if (initialLaunch) initialLaunch = false
         else render()
+        requestWirelessSync(WirelessSyncReason.RESUME)
     }
     override fun onPause() {
         unregisterUsbTopology()
@@ -1841,28 +1843,153 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     /**
-     * Brings the car's own hotspot up as the app opens, when the driver has asked for that.
+     * Puts the saved wireless mode onto the radio, off the main thread.
      *
-     * Off the main thread: the firmware is polled until it reports the hotspot up, which is seconds on
-     * this head unit, and the page is redrawn once it is done rather than while it is happening.
+     * Manual mode with the auto-hotspot switch on turns station off and the car hotspot on. That
+     * switch is the driver asking for it: this radio cannot keep the driver's Wi-Fi while the hotspot
+     * is up. With the switch off, opening the app leaves the radio alone. Existing-Wi-Fi mode turns
+     * the hotspot fully off before station comes on. A live projection is left untouched.
      *
-     * The driver's Wi-Fi is never spent on this — `spendDriverWifi = false` in
-     * [CarHotspotController.ensureEnabled] — because nobody asked for a session here, and on this head
-     * unit their ADB goes over that same Wi-Fi.
+     * One worker runs at a time. A newer request bumps [wirelessSyncGeneration]; the worker finishes
+     * the root command already in flight, then reads the mode again. Cold start and resume honour a
+     * failure cooldown. A mode change, the auto switch, and Connect do not.
      */
-    private fun wakeCarHotspotInBackground() {
-        val mode = AirPlayPersistence.loadWirelessHotspotMode(this)
-        if (!shouldWakeCarHotspotOnStartup(AirPlayPersistence.loadAutoCarHotspot(this), mode)) return
+    private val wirelessSyncGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val syncLock = Any()
+    private val bypassSyncCooldown = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var syncLoopRunning = false
+    @Volatile private var lastSyncFailureAt = 0L
+    @Volatile private var latestSyncReason = WirelessSyncReason.APP_START
+    @Volatile private var connectAfterSync = false
+
+    private fun requestWirelessSync(reason: WirelessSyncReason) {
+        if (sessionBlocksRadioChange(CarPlayBackgroundSession.hasSession())) return
+        val mode = AirPlayPersistence.loadWirelessHotspotMode(applicationContext)
+        val autoHotspot = AirPlayPersistence.loadAutoCarHotspot(applicationContext)
+        val target = wirelessRadioTarget(mode, autoHotspot)
+        val controller = CarHotspotController(applicationContext)
+        if (reason != WirelessSyncReason.PRE_CONNECT &&
+            radioAlreadyMatches(target, controller.isHotspotFullyOn(), controller.isHotspotFullyOff(), controller.isStationEnabled())
+        ) {
+            return
+        }
+        if (clearsCooldown(reason)) {
+            lastSyncFailureAt = 0L
+            bypassSyncCooldown.set(true)
+        }
+        if (reason == WirelessSyncReason.PRE_CONNECT) connectAfterSync = true
+        if (reason == WirelessSyncReason.MODE_SWITCH || reason == WirelessSyncReason.AUTO_HOTSPOT_ON) {
+            connectAfterSync = false
+        }
+        latestSyncReason = reason
+        wirelessSyncGeneration.incrementAndGet()
+        synchronized(syncLock) {
+            if (syncLoopRunning) return
+            syncLoopRunning = true
+        }
         Thread({
-            DiagLog.i(TAG_CAR_HOTSPOT, "app-start hotspot begin mode=$mode")
-            val result = CarHotspotController(applicationContext)
-                .ensureEnabled(CAR_HOTSPOT_AUTO_ENABLE_TIMEOUT_MILLIS, spendDriverWifi = false)
-            DiagLog.i(TAG_CAR_HOTSPOT, "app-start hotspot ${result.name.lowercase()} detail=${result.reason}")
-            runOnUiThread {
-                if (isFinishing) return@runOnUiThread
-                if (page == "home") refreshStatus() else render()
+            var publish: Pair<Int, Boolean>? = null
+            try {
+                while (true) {
+                    val generation = wirelessSyncGeneration.get()
+                    val ready = try {
+                        runWirelessSyncPass(generation)
+                    } catch (error: Throwable) {
+                        DiagLog.w(TAG_CAR_HOTSPOT, "wireless sync stopped: ${error.message}")
+                        false
+                    }
+                    synchronized(syncLock) {
+                        if (wirelessSyncGeneration.get() == generation) {
+                            syncLoopRunning = false
+                            publish = generation to ready
+                            break
+                        }
+                    }
+                }
+            } finally {
+                synchronized(syncLock) {
+                    if (publish == null) syncLoopRunning = false
+                }
             }
-        }, "car-hotspot-start").apply { isDaemon = true }.start()
+            publish?.let { (generation, ready) -> publishSyncResult(generation, ready) }
+        }, "wireless-sync-worker").apply { isDaemon = true }.start()
+    }
+
+    private fun runWirelessSyncPass(generation: Int): Boolean {
+        val reason = latestSyncReason
+        val bypass = bypassSyncCooldown.getAndSet(false)
+        val mode = AirPlayPersistence.loadWirelessHotspotMode(applicationContext)
+        val autoHotspot = AirPlayPersistence.loadAutoCarHotspot(applicationContext)
+        val now = SystemClock.elapsedRealtime()
+        val coolingDown = lastSyncFailureAt > 0L && now - lastSyncFailureAt < SYNC_FAILURE_COOLDOWN_MILLIS
+        val controller = CarHotspotController(applicationContext)
+        val hotspotOn = controller.isHotspotFullyOn()
+        val hotspotOff = controller.isHotspotFullyOff()
+        val stationOn = controller.isStationEnabled()
+        val target = wirelessRadioTarget(mode, autoHotspot)
+        val still = { syncRequestStillCurrent(generation, wirelessSyncGeneration.get()) }
+        if (sessionBlocksRadioChange(CarPlayBackgroundSession.hasSession()) ||
+            cooldownBlocks(reason, bypass, coolingDown)
+        ) {
+            DiagLog.i(TAG_CAR_HOTSPOT, "sync skipped reason=$reason target=$target gen=$generation")
+            return radioAlreadyMatches(target, hotspotOn, hotspotOff, stationOn)
+        }
+        if (radioAlreadyMatches(target, hotspotOn, hotspotOff, stationOn)) return true
+        if (reason == WirelessSyncReason.APP_START) {
+            DiagLog.i(TAG_CAR_HOTSPOT, "app-start hotspot begin mode=$mode")
+        }
+        DiagLog.i(TAG_CAR_HOTSPOT, "sync begin reason=$reason target=$target gen=$generation")
+        return when (target) {
+            WirelessRadioTarget.HOTSPOT_ON -> {
+                val result = controller.ensureEnabled(
+                    CAR_HOTSPOT_AUTO_ENABLE_TIMEOUT_MILLIS,
+                    spendDriverWifi = true,
+                    stillCurrent = still,
+                )
+                if (still() && result != HotspotStartResult.READY) {
+                    lastSyncFailureAt = SystemClock.elapsedRealtime()
+                }
+                if (reason == WirelessSyncReason.APP_START) {
+                    DiagLog.i(TAG_CAR_HOTSPOT, "app-start hotspot ${result.name.lowercase()} detail=${result.reason}")
+                }
+                DiagLog.i(TAG_CAR_HOTSPOT, "sync hotspot ${result.name.lowercase()} detail=${result.reason}")
+                still() && result == HotspotStartResult.READY
+            }
+            WirelessRadioTarget.STATION_ON -> alignStation(controller, still)
+            WirelessRadioTarget.LEAVE_ALONE -> true
+        }
+    }
+
+    private fun alignStation(controller: CarHotspotController, still: () -> Boolean): Boolean {
+        if (!still()) return false
+        if (!controller.isHotspotFullyOff()) {
+            controller.releaseForStationMode(stillCurrent = still)
+        }
+        if (!still()) return false
+        if (!controller.isHotspotFullyOff()) {
+            lastSyncFailureAt = SystemClock.elapsedRealtime()
+            DiagLog.w(TAG_CAR_HOTSPOT, "sync left station off: hotspot is not fully off")
+            return false
+        }
+        val stationOk = controller.ensureStationEnabled(stillCurrent = still)
+        if (still() && !stationOk) lastSyncFailureAt = SystemClock.elapsedRealtime()
+        DiagLog.i(TAG_CAR_HOTSPOT, "sync station ok=$stationOk")
+        return still() && stationOk
+    }
+
+    private fun publishSyncResult(generation: Int, ready: Boolean) {
+        runOnUiThread {
+            if (isFinishing || !syncRequestStillCurrent(generation, wirelessSyncGeneration.get())) return@runOnUiThread
+            val connectNow = connectAfterSync
+            if (connectNow) connectAfterSync = false
+            if (page == "home") refreshStatus() else render()
+            if (!connectNow) return@runOnUiThread
+            if (ready && !carHotspotOff()) connect(true) else refuseConnection(null, WirelessGap.HOTSPOT_OFF)
+        }
+    }
+
+    private fun wakeCarHotspotInBackground() {
+        requestWirelessSync(WirelessSyncReason.APP_START)
     }
 
     /**
@@ -1989,7 +2116,10 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(label(if (pendingCarHotspotSetup) getString(R.string.finish_setup_save_your_hotspot_details_to_use_this_mode) else if (carHotspotOff()) getString(R.string.hotspot_details_off) else getString(R.string.hotspot_details_saved), 15, if (carHotspotOff()) WARNING else MUTED).apply { setPadding(0, dp(12), 0, 0) })
             // Off by default, and offered only here: switching the car's hotspot on spends the car's
             // Wi-Fi, so it is not something to start doing on a head unit whose driver never asked.
-            toggle(card, getString(R.string.auto_open_car_hotspot), getString(R.string.auto_open_car_hotspot_help), AirPlayPersistence.loadAutoCarHotspot(this)) { AirPlayPersistence.saveAutoCarHotspot(this, it) }
+            toggle(card, getString(R.string.auto_open_car_hotspot), getString(R.string.auto_open_car_hotspot_help), AirPlayPersistence.loadAutoCarHotspot(this)) { enabled ->
+                AirPlayPersistence.saveAutoCarHotspot(this, enabled)
+                if (enabled) requestWirelessSync(WirelessSyncReason.AUTO_HOTSPOT_ON)
+            }
         } else if (mode == WirelessHotspotMode.EXISTING_WIFI) {
             card.addView(label(getString(R.string.existing_wifi_hint), 16, MUTED))
             card.addView(button(getString(R.string.open_car_wi_fi_settings), false) { openCarClientWifiSettings() }, matchButton(12, 60))
@@ -2390,6 +2520,7 @@ class DiPlayActivity : ComponentActivity() {
             // mode, which is the disagreement this change exists to remove.
             pendingCarHotspotSetup = setupPending
             AirPlayPersistence.saveWirelessHotspotMode(this, mode)
+            requestWirelessSync(WirelessSyncReason.MODE_SWITCH)
             andThen()
             toast(getString(R.string.saved_for_your_next_connection))
         }
@@ -2442,7 +2573,15 @@ class DiPlayActivity : ComponentActivity() {
         // gaps rather than in a dialog of its own. That dialog could only ever have been reached with a
         // session already up, where the check above does not run — which is also why these two refusals
         // raise the card themselves rather than leaning on the check above to have raised it.
-        if (wireless && carHotspotOff()) { refuseConnection(null, WirelessGap.HOTSPOT_OFF); return }
+        if (wireless && carHotspotOff()) {
+            if (AirPlayPersistence.loadAutoCarHotspot(this) && !CarPlayBackgroundSession.hasSession()) {
+                toast(getString(R.string.opening_car_hotspot))
+                requestWirelessSync(WirelessSyncReason.PRE_CONNECT)
+                return
+            }
+            refuseConnection(null, WirelessGap.HOTSPOT_OFF)
+            return
+        }
         if (wireless && DiPlayPreferences.phoneAddress(this) == null) {
             refuseConnection(null, WirelessGap.PHONE_NOT_CHOSEN)
             return
@@ -3731,7 +3870,8 @@ class DiPlayActivity : ComponentActivity() {
         private const val TAG_CAR_HOTSPOT = "DiPlay-CarHotspot"
 
         /** The same budget the connect-time switch gets: the firmware is polled until it reports. */
-        private const val CAR_HOTSPOT_AUTO_ENABLE_TIMEOUT_MILLIS = 15_000L
+        private const val CAR_HOTSPOT_AUTO_ENABLE_TIMEOUT_MILLIS = 2000L
+        private const val SYNC_FAILURE_COOLDOWN_MILLIS = 15_000L
 
         private val WARNING = Color.rgb(255, 196, 128)
     }
