@@ -316,7 +316,8 @@ internal object CarPlayMediaKeys {
             }
             runCatching {
                 val currentSession = ensureSession(currentContext)
-                val metadata = if (nowPlaying == null) null else buildMetadata(nowPlaying, artwork)
+                val hasContent = nowPlaying != null && (nowPlaying.title != null || nowPlaying.artist != null || nowPlaying.album != null || artwork != null)
+                val metadata = if (hasContent) buildMetadata(nowPlaying!!, artwork) else null
                 currentSession.setMetadata(metadata)
                 DiagLog.d(TAG, "cluster metadata published: title=${nowPlaying?.title} artist=${nowPlaying?.artist} hasArt=${artwork != null}")
             }.onFailure { e ->
