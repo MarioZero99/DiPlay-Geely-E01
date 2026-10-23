@@ -25,6 +25,7 @@ class Iap2LinkChannel private constructor(
      * log sink: a warning whose only reader is a unit test is indistinguishable from no warning.
      */
     private val onTrace: (String) -> Unit = {},
+    private val onArtwork: (Iap2ArtworkTransfer) -> Unit = {},
 ) : AutoCloseable {
     private data class Command(val control: ByteArray)
 
@@ -33,6 +34,7 @@ class Iap2LinkChannel private constructor(
     private var commandBytes = 0
     private val controls = ArrayDeque<ByteArray>()
     private var controlBytes = 0
+    private val fileTransferReceiver = Iap2FileTransferReceiver()
 
     private var ready = false
     private var peerMaxControlPayloadBytes: Int? = null
@@ -233,6 +235,22 @@ class Iap2LinkChannel private constructor(
                     }
                 }
 
+                is Iap2LinkEngine.Event.Session -> {
+                    if (event.sessionId == Iap2LinkEngine.FILE_TRANSFER_SESSION_ID) {
+                        val outcome = fileTransferReceiver.accept(event.bytes)
+                        outcome.replies.forEach { reply ->
+                            engine.sendSession(Iap2LinkEngine.FILE_TRANSFER_SESSION_ID, reply, nowMillis())
+                        }
+                        outcome.completed?.let { completed ->
+                            try {
+                                onArtwork(completed)
+                            } catch (e: Throwable) {
+                                onTrace("iap2 onArtwork error: ${e.message}")
+                            }
+                        }
+                    }
+                }
+
                 is Iap2LinkEngine.Event.Dead -> {
                     finish(IOException(event.reason ?: "iAP2 link ended"))
                     return false
@@ -365,12 +383,14 @@ class Iap2LinkChannel private constructor(
             underlying: BlockingDuplexByteStream,
             onTrace: (String) -> Unit = {},
             declareOptionalSessions: Boolean = true,
+            onArtwork: (Iap2ArtworkTransfer) -> Unit = {},
         ): Iap2LinkChannel =
             Iap2LinkChannel(
                 underlying,
                 WIRED_LINK_CONFIG.copy(declareOptionalSessions = declareOptionalSessions),
                 initiateNegotiation = true,
                 onTrace = onTrace,
+                onArtwork = onArtwork,
             ).also { it.worker.start() }
 
         /**
@@ -386,12 +406,14 @@ class Iap2LinkChannel private constructor(
             underlying: BlockingDuplexByteStream,
             onTrace: (String) -> Unit = {},
             declareOptionalSessions: Boolean = true,
+            onArtwork: (Iap2ArtworkTransfer) -> Unit = {},
         ): Iap2LinkChannel =
             Iap2LinkChannel(
                 underlying,
                 WIRELESS_LINK_CONFIG.copy(declareOptionalSessions = declareOptionalSessions),
                 initiateNegotiation = false,
                 onTrace = onTrace,
+                onArtwork = onArtwork,
             ).also { it.worker.start() }
 
         /**
@@ -402,12 +424,14 @@ class Iap2LinkChannel private constructor(
             underlying: BlockingDuplexByteStream,
             onTrace: (String) -> Unit = {},
             declareOptionalSessions: Boolean = true,
+            onArtwork: (Iap2ArtworkTransfer) -> Unit = {},
         ): Iap2LinkChannel =
             Iap2LinkChannel(
                 underlying,
                 TUNNEL_LINK_CONFIG.copy(declareOptionalSessions = declareOptionalSessions),
                 initiateNegotiation = true,
                 onTrace = onTrace,
+                onArtwork = onArtwork,
             ).also { it.worker.start() }
 
         private fun nowMillis(): Long = System.nanoTime() / NANOS_PER_MILLISECOND

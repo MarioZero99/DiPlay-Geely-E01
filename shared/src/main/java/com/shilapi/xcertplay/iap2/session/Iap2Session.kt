@@ -110,9 +110,10 @@ open class Iap2Session internal constructor(
             traceContext: String = "wired",
             onTrace: (String) -> Unit = {},
             declareOptionalSessions: Boolean = true,
+            onArtwork: (com.shilapi.xcertplay.transport.Iap2ArtworkTransfer) -> Unit = {},
         ): Iap2Session =
             Iap2Session(
-                Iap2CsmChannel.open(underlying, linkTrace(traceContext, onTrace), declareOptionalSessions),
+                Iap2CsmChannel.open(underlying, linkTrace(traceContext, onTrace), declareOptionalSessions, onArtwork),
                 traceContext,
                 onTrace,
             )
@@ -122,9 +123,10 @@ open class Iap2Session internal constructor(
             traceContext: String = "wireless",
             onTrace: (String) -> Unit = {},
             declareOptionalSessions: Boolean = true,
+            onArtwork: (com.shilapi.xcertplay.transport.Iap2ArtworkTransfer) -> Unit = {},
         ): Iap2Session =
             Iap2Session(
-                Iap2CsmChannel.openWireless(underlying, linkTrace(traceContext, onTrace), declareOptionalSessions),
+                Iap2CsmChannel.openWireless(underlying, linkTrace(traceContext, onTrace), declareOptionalSessions, onArtwork),
                 traceContext,
                 onTrace,
             )
@@ -134,9 +136,10 @@ open class Iap2Session internal constructor(
             traceContext: String = "wireless-tunnel",
             onTrace: (String) -> Unit = {},
             declareOptionalSessions: Boolean = true,
+            onArtwork: (com.shilapi.xcertplay.transport.Iap2ArtworkTransfer) -> Unit = {},
         ): Iap2Session =
             Iap2Session(
-                Iap2CsmChannel.openTunnel(underlying, linkTrace(traceContext, onTrace), declareOptionalSessions),
+                Iap2CsmChannel.openTunnel(underlying, linkTrace(traceContext, onTrace), declareOptionalSessions, onArtwork),
                 traceContext,
                 onTrace,
             )

@@ -432,6 +432,12 @@ class CarPlayController(
 
     /** Told when the iPhone starts or stops playing media; may run on any thread. */
     @Volatile var playbackListener: ((Boolean) -> Unit)? = null
+
+    /** Told when retained iPhone now-playing metadata changes; may run on any thread. */
+    @Volatile var nowPlayingListener: ((com.shilapi.xcertplay.media.CarPlayNowPlaying) -> Unit)? = null
+
+    /** Told when an iAP2 Now Playing artwork transfer completes; may run on the link worker. */
+    @Volatile var artworkListener: ((Int, ByteArray) -> Unit)? = null
     @Volatile private var hotspot: WirelessHotspotManager? = null
     @Volatile private var bonjour: CarPlayBonjour? = null
     @Volatile private var wirelessDiagnostics: WirelessStartupDiagnostics? = null
@@ -549,6 +555,7 @@ class CarPlayController(
                 activeSession = null
                 touchDispatch.clear()
                 synchronized(playbackStatus) { playbackStatus.clear() }?.let { playing -> playbackListener?.invoke(playing) }
+                synchronized(playbackStatus) { playbackStatus.clearAll() }?.let { cleared -> nowPlayingListener?.invoke(cleared) }
             }
             debugLog("AirPlay session ended peer=${session.host}")
             uiListener?.onSessionEnded(session)
@@ -775,7 +782,29 @@ class CarPlayController(
     }
 
     private fun onRouteFrame(frame: com.shilapi.xcertplay.iap2.wire.Iap2Frame) {
-        synchronized(playbackStatus) { playbackStatus.accept(frame) }?.let { playing -> playbackListener?.invoke(playing) }
+        if (frame.messageId == com.shilapi.xcertplay.media.CarPlayPlaybackStatus.NOW_PLAYING_UPDATE) {
+            try {
+                val update = synchronized(playbackStatus) {
+                    val previousPlaying = playbackStatus.playing
+                    playbackStatus.acceptUpdate(frame)?.let { it to (it.playing != previousPlaying) }
+                }
+                update?.let { (info, playingChanged) ->
+                    nowPlayingListener?.invoke(info)
+                    if (playingChanged) playbackListener?.invoke(info.playing)
+                }
+            } catch (e: Throwable) {
+                DiagLog.w("DiPlay-CarPlayController", "NowPlayingUpdate error ignored: ${e.message}")
+            }
+        }
+    }
+
+    private fun onArtworkTransfer(transfer: com.shilapi.xcertplay.transport.Iap2ArtworkTransfer) {
+        debugLog("iap2 artwork transfer id=0x${transfer.id.toString(16)} bytes=${transfer.bytes.size}")
+        try {
+            artworkListener?.invoke(transfer.id, transfer.bytes)
+        } catch (e: Throwable) {
+            DiagLog.w("DiPlay-CarPlayController", "artworkListener error ignored: ${e.message}")
+        }
     }
 
     private fun startMfi() {
@@ -1505,6 +1534,7 @@ class CarPlayController(
                 traceContext = "wireless-rfcomm",
                 onTrace = ::debugLog,
                 declareOptionalSessions = config.identification.profile.declaresOptionalLinkSessions,
+                onArtwork = ::onArtworkTransfer,
             ).also { csm = it }
             debugLog("wireless iAP2 CSM channel opened over RFCOMM")
             if (isStaleWirelessRun(generation)) {
@@ -1643,6 +1673,7 @@ class CarPlayController(
                 traceContext = "wireless-tunnel",
                 onTrace = ::debugLog,
                 declareOptionalSessions = identification.profile.declaresOptionalLinkSessions,
+                onArtwork = ::onArtworkTransfer,
             )
         } catch (error: Throwable) {
             debugLog("Could not open the tunneled iAP2 link", error)
@@ -2232,6 +2263,7 @@ class CarPlayController(
                 traceContext = "wired",
                 onTrace = ::debugLog,
                 declareOptionalSessions = config.identification.profile.declaresOptionalLinkSessions,
+                onArtwork = ::onArtworkTransfer,
             )
             this.csm = csm
             debugLog("wired iAP2 CSM channel opened")

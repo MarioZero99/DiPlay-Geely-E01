@@ -226,23 +226,26 @@ class Iap2CsmChannel private constructor(
             underlying: BlockingDuplexByteStream,
             onTrace: (String) -> Unit = {},
             declareOptionalSessions: Boolean = true,
+            onArtwork: (Iap2ArtworkTransfer) -> Unit = {},
         ): Iap2CsmChannel =
-            Iap2CsmChannel(Iap2LinkChannel.open(underlying, onTrace, declareOptionalSessions))
+            Iap2CsmChannel(Iap2LinkChannel.open(underlying, onTrace, declareOptionalSessions, onArtwork))
 
         /** Opens the owned iAP2 link over an owned wireless RFCOMM stream. */
         fun openWireless(
             underlying: BlockingDuplexByteStream,
             onTrace: (String) -> Unit = {},
             declareOptionalSessions: Boolean = true,
+            onArtwork: (Iap2ArtworkTransfer) -> Unit = {},
         ): Iap2CsmChannel =
-            Iap2CsmChannel(Iap2LinkChannel.openWireless(underlying, onTrace, declareOptionalSessions))
+            Iap2CsmChannel(Iap2LinkChannel.openWireless(underlying, onTrace, declareOptionalSessions, onArtwork))
 
         /** Opens the owned iAP2 link over an AirPlay type-130 tunnel. */
         fun openTunnel(
             underlying: BlockingDuplexByteStream,
             onTrace: (String) -> Unit = {},
             declareOptionalSessions: Boolean = true,
+            onArtwork: (Iap2ArtworkTransfer) -> Unit = {},
         ): Iap2CsmChannel =
-            Iap2CsmChannel(Iap2LinkChannel.openTunnel(underlying, onTrace, declareOptionalSessions))
+            Iap2CsmChannel(Iap2LinkChannel.openTunnel(underlying, onTrace, declareOptionalSessions, onArtwork))
     }
 }

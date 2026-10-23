@@ -29,6 +29,7 @@ class Iap2LinkEngine(
 
     sealed class Event {
         data class Control(val bytes: ByteArray) : Event()
+        data class Session(val sessionId: Int, val bytes: ByteArray) : Event()
         data class Writable(val value: Boolean) : Event()
         data class Dead(val reason: String?) : Event()
     }
@@ -253,15 +254,21 @@ class Iap2LinkEngine(
 
     /** Queues a complete raw control-session payload (session id 10). */
     fun sendControl(bytes: ByteArray, nowMillis: Long) {
+        sendSession(CONTROL_SESSION_ID, bytes, nowMillis)
+    }
+
+    /** Queues one raw payload on a negotiated iAP2 session. */
+    fun sendSession(sessionId: Int, bytes: ByteArray, nowMillis: Long) {
+        require(sessionId in 0..0xff) { "iAP2 session id must fit in one byte" }
         require(bytes.size <= MAX_PAYLOAD_BYTES) {
-            "iAP2 control payload exceeds $MAX_PAYLOAD_BYTES bytes"
+            "iAP2 session payload exceeds $MAX_PAYLOAD_BYTES bytes"
         }
         if (peerSynchronizationReceived || state == State.NORMAL) {
             require(peerPayloadIsAcceptable(bytes)) {
-                "iAP2 control payload exceeds peer maxLength ${peerSynchronization.maxLength}"
+                "iAP2 session payload exceeds peer maxLength ${peerSynchronization.maxLength}"
             }
         }
-        sendPacket(Packet(0, CONTROL_SESSION_ID, bytes.copyOf()), nowMillis)
+        sendPacket(Packet(0, sessionId, bytes.copyOf()), nowMillis)
     }
 
     private fun parseAvailable(nowMillis: Long): Boolean {
@@ -480,6 +487,8 @@ class Iap2LinkEngine(
             if (inOrder.payload.isNotEmpty()) {
                 if (inOrder.sessionId == CONTROL_SESSION_ID) {
                     enqueueEvent(Event.Control(inOrder.payload))
+                } else if (inOrder.sessionId == FILE_TRANSFER_SESSION_ID) {
+                    enqueueEvent(Event.Session(inOrder.sessionId, inOrder.payload))
                 } else {
                     onTrace("iap2 rx unhandled session=${inOrder.sessionId} payload_bytes=${inOrder.payload.size}")
                 }
