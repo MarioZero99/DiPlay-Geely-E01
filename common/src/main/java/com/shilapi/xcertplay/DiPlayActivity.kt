@@ -1867,8 +1867,12 @@ class DiPlayActivity : ComponentActivity() {
         val mode = AirPlayPersistence.loadWirelessHotspotMode(applicationContext)
         val target = wirelessRadioTarget(mode)
         val controller = CarHotspotController(applicationContext)
+        val hotspotOn = controller.isHotspotFullyOn()
+        val hotspotOff = controller.isHotspotFullyOff()
+        val stationOn = controller.isStationFullyOn()
+        val stationOff = controller.isStationFullyOff()
         if (reason != WirelessSyncReason.PRE_CONNECT &&
-            radioAlreadyMatches(target, controller.isHotspotFullyOn(), controller.isHotspotFullyOff(), controller.isStationEnabled())
+            radioAlreadyMatches(target, hotspotOn, hotspotOff, stationOn, stationOff)
         ) {
             return
         }
@@ -1923,16 +1927,17 @@ class DiPlayActivity : ComponentActivity() {
         val controller = CarHotspotController(applicationContext)
         val hotspotOn = controller.isHotspotFullyOn()
         val hotspotOff = controller.isHotspotFullyOff()
-        val stationOn = controller.isStationEnabled()
+        val stationOn = controller.isStationFullyOn()
+        val stationOff = controller.isStationFullyOff()
         val target = wirelessRadioTarget(mode)
         val still = { syncRequestStillCurrent(generation, wirelessSyncGeneration.get()) }
         if (sessionBlocksRadioChange(CarPlayBackgroundSession.hasSession()) ||
             cooldownBlocks(reason, bypass, coolingDown)
         ) {
             DiagLog.i(TAG_CAR_HOTSPOT, "sync skipped reason=$reason target=$target gen=$generation")
-            return radioAlreadyMatches(target, hotspotOn, hotspotOff, stationOn)
+            return radioAlreadyMatches(target, hotspotOn, hotspotOff, stationOn, stationOff)
         }
-        if (radioAlreadyMatches(target, hotspotOn, hotspotOff, stationOn)) return true
+        if (radioAlreadyMatches(target, hotspotOn, hotspotOff, stationOn, stationOff)) return true
         if (reason == WirelessSyncReason.APP_START) {
             DiagLog.i(TAG_CAR_HOTSPOT, "app-start hotspot begin mode=$mode")
         }

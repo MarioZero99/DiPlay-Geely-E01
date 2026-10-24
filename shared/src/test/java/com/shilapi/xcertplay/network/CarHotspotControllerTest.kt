@@ -117,4 +117,15 @@ class CarHotspotControllerTest {
         assertEquals(ApPhase.OFF, classifyApPhase(null, false))
         assertEquals(ApPhase.UNKNOWN, classifyApPhase(null, null))
     }
+
+    @Test
+    fun stationDisablingAndEnablingAreNotFullyOff() {
+        assertEquals(StationPhase.TRANSITION, classifyStationPhase(WIFI_STATE_DISABLING, null))
+        assertEquals(StationPhase.TRANSITION, classifyStationPhase(WIFI_STATE_ENABLING, null))
+        assertEquals(StationPhase.OFF, classifyStationPhase(WIFI_STATE_DISABLED, null))
+        assertEquals(StationPhase.ON, classifyStationPhase(WIFI_STATE_ENABLED, null))
+        assertEquals(StationPhase.OFF, classifyStationPhase(null, false))
+        assertEquals(StationPhase.ON, classifyStationPhase(null, true))
+        assertEquals(StationPhase.UNKNOWN, classifyStationPhase(null, null))
+    }
 }

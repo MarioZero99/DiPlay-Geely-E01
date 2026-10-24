@@ -15,10 +15,23 @@ internal const val WIFI_AP_STATE_DISABLED = 11
 internal const val WIFI_AP_STATE_ENABLING = 12
 internal const val WIFI_AP_STATE_ENABLED = 13
 
+/** WifiManager station states used by Android. Only [WIFI_STATE_DISABLED] is fully off. */
+internal const val WIFI_STATE_DISABLING = 0
+internal const val WIFI_STATE_DISABLED = 1
+internal const val WIFI_STATE_ENABLING = 2
+internal const val WIFI_STATE_ENABLED = 3
+
 /** How long the native station call is polled before root is asked. The rest of the action budget remains. */
 internal const val NATIVE_STATION_POLL_MILLIS = 800L
 
 internal enum class ApPhase {
+    ON,
+    OFF,
+    TRANSITION,
+    UNKNOWN,
+}
+
+internal enum class StationPhase {
     ON,
     OFF,
     TRANSITION,
@@ -39,6 +52,21 @@ internal fun classifyApPhase(apState: Int?, legacyEnabled: Boolean?): ApPhase = 
     legacyEnabled == true -> ApPhase.ON
     legacyEnabled == false -> ApPhase.OFF
     else -> ApPhase.UNKNOWN
+}
+
+/**
+ * Collapses the firmware's Wi-Fi client (station) state.
+ *
+ * When turning Wi-Fi off, disabling (0) is a transition state; only disabled (1) has released the radio.
+ */
+internal fun classifyStationPhase(state: Int?, isWifiEnabled: Boolean?): StationPhase = when {
+    state == WIFI_STATE_ENABLED -> StationPhase.ON
+    state == WIFI_STATE_DISABLED -> StationPhase.OFF
+    state == WIFI_STATE_ENABLING || state == WIFI_STATE_DISABLING -> StationPhase.TRANSITION
+    state != null -> StationPhase.TRANSITION
+    isWifiEnabled == true -> StationPhase.ON
+    isWifiEnabled == false -> StationPhase.OFF
+    else -> StationPhase.UNKNOWN
 }
 
 /**
@@ -145,7 +173,11 @@ class CarHotspotController(context: Context) {
     }
 
     /** Whether Wi-Fi Station (client) mode is currently active. */
-    fun isStationEnabled(): Boolean = wifi?.isWifiEnabled == true
+    fun isStationEnabled(): Boolean = isStationFullyOn()
+
+    fun isStationFullyOn(): Boolean = readStationPhase() == StationPhase.ON
+
+    fun isStationFullyOff(): Boolean = readStationPhase() == StationPhase.OFF
 
     fun isHotspotFullyOn(): Boolean = readApPhase() == ApPhase.ON
 
@@ -192,9 +224,9 @@ class CarHotspotController(context: Context) {
         if (setApEnabled == null && !RootShellBridge.isAvailable()) return HotspotStartResult.UNSUPPORTED
 
         return enableHotspot(
-            spendStation = mayReleaseStationMode(spendDriverWifi, isStationEnabled()),
+            spendStation = mayReleaseStationMode(spendDriverWifi, !isStationFullyOff()),
             releaseStationMode = {
-                ensureStationDisabled(STATION_OP_TIMEOUT_MILLIS, stillCurrent) && stillCurrent()
+                ensureStationDisabled(STATION_OP_TIMEOUT_MILLIS, stillCurrent) && isStationFullyOff()
             },
         ) { enableAccessPointUntil(timeoutMillis, stillCurrent) }
     }
@@ -260,7 +292,8 @@ class CarHotspotController(context: Context) {
 
     private fun ensureStation(enabled: Boolean, timeoutMillis: Long, stillCurrent: () -> Boolean): Boolean {
         if (!stillCurrent()) return false
-        if (isStationEnabled() == enabled) return true
+        val already = if (enabled) isStationFullyOn() else isStationFullyOff()
+        if (already) return true
         val manager = wifi ?: return false
         val start = SystemClock.elapsedRealtime()
         val deadline = start + timeoutMillis
@@ -344,6 +377,13 @@ class CarHotspotController(context: Context) {
         return classifyApPhase(state, legacy)
     }
 
+    private fun readStationPhase(): StationPhase {
+        val manager = wifi ?: return StationPhase.UNKNOWN
+        val state = runCatching { manager.wifiState }.getOrNull()
+        val legacy = if (state != null) null else runCatching { manager.isWifiEnabled }.getOrNull()
+        return classifyStationPhase(state, legacy)
+    }
+
     private fun awaitPhase(wanted: ApPhase, deadline: Long, stillCurrent: () -> Boolean): Boolean {
         while (stillCurrent()) {
             if (readApPhase() == wanted) return true
@@ -355,8 +395,9 @@ class CarHotspotController(context: Context) {
     }
 
     private fun awaitStation(expected: Boolean, deadline: Long, stillCurrent: () -> Boolean): Boolean {
+        val wanted = if (expected) StationPhase.ON else StationPhase.OFF
         while (stillCurrent()) {
-            if (isStationEnabled() == expected) return true
+            if (readStationPhase() == wanted) return true
             val now = SystemClock.elapsedRealtime()
             if (now >= deadline) return false
             SystemClock.sleep(min(STATE_POLL_MILLIS, deadline - now))

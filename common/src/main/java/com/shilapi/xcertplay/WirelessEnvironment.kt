@@ -42,17 +42,18 @@ internal fun sessionBlocksRadioChange(sessionActive: Boolean): Boolean = session
 /**
  * The target is already true, so no command should be sent.
  *
- * Hotspot-on does not also demand that station be off: on this radio the hotspot being up means
- * station is already down. Station-on demands the hotspot be fully off, not merely "not enabled".
+ * Hotspot-on demands the hotspot be fully on (13) and station be fully off (1).
+ * Station-on demands the hotspot be fully off (11) and station be fully on (3).
  */
 internal fun radioAlreadyMatches(
     target: WirelessRadioTarget,
     hotspotFullyOn: Boolean,
     hotspotFullyOff: Boolean,
-    stationOn: Boolean,
+    stationFullyOn: Boolean,
+    stationFullyOff: Boolean,
 ): Boolean = when (target) {
-    WirelessRadioTarget.HOTSPOT_ON -> hotspotFullyOn
-    WirelessRadioTarget.STATION_ON -> hotspotFullyOff && stationOn
+    WirelessRadioTarget.HOTSPOT_ON -> hotspotFullyOn && stationFullyOff
+    WirelessRadioTarget.STATION_ON -> hotspotFullyOff && stationFullyOn
     WirelessRadioTarget.LEAVE_ALONE -> true
 }
 

@@ -69,7 +69,8 @@ class WirelessEnvironmentReconcilerTest {
                 WirelessRadioTarget.HOTSPOT_ON,
                 hotspotFullyOn = true,
                 hotspotFullyOff = false,
-                stationOn = false,
+                stationFullyOn = false,
+                stationFullyOff = true,
             ),
         )
     }
@@ -81,7 +82,8 @@ class WirelessEnvironmentReconcilerTest {
                 WirelessRadioTarget.STATION_ON,
                 hotspotFullyOn = false,
                 hotspotFullyOff = false,
-                stationOn = true,
+                stationFullyOn = true,
+                stationFullyOff = false,
             ),
         )
         assertTrue(
@@ -89,7 +91,8 @@ class WirelessEnvironmentReconcilerTest {
                 WirelessRadioTarget.STATION_ON,
                 hotspotFullyOn = false,
                 hotspotFullyOff = true,
-                stationOn = true,
+                stationFullyOn = true,
+                stationFullyOff = false,
             ),
         )
     }
