@@ -87,27 +87,25 @@ internal fun sessionReleaseResult(callAccepted: Boolean, confirmedOff: Boolean, 
     }
 
 /**
- * Turns the hotspot on only after station mode is confirmed off, and puts station mode back when
- * the hotspot still did not come on.
+ * Turns the hotspot on only after station mode is confirmed off.
  *
  * [releaseStationMode] returns false when station mode is still on. The access point is not asked
  * in that case: on this radio the two cannot run together.
+ *
+ * Station mode is intentionally left off even when the hotspot fails to come up, preventing radio
+ * oscillation and driver collision on single-PHY chips like MT6735. Switching to EXISTING_WIFI mode
+ * explicitly re-enables station mode.
  */
 internal fun enableHotspot(
     spendStation: Boolean,
     releaseStationMode: () -> Boolean,
-    restoreStationMode: () -> Unit,
     enable: () -> HotspotStartResult,
 ): HotspotStartResult {
-    var released = false
     if (spendStation) {
-        released = releaseStationMode()
+        val released = releaseStationMode()
         if (!released) return HotspotStartResult.RADIO_BUSY
     }
-    val result = enable()
-    if (result == HotspotStartResult.READY) return result
-    if (released) restoreStationMode()
-    return result
+    return enable()
 }
 
 /**
@@ -197,9 +195,6 @@ class CarHotspotController(context: Context) {
             spendStation = mayReleaseStationMode(spendDriverWifi, isStationEnabled()),
             releaseStationMode = {
                 ensureStationDisabled(STATION_OP_TIMEOUT_MILLIS, stillCurrent) && stillCurrent()
-            },
-            restoreStationMode = {
-                if (stillCurrent()) ensureStationEnabled(STATION_OP_TIMEOUT_MILLIS, stillCurrent)
             },
         ) { enableAccessPointUntil(timeoutMillis, stillCurrent) }
     }

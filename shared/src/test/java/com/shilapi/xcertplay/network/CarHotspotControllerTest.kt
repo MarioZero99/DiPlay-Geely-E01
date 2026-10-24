@@ -14,7 +14,6 @@ class CarHotspotControllerTest {
         val result = enableHotspot(
             spendStation = false,
             releaseStationMode = { calls += "release"; true },
-            restoreStationMode = { calls += "restore" },
         ) {
             calls += "enable"
             HotspotStartResult.PERMISSION_REQUIRED
@@ -39,7 +38,6 @@ class CarHotspotControllerTest {
         val result = enableHotspot(
             spendStation = true,
             releaseStationMode = { false },
-            restoreStationMode = { throw AssertionError("station mode was never confirmed off") },
         ) {
             enables += 1
             HotspotStartResult.READY
@@ -49,18 +47,17 @@ class CarHotspotControllerTest {
     }
 
     @Test
-    fun releasesStationBeforeTheHotspotAndPutsItBackWhenTheHotspotFails() {
+    fun releasesStationBeforeTheHotspotAndLeavesItOffWhenTheHotspotFails() {
         val calls = mutableListOf<String>()
         val result = enableHotspot(
             spendStation = true,
             releaseStationMode = { calls += "release"; true },
-            restoreStationMode = { calls += "restore" },
         ) {
             calls += "enable"
             HotspotStartResult.PERMISSION_REQUIRED
         }
         assertEquals(HotspotStartResult.PERMISSION_REQUIRED, result)
-        assertEquals(listOf("release", "enable", "restore"), calls)
+        assertEquals(listOf("release", "enable"), calls)
     }
 
     @Test
@@ -69,7 +66,6 @@ class CarHotspotControllerTest {
         val result = enableHotspot(
             spendStation = true,
             releaseStationMode = { calls += "release"; true },
-            restoreStationMode = { calls += "restore" },
         ) {
             calls += "enable"
             HotspotStartResult.READY
