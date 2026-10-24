@@ -8,18 +8,10 @@ import org.junit.Test
 
 class WirelessEnvironmentReconcilerTest {
     @Test
-    fun manualAutoHotspotWantsTheHotspotOn() {
+    fun manualModeWantsTheHotspotOn() {
         assertEquals(
             WirelessRadioTarget.HOTSPOT_ON,
-            wirelessRadioTarget(WirelessHotspotMode.MANUAL, autoHotspot = true),
-        )
-    }
-
-    @Test
-    fun manualWithoutTheSwitchLeavesTheRadioAlone() {
-        assertEquals(
-            WirelessRadioTarget.LEAVE_ALONE,
-            wirelessRadioTarget(WirelessHotspotMode.MANUAL, autoHotspot = false),
+            wirelessRadioTarget(WirelessHotspotMode.MANUAL),
         )
     }
 
@@ -27,7 +19,15 @@ class WirelessEnvironmentReconcilerTest {
     fun existingWifiWantsStationOn() {
         assertEquals(
             WirelessRadioTarget.STATION_ON,
-            wirelessRadioTarget(WirelessHotspotMode.EXISTING_WIFI, autoHotspot = true),
+            wirelessRadioTarget(WirelessHotspotMode.EXISTING_WIFI),
+        )
+    }
+
+    @Test
+    fun localOnlyHotspotLeavesTheRadioAlone() {
+        assertEquals(
+            WirelessRadioTarget.LEAVE_ALONE,
+            wirelessRadioTarget(WirelessHotspotMode.LOCAL_ONLY_HOTSPOT),
         )
     }
 

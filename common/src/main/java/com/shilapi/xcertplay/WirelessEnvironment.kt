@@ -7,7 +7,6 @@ enum class WirelessSyncReason {
     APP_START,
     RESUME,
     MODE_SWITCH,
-    AUTO_HOTSPOT_ON,
     PRE_CONNECT,
 }
 
@@ -18,15 +17,14 @@ enum class WirelessRadioTarget {
     LEAVE_ALONE,
 }
 
-internal fun wirelessRadioTarget(mode: WirelessHotspotMode, autoHotspot: Boolean): WirelessRadioTarget = when {
-    mode == WirelessHotspotMode.MANUAL && autoHotspot -> WirelessRadioTarget.HOTSPOT_ON
-    mode == WirelessHotspotMode.EXISTING_WIFI -> WirelessRadioTarget.STATION_ON
+internal fun wirelessRadioTarget(mode: WirelessHotspotMode): WirelessRadioTarget = when (mode) {
+    WirelessHotspotMode.MANUAL -> WirelessRadioTarget.HOTSPOT_ON
+    WirelessHotspotMode.EXISTING_WIFI -> WirelessRadioTarget.STATION_ON
     else -> WirelessRadioTarget.LEAVE_ALONE
 }
 
 internal fun clearsCooldown(reason: WirelessSyncReason): Boolean = when (reason) {
     WirelessSyncReason.MODE_SWITCH,
-    WirelessSyncReason.AUTO_HOTSPOT_ON,
     WirelessSyncReason.PRE_CONNECT,
     -> true
     WirelessSyncReason.APP_START,
@@ -34,7 +32,7 @@ internal fun clearsCooldown(reason: WirelessSyncReason): Boolean = when (reason)
     -> false
 }
 
-/** Cold start and resume wait out a recent failure. A mode change, the auto switch, and Connect do not. */
+/** Cold start and resume wait out a recent failure. A mode change and Connect do not. */
 internal fun cooldownBlocks(reason: WirelessSyncReason, bypassCooldown: Boolean, coolingDown: Boolean): Boolean =
     !bypassCooldown && coolingDown && !clearsCooldown(reason)
 

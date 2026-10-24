@@ -11,6 +11,16 @@ import org.junit.Test
  */
 class CarHotspotAutoStartTest {
     @Test
+    fun wakesTheCarsOwnHotspotInManualMode() {
+        assertTrue(shouldWakeCarHotspotOnStartup(WirelessHotspotMode.MANUAL))
+    }
+
+    @Test
+    fun doesNotWakeTheCarHotspotInExistingWifiMode() {
+        assertFalse(shouldWakeCarHotspotOnStartup(WirelessHotspotMode.EXISTING_WIFI))
+    }
+
+    @Test
     fun staysOffUntilTheDriverAsksForIt() {
         assertFalse(
             shouldWakeCarHotspotOnStartup(

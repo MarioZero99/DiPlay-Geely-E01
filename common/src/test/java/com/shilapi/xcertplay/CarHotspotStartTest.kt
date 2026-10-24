@@ -25,8 +25,6 @@ import org.robolectric.shadows.ShadowLog
 @Config(sdk = [28], qualifiers = "en")
 class CarHotspotStartTest {
     @Test fun openingTheAppWithTheSwitchOnAsksForTheCarsHotspot() {
-        AirPlayPersistence.saveAutoCarHotspot(RuntimeEnvironment.getApplication(), true)
-
         Robolectric.buildActivity(
             DiPlayActivity::class.java,
             Intent(RuntimeEnvironment.getApplication(), DiPlayActivity::class.java),

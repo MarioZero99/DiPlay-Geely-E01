@@ -13,5 +13,8 @@ import com.shilapi.xcertplay.transport.WirelessHotspotMode
  * Turning that hotspot on spends station mode. The switch is the driver asking for it; with the
  * switch off, opening the app leaves the radio alone.
  */
+internal fun shouldWakeCarHotspotOnStartup(mode: WirelessHotspotMode): Boolean =
+    mode == WirelessHotspotMode.MANUAL
+
 internal fun shouldWakeCarHotspotOnStartup(autoEnabled: Boolean, mode: WirelessHotspotMode): Boolean =
-    autoEnabled && mode == WirelessHotspotMode.MANUAL
+    autoEnabled && shouldWakeCarHotspotOnStartup(mode)

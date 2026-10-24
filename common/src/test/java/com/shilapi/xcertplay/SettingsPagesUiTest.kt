@@ -322,15 +322,11 @@ class SettingsPagesUiTest {
     }
 
     /**
-     * The switch that lets the app bring the car's own hotspot up as it opens.
-     *
-     * It is drawn where the car hotspot is the mode, which is the only mode whose access point the app
-     * does not bring up itself at connect time. What the switch means for the other two modes is in
-     * [CarHotspotAutoStartTest]; what it costs the driver is in `CarHotspotController`.
+     * The car hotspot is now automatically brought up in MANUAL mode without a redundant toggle switch.
      */
-    @Test fun theCarHotspotIsOfferedASwitchToComeUpOnItsOwn() {
-        assertTrue(
-            "the switch is offered where the car hotspot is the mode",
+    @Test fun theCarHotspotDoesNotNeedARedundantSwitch() {
+        assertFalse(
+            "the redundant switch is not shown because car hotspot mode automatically aligns",
             "Turn on the car hotspot at start" in texts(open("settings")),
         )
     }
