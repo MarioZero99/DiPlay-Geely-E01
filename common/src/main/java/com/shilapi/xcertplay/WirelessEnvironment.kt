@@ -17,11 +17,21 @@ enum class WirelessRadioTarget {
     LEAVE_ALONE,
 }
 
-internal fun wirelessRadioTarget(mode: WirelessHotspotMode): WirelessRadioTarget = when (mode) {
-    WirelessHotspotMode.MANUAL -> WirelessRadioTarget.HOTSPOT_ON
-    WirelessHotspotMode.EXISTING_WIFI -> WirelessRadioTarget.STATION_ON
-    else -> WirelessRadioTarget.LEAVE_ALONE
+internal fun wirelessRadioTarget(
+    wirelessEnabled: Boolean,
+    mode: WirelessHotspotMode,
+): WirelessRadioTarget = if (!wirelessEnabled) {
+    WirelessRadioTarget.LEAVE_ALONE
+} else {
+    when (mode) {
+        WirelessHotspotMode.MANUAL -> WirelessRadioTarget.HOTSPOT_ON
+        WirelessHotspotMode.EXISTING_WIFI -> WirelessRadioTarget.STATION_ON
+        else -> WirelessRadioTarget.LEAVE_ALONE
+    }
 }
+
+internal fun wirelessRadioTarget(mode: WirelessHotspotMode): WirelessRadioTarget =
+    wirelessRadioTarget(wirelessEnabled = true, mode = mode)
 
 internal fun clearsCooldown(reason: WirelessSyncReason): Boolean = when (reason) {
     WirelessSyncReason.MODE_SWITCH,

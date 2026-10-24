@@ -32,6 +32,22 @@ class WirelessEnvironmentReconcilerTest {
     }
 
     @Test
+    fun wiredModeLeavesRadioAloneRegardlessOfWirelessHotspotMode() {
+        assertEquals(
+            WirelessRadioTarget.LEAVE_ALONE,
+            wirelessRadioTarget(wirelessEnabled = false, WirelessHotspotMode.MANUAL),
+        )
+        assertEquals(
+            WirelessRadioTarget.LEAVE_ALONE,
+            wirelessRadioTarget(wirelessEnabled = false, WirelessHotspotMode.EXISTING_WIFI),
+        )
+        assertEquals(
+            WirelessRadioTarget.LEAVE_ALONE,
+            wirelessRadioTarget(wirelessEnabled = false, WirelessHotspotMode.LOCAL_ONLY_HOTSPOT),
+        )
+    }
+
+    @Test
     fun aLiveSessionBlocksEveryReason() {
         assertTrue(sessionBlocksRadioChange(sessionActive = true))
         assertFalse(sessionBlocksRadioChange(sessionActive = false))

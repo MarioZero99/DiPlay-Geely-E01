@@ -623,7 +623,12 @@ class DiPlayActivity : ComponentActivity() {
             // Remember the choice, and nothing else: the card repaints itself in place, and the tap
             // that made this choice is already starting a connection — rebuilding the page here
             // would throw away the tree the driver is looking at and then paint the same state again.
-            onModeSelected = { mode -> AirPlayPersistence.saveWirelessEnabled(this, mode) },
+            onModeSelected = { mode ->
+                AirPlayPersistence.saveWirelessEnabled(this, mode)
+                if (mode) {
+                    requestWirelessSync(WirelessSyncReason.MODE_SWITCH)
+                }
+            },
         )
         hero = stageCard
 
@@ -1864,8 +1869,9 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun requestWirelessSync(reason: WirelessSyncReason) {
         if (sessionBlocksRadioChange(CarPlayBackgroundSession.hasSession())) return
+        val wirelessEnabled = AirPlayPersistence.loadWirelessEnabled(applicationContext)
         val mode = AirPlayPersistence.loadWirelessHotspotMode(applicationContext)
-        val target = wirelessRadioTarget(mode)
+        val target = wirelessRadioTarget(wirelessEnabled, mode)
         val controller = CarHotspotController(applicationContext)
         val hotspotOn = controller.isHotspotFullyOn()
         val hotspotOff = controller.isHotspotFullyOff()
@@ -1921,6 +1927,7 @@ class DiPlayActivity : ComponentActivity() {
     private fun runWirelessSyncPass(generation: Int): Boolean {
         val reason = latestSyncReason
         val bypass = bypassSyncCooldown.getAndSet(false)
+        val wirelessEnabled = AirPlayPersistence.loadWirelessEnabled(applicationContext)
         val mode = AirPlayPersistence.loadWirelessHotspotMode(applicationContext)
         val now = SystemClock.elapsedRealtime()
         val coolingDown = lastSyncFailureAt > 0L && now - lastSyncFailureAt < SYNC_FAILURE_COOLDOWN_MILLIS
@@ -1929,7 +1936,7 @@ class DiPlayActivity : ComponentActivity() {
         val hotspotOff = controller.isHotspotFullyOff()
         val stationOn = controller.isStationFullyOn()
         val stationOff = controller.isStationFullyOff()
-        val target = wirelessRadioTarget(mode)
+        val target = wirelessRadioTarget(wirelessEnabled, mode)
         val still = { syncRequestStillCurrent(generation, wirelessSyncGeneration.get()) }
         if (sessionBlocksRadioChange(CarPlayBackgroundSession.hasSession()) ||
             cooldownBlocks(reason, bypass, coolingDown)
