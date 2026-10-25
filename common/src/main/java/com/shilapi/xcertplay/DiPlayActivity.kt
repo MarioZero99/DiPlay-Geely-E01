@@ -413,6 +413,7 @@ class DiPlayActivity : ComponentActivity() {
         if (initialLaunch) initialLaunch = false
         else render()
         requestWirelessSync(WirelessSyncReason.RESUME)
+        VehicleGovernance.ensureConfiguredState()
     }
     override fun onPause() {
         unregisterUsbTopology()
@@ -440,7 +441,6 @@ class DiPlayActivity : ComponentActivity() {
         updateLink?.close()
         updateLink = null
         releaseAdapterPage()
-        VehicleGovernance.onAppExit()
         super.onDestroy()
     }
 
@@ -1036,7 +1036,7 @@ class DiPlayActivity : ComponentActivity() {
     private fun voiceGovernanceCard(columns: CardColumns) {
         if (!VehicleGovernance.isSupported) return
         columns.card(R.string.experimental_voice_governance_title, R.drawable.ic_dp_permissions) { card ->
-            val isSuppressed = VehicleGovernance.isSuppressedFlow.value
+            val isSuppressed = VehicleGovernance.isSuppressionConfigured()
             toggle(
                 parent = card,
                 title = getString(R.string.suppress_native_voice_title),

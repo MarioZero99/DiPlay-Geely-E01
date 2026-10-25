@@ -158,24 +158,28 @@ class CarPlayMediaKeysBroadcastTest {
         val shadow = org.robolectric.Shadows.shadowOf(context)
         shadow.clearBroadcastIntents()
 
-        val playingSong = CarPlayNowPlaying(
+        // 1. Song starts with elapsed = 0
+        val songSnapshotAtStart = CarPlayNowPlaying(
             title = "Position Song",
             artist = "Position Artist",
-            elapsedMillis = 45000L,
+            elapsedMillis = 0L,
             durationMillis = 180000L,
             playing = true,
         )
-        CarPlayMediaKeys.broadcastMediaChange(context, playingSong, playing = true)
+        CarPlayMediaKeys.broadcastMediaChange(context, songSnapshotAtStart, playing = true)
 
-        // User pauses playback
-        CarPlayMediaKeys.broadcastMediaChange(context, playingSong, playing = false)
+        // 2. Playback runs, 2Hz ticks update lastKnownPosition to 52000L, then pause occurs.
+        // The cached lastPublishedNowPlaying has elapsed = 0L, but forcedPosition = 52000L is provided.
+        CarPlayMediaKeys.broadcastMediaChange(context, songSnapshotAtStart, playing = false, forcedPosition = 52000L)
         val pauseIntent = shadow.broadcastIntents.last { it.action == "com.android.music.playstatechanged" }
         assertEquals(2, pauseIntent.getIntExtra("playstate", -1)) // 2 = PAUSED
-        assertEquals("Pause broadcast must preserve last known position instead of 0", 45000L, pauseIntent.getLongExtra("position", -1L))
+        assertEquals("Pause broadcast must preserve current playing position instead of old 0", 52000L, pauseIntent.getLongExtra("position", -1L))
 
-        // CarPlay disconnects: nowPlaying is null
-        CarPlayMediaKeys.broadcastMediaChange(context, null, playing = false)
+        // 3. CarPlay disconnects with empty NowPlaying (not null, but blank fields)
+        val emptyNowPlaying = CarPlayNowPlaying(title = "", artist = "", album = "", playing = false)
+        CarPlayMediaKeys.broadcastMediaChange(context, emptyNowPlaying, playing = false)
         val stopIntent = shadow.broadcastIntents.last { it.action == "com.android.music.playstatechanged" }
-        assertEquals("Disconnect must send playstate 1 (STOPPED) to clear cluster display", 1, stopIntent.getIntExtra("playstate", -1))
+        assertEquals("Empty/cleared NowPlaying must send playstate 1 (STOPPED) to clear cluster display", 1, stopIntent.getIntExtra("playstate", -1))
+        assertEquals(0L, stopIntent.getLongExtra("position", -1L))
     }
 }

@@ -18,7 +18,8 @@ class E01Mtk6735GovernorProbeTest {
     @Test
     fun parseNatpAliveClassifiesInitServiceStatusCorrectly() {
         assertEquals(true, E01Mtk6735Governor.parseNatpAlive("running\n"))
-        assertEquals(true, E01Mtk6735Governor.parseNatpAlive("stopping\n"))
+        // "stopping" is in teardown phase and must not be reported as alive
+        assertEquals(false, E01Mtk6735Governor.parseNatpAlive("stopping\n"))
         assertEquals(false, E01Mtk6735Governor.parseNatpAlive("stopped\n"))
         // Empty, whitespace, or missing property value must be UNKNOWN (null), NOT falsely reported as dead (false)
         assertNull(E01Mtk6735Governor.parseNatpAlive(""))

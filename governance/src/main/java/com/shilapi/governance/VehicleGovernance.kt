@@ -103,6 +103,29 @@ object VehicleGovernance {
     }
 
     /**
+     * Checks whether native voice suppression is configured on in persistent storage.
+     */
+    fun isSuppressionConfigured(): Boolean = persistence?.isSuppressionConfigured() ?: false
+
+    /**
+     * Reconciles current running state with persisted user configuration if needed.
+     */
+    fun ensureConfiguredState() {
+        val store = persistence ?: return
+        if (!governor.isSupported) return
+        val configured = store.isSuppressionConfigured()
+        if (configured != governor.stateFlow.value) {
+            scope.launch {
+                if (configured) {
+                    governor.applySuppression("recheck-configured-suppress")
+                } else {
+                    governor.applyRestoration("recheck-configured-restore")
+                }
+            }
+        }
+    }
+
+    /**
      * Enables or disables voice service suppression.
      */
     fun setSuppressionEnabled(enabled: Boolean, onComplete: ((Boolean) -> Unit)? = null) {

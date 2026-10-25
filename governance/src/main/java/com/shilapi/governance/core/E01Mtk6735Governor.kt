@@ -42,10 +42,10 @@ class E01Mtk6735Governor(
             if (trimmed.isEmpty()) return null
             val lower = trimmed.lowercase()
             return when {
-                lower == "running" || lower == "stopping" -> true
-                lower == "stopped" -> false
-                lower.contains("running") -> true
-                lower.contains("stopped") -> false
+                lower == "running" -> true
+                lower == "stopping" || lower == "stopped" -> false
+                lower.contains("running") && !lower.contains("stopping") && !lower.contains("stopped") -> true
+                lower.contains("stopping") || lower.contains("stopped") -> false
                 trimmed.lines().any { it.contains("natp") } -> true
                 trimmed.matches(Regex("^[0-9\\s]+$")) -> true
                 else -> null
@@ -80,10 +80,14 @@ class E01Mtk6735Governor(
         } else {
             com.shilapi.governance.VehicleGovernance.log(TAG, "Suppression failed [$reason]: $result")
         }
-        try {
-            Thread.sleep(300L)
-        } catch (_: InterruptedException) {}
-        val alive = probeNatpInternal()
+        var alive: Boolean? = null
+        for (attempt in 0 until 4) {
+            try {
+                Thread.sleep(200L)
+            } catch (_: InterruptedException) {}
+            alive = probeNatpInternal()
+            if (alive == false) break
+        }
         com.shilapi.governance.VehicleGovernance.log(TAG, "Suppression completed [$reason] success=$success, natp alive=$alive")
         success
     }

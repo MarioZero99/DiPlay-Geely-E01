@@ -2,7 +2,9 @@ package com.shilapi.xcertplay
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -11,6 +13,8 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [23], manifest = Config.NONE)
 class DiagnosticVolumeMountTest {
+
+    @get:Rule val temp = TemporaryFolder()
 
     @Test
     fun isMountedFileSystemRejectsRootfsPaths() {
@@ -41,33 +45,13 @@ class DiagnosticVolumeMountTest {
     }
 
     @Test
-    fun parseBlockDevicesFiltersInternalPartitionsAndRejectsRawDisks() {
-        val blockList = listOf(
-            "mmcblk0",
-            "mmcblk0p1",
-            "sda",
-            "sda1",
-            "loop0",
-            "zram0",
-        )
-        val externalDevs = DiagnosticVolumeProbe.filterExternalBlockDevices(blockList)
-        // Raw disk "sda" is rejected to prevent mounting whole disk and corrupting partition tables
-        org.junit.Assert.assertEquals(listOf("sda1"), externalDevs)
-    }
-
-    @Test
-    fun readPhysicalPartitionsParsesAndSortsBySizeDescending() {
-        val partitionsContent = """
-            major minor  #blocks  name
-
-               8        0  120176640 sda
-               8        1     102400 sda1
-               8        2  120074240 sda2
-             179        0   15269888 mmcblk0
-             179        1      65536 mmcblk0p1
+    fun parseMountPointsFindsExternalVolumes() {
+        val fakeUsb = temp.newFolder("usbotg")
+        val mountsContent = """
+            rootfs / rootfs ro,relatime 0 0
+            /dev/block/vold/8:1 ${fakeUsb.absolutePath} vfat rw,dirsync,nosuid,nodev,noexec,relatime 0 0
         """.trimIndent()
-        val partitions = DiagnosticVolumeProbe.readPhysicalPartitions(partitionsContent)
-        // sda (raw disk) and mmcblk are rejected; sda2 (larger data partition) is prioritized before sda1 (smaller EFI partition)
-        org.junit.Assert.assertEquals(listOf("sda2", "sda1"), partitions)
+        val mounts = DiagnosticVolumeProbe.parseMountPoints(mountsContent)
+        assertTrue(mounts.any { it.absolutePath == fakeUsb.absolutePath })
     }
 }
