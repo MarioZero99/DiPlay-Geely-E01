@@ -3210,6 +3210,7 @@ class DiPlayActivity : ComponentActivity() {
         val generation = ++browseGeneration
         val request = ++browseRequest
         val mounted = mountedUsbPaths.toSet()
+        if (mounted.isNotEmpty()) DiagLog.i("DiagnosticExport", "broadcast ${mounted.joinToString()}")
         val sheet = ExportFolderSheet(this, palette) {
             browseGeneration++
             browseRequest++
@@ -3220,7 +3221,10 @@ class DiPlayActivity : ComponentActivity() {
         host.addView(sheet, FrameLayout.LayoutParams(-1, -1))
         sheet.showLoading(getString(R.string.save_diagnostic_report), getString(R.string.export_loading))
         Thread({
-            val roots = runCatching { DiagnosticExportStore.folders(applicationContext, mounted) }.getOrDefault(emptyList())
+            val roots = runCatching { DiagnosticExportStore.folders(applicationContext, mounted) }.getOrElse { error ->
+                DiagLog.w("DiagnosticExport", "places failed", error)
+                emptyList()
+            }
             runOnUiThread {
                 if (!browseAlive(generation, request)) return@runOnUiThread
                 exportRoots = roots
@@ -3306,6 +3310,11 @@ class DiPlayActivity : ComponentActivity() {
         val fileName = reportFileName()
         val generation = browseGeneration
         Thread({
+            val listed = runCatching { directory.list() }.getOrNull()
+            DiagLog.i(
+                "DiagnosticExport",
+                "chosen ${directory.absolutePath} exists=${directory.exists()} dir=${directory.isDirectory} list=${listed?.size ?: "null"} write=${directory.canWrite()}",
+            )
             val result = runCatching {
                 val report = buildCompleteReport(appContext)
                 DiagnosticExportStore.save(appContext, directory, fileName, report) to report

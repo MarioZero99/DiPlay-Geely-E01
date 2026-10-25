@@ -40,7 +40,13 @@ internal object DiagnosticExportStore {
             DiagnosticVolumeProbe.candidates(context, extraMountPaths, procMountsFile)
                 .filter { it.absolutePath != downloads.absolutePath },
         ).map { ExportFolder(it.name, it, usb = true) }
-        return usb + ExportFolder(context.getString(R.string.export_internal_storage), downloads, usb = false)
+        val places = usb + ExportFolder(context.getString(R.string.export_internal_storage), downloads, usb = false)
+        DiagLog.i("DiagnosticExport", places.joinToString(" | ") { folder ->
+            val dir = folder.directory
+            val listed = runCatching { dir.list() }.getOrNull()
+            "${dir.absolutePath} usb=${folder.usb} dir=${dir.isDirectory} list=${listed?.size ?: "null"} write=${dir.canWrite()}"
+        }.ifEmpty { "places empty" })
+        return places
     }
 
     /** Directories first, then files, by lower-case name. An unreadable directory is an empty list. */
@@ -81,8 +87,14 @@ internal object DiagnosticExportStore {
      */
     fun save(context: Context, directory: File, fileName: String, report: String): ExportOutcome {
         val file = File(directory, "DiPlay/$fileName")
-        val written = syncWriteText(file, report) || exportViaRoot(file, report, context.cacheDir)
-        val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrNull()
+        DiagLog.i("DiagnosticExport", "save ${file.absolutePath} chars=${report.length}")
+        val direct = syncWriteText(file, report)
+        val written = direct || exportViaRoot(file, report, context.cacheDir)
+        val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrElse { error ->
+            DiagLog.w("DiagnosticExport", "private copy failed", error)
+            null
+        }
+        DiagLog.i("DiagnosticExport", "save done direct=$direct written=$written backup=${backup != null} ${file.absolutePath}")
         if (!written && backup == null) throw IOException("Report storage is unavailable")
         if (written) announce(context, listOf(file.absolutePath))
         return ExportOutcome(file.absolutePath, backup?.uri, written)
@@ -127,22 +139,32 @@ internal object DiagnosticExportStore {
     private fun syncWriteText(file: File, content: String): Boolean {
         return try {
             val parent = file.parentFile
-            if (parent != null && !parent.exists() && !parent.mkdirs()) return false
-            if (parent != null && !parent.canWrite()) return false
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                DiagLog.w("DiagnosticExport", "direct write ${file.absolutePath} mkdirs failed")
+                return false
+            }
+            if (parent != null && !parent.canWrite()) {
+                DiagLog.w("DiagnosticExport", "direct write ${file.absolutePath} parent not writable")
+                return false
+            }
             FileOutputStream(file).use { stream ->
                 stream.write(content.toByteArray(Charsets.UTF_8))
                 stream.flush()
                 stream.fd.sync()
             }
             true
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            DiagLog.w("DiagnosticExport", "direct write ${file.absolutePath} failed", error)
             false
         }
     }
 
     /** Copies one file into place with root when the app itself cannot write the mount. */
     internal fun exportViaRoot(targetFile: File, report: String, cacheDir: File): Boolean {
-        if (!com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) return false
+        if (!com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+            DiagLog.w("DiagnosticExport", "root copy skipped, ExtraUtilsService missing: ${targetFile.absolutePath}")
+            return false
+        }
         val parentDir = targetFile.parentFile ?: return false
         val tempFile = File(cacheDir, "diag_export_${System.currentTimeMillis()}.tmp")
         val targetPath = targetFile.absolutePath

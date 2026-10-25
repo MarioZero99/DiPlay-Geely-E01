@@ -175,7 +175,13 @@ internal object DiagnosticVolumeProbe {
         val leaf = path.substring(at + marker.length).trim('/')
         if (leaf.isEmpty() || leaf.contains('/')) return dir
         val twin = File(storageRoot, leaf)
-        return if (twin.isDirectory) twin else dir
+        return if (twin.isDirectory) {
+            DiagLog.i("DiagnosticExport", "usb $path -> ${twin.absolutePath}")
+            twin
+        } else {
+            DiagLog.i("DiagnosticExport", "usb $path kept, ${twin.absolutePath} is not a directory")
+            dir
+        }
     }
 
     private fun remember(found: MutableMap<String, File>, file: File) {
