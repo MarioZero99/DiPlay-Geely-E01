@@ -236,6 +236,9 @@
     <string name="export_loading">Reading…</string>
     <string name="export_pick_hint">Choose a place and look at its files</string>
     <string name="export_save_to_disk">Save to this drive</string>
+    <string name="export_save_to_phone">Save to phone storage</string>
+    <string name="export_failed_kept">This place did not take the file. The report is still in the app. You can retry, or save it to phone storage.</string>
+    <string name="export_failed_kept_retry">This place did not take the file. The report is still in the app. You can retry.</string>
     <string name="export_saved_to">Saved to:\n%1$s</string>
     <string name="export_unreadable">(Cannot read this folder)</string>
     <string name="export_up">Up</string>

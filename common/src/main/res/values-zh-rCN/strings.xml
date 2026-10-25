@@ -230,6 +230,9 @@
     <string name="export_loading">正在读取…</string>
     <string name="export_pick_hint">点一个位置，查看里面的文件</string>
     <string name="export_save_to_disk">保存到这个盘</string>
+    <string name="export_save_to_phone">改存到机身</string>
+    <string name="export_failed_kept">这个位置没写上。报告还留在应用里，可以重试，或改存到机身存储。</string>
+    <string name="export_failed_kept_retry">这个位置没写上。报告还留在应用里，可以重试。</string>
     <string name="export_saved_to">报告已保存到：\n%1$s</string>
     <string name="export_unreadable">（读不了这个目录）</string>
     <string name="export_up">上一级</string>

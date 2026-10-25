@@ -24,6 +24,8 @@ internal data class ExportFolder(
 internal data class ExportOutcome(
     val primaryPath: String,
     val shareableUri: Uri?,
+    /** False when the chosen folder did not take the file. The card must not call that a save. */
+    val written: Boolean,
 )
 
 /** Saves one diagnostic report into the folder the user confirmed, plus a private copy for sharing. */
@@ -34,9 +36,9 @@ internal object DiagnosticExportStore {
         procMountsFile: File? = DiagnosticVolumeProbe.defaultProcMounts(),
     ): List<ExportFolder> {
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val usb = preferListedCopy(
+        val usb = chooseMounts(
             DiagnosticVolumeProbe.candidates(context, extraMountPaths, procMountsFile)
-                .filter { canList(it) && it.absolutePath != downloads.absolutePath },
+                .filter { it.absolutePath != downloads.absolutePath },
         ).map { ExportFolder(it.name, it, usb = true) }
         return usb + ExportFolder(context.getString(R.string.export_internal_storage), downloads, usb = false)
     }
@@ -47,33 +49,43 @@ internal object DiagnosticExportStore {
         return listed.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
     }
 
+    /** Keeps real directories, including ones [File.list] cannot read, then one path per stick. */
+    internal fun chooseMounts(dirs: List<File>): List<File> = preferListedCopy(dirs.filter { it.isDirectory })
+
     /**
-     * Two paths with the same leaf are one stick. Prefer the copy that is not under `/mnt/media_rw/`,
-     * which is the path a file manager shows. A raw path that is the only one still listable stays.
+     * Two paths with the same leaf are one stick. A copy the app can list beats one it cannot,
+     * so the card can show the files. Between two that list the same, or two that cannot, prefer
+     * the path that is not under `/mnt/media_rw/`. A listable raw stick is not replaced by an
+     * unlistable twin.
      */
     internal fun preferListedCopy(dirs: List<File>): List<File> {
         val chosen = linkedMapOf<String, File>()
         for (dir in dirs) {
             val have = chosen[dir.name]
-            val raw = dir.path.contains("/mnt/media_rw/")
-            if (have == null || (have.path.contains("/mnt/media_rw/") && !raw)) {
-                chosen[dir.name] = dir
-            }
+            if (have == null || copyRank(dir) < copyRank(have)) chosen[dir.name] = dir
         }
         return chosen.values.toList()
     }
 
+    /** Lower is better: listable before unlistable, then a path outside `/mnt/media_rw/`. */
+    private fun copyRank(dir: File): Int {
+        val listable = if (canList(dir)) 0 else 2
+        val raw = if (dir.path.contains("/mnt/media_rw/")) 1 else 0
+        return listable + raw
+    }
+
     /**
-     * Writes `<directory>/DiPlay/<fileName>` and nothing else. The private backup is only for the
-     * share sheet. A failure here throws: the card must not claim the report was saved on the device.
+     * Writes `<directory>/DiPlay/<fileName>`. The private backup is what the share sheet opens,
+     * and it is still written when the chosen place does not take the file. [ExportOutcome.written]
+     * is false in that case. Both writes failing throws, so the card does not claim a save.
      */
     fun save(context: Context, directory: File, fileName: String, report: String): ExportOutcome {
         val file = File(directory, "DiPlay/$fileName")
         val written = syncWriteText(file, report) || exportViaRoot(file, report, context.cacheDir)
-        if (!written) throw IOException("Report storage is unavailable")
-        announce(context, listOf(file.absolutePath))
         val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrNull()
-        return ExportOutcome(file.absolutePath, backup?.uri)
+        if (!written && backup == null) throw IOException("Report storage is unavailable")
+        if (written) announce(context, listOf(file.absolutePath))
+        return ExportOutcome(file.absolutePath, backup?.uri, written)
     }
 
     private fun canList(dir: File): Boolean = dir.isDirectory && runCatching { dir.list() }.getOrNull() != null

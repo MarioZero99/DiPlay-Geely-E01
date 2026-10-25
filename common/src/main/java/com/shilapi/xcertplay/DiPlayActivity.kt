@@ -3303,7 +3303,7 @@ class DiPlayActivity : ComponentActivity() {
         val generation = browseGeneration
         Thread({
             val result = runCatching {
-                val report = buildDiagnosticReport(appContext)
+                val report = buildCompleteReport(appContext)
                 DiagnosticExportStore.save(appContext, directory, fileName, report) to report
             }
             runOnUiThread {
@@ -3314,20 +3314,31 @@ class DiPlayActivity : ComponentActivity() {
                 if (generation != browseGeneration || isFinishing || isDestroyed || exportSheet == null) return@runOnUiThread
                 result.fold(
                     onSuccess = { (outcome, report) ->
-                        exportSheet?.showSaved(
-                            title = getString(R.string.diagnostic_report_saved),
-                            body = getString(R.string.export_saved_to, outcome.primaryPath),
-                            viewLabel = getString(R.string.view_diagnostic_report),
-                            onView = { showDiagnosticReport(report) },
-                            shareLabel = outcome.shareableUri?.let { getString(R.string.share) },
-                            onShare = outcome.shareableUri?.let { uri -> { shareReport(uri, report) } },
-                            doneLabel = getString(R.string.done),
-                        )
+                        val card = exportSheet ?: return@runOnUiThread
+                        if (outcome.written) {
+                            card.showSaved(
+                                title = getString(R.string.diagnostic_report_saved),
+                                body = getString(R.string.export_saved_to, outcome.primaryPath),
+                                viewLabel = getString(R.string.view_diagnostic_report),
+                                onView = { showDiagnosticReport(report) },
+                                shareLabel = outcome.shareableUri?.let { getString(R.string.share) },
+                                onShare = outcome.shareableUri?.let { uri -> { shareReport(uri, report) } },
+                                doneLabel = getString(R.string.done),
+                            )
+                        } else {
+                            showKeptFailure(card, directory, report, outcome.shareableUri)
+                        }
                     },
                     onFailure = {
                         exportSheet?.showFailed(
                             title = getString(R.string.could_not_save_the_report),
                             body = getString(R.string.diagnostic_report_save_failed_body),
+                            viewLabel = null,
+                            onView = null,
+                            shareLabel = null,
+                            onShare = null,
+                            alternateLabel = null,
+                            onAlternate = null,
                             retryLabel = getString(R.string.retry),
                             onRetry = { exportHere(directory) },
                             closeLabel = getString(R.string.close),
@@ -3342,6 +3353,32 @@ class DiPlayActivity : ComponentActivity() {
         generation == browseGeneration && request == browseRequest && exportSheet != null && !isFinishing && !isDestroyed
 
     private fun sameFile(left: File, right: File) = left.absolutePath == right.absolutePath
+
+    /**
+     * The chosen folder did not take the file, and the private copy did. This is still a failure:
+     * nothing is scanned onto the stick, and phone storage is only offered as another save.
+     */
+    private fun showKeptFailure(sheet: ExportFolderSheet, directory: File, report: String, uri: Uri?) {
+        val downloads = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val offerPhone = !sameFile(directory, downloads)
+        sheet.showFailed(
+            title = getString(R.string.could_not_save_the_report),
+            body = getString(if (offerPhone) R.string.export_failed_kept else R.string.export_failed_kept_retry),
+            viewLabel = uri?.let { getString(R.string.view_diagnostic_report) },
+            onView = uri?.let { { showDiagnosticReport(report) } },
+            shareLabel = uri?.let { getString(R.string.share) },
+            onShare = uri?.let { shareUri -> { shareReport(shareUri, report) } },
+            alternateLabel = if (offerPhone) getString(R.string.export_save_to_phone) else null,
+            onAlternate = if (offerPhone) {
+                { exportHere(downloads) }
+            } else {
+                null
+            },
+            retryLabel = getString(R.string.retry),
+            onRetry = { exportHere(directory) },
+            closeLabel = getString(R.string.close),
+        )
+    }
 
     private fun shareReport(uri: Uri, report: String) {
         runCatching {
@@ -3451,20 +3488,10 @@ class DiPlayActivity : ComponentActivity() {
         }
     }
 
-    private fun buildDiagnosticReport(appContext: android.content.Context): String =
-        DiagnosticDigest.compose(
-            buildDiagnosticHeader(appContext),
-            buildDiagnosticSections(appContext),
-        )
-
     /**
-     * The report in full, oldest run first.
-     *
-     * Save fits the same content into one file by ranking it and cutting what does not fit (see
-     * [DiagnosticDigest]); uploading has no reason to cut anything, because the bucket's cap is per
-     * object and [SupabaseLogUpload.parts] splits the report across as many objects as it needs. A part
-     * therefore reads the way a log does — in the order things happened — instead of starting with the
-     * lines a ranking put first.
+     * The report in full, oldest run first. Saving and uploading both use this, so the file holds
+     * every retained log line. Each log file is still capped on disk; this does not read past that.
+     * Uploading then splits the text across objects ([SupabaseLogUpload.parts]).
      */
     private fun buildCompleteReport(appContext: android.content.Context): String = buildString {
         appendLine(buildDiagnosticHeader(appContext))

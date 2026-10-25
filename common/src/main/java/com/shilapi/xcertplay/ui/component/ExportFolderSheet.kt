@@ -39,7 +39,8 @@ class ExportFolderSheet(
     private val subtitleView: TextView
     private val rows: LinearLayout
     private val scroller: ScrollView
-    private val buttons: LinearLayout
+    private val buttonRows: LinearLayout
+    private var buttons: LinearLayout
     private var primaryButton: Button? = null
     private var closing = false
 
@@ -91,11 +92,10 @@ class ExportFolderSheet(
         }
         card.addView(scroller, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(16) })
 
-        buttons = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-        }
-        card.addView(buttons, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        buttonRows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        buttons = newButtonRow()
+        buttonRows.addView(buttons)
+        card.addView(buttonRows, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
         addView(card)
 
         animate().alpha(1f).setDuration(160).start()
@@ -116,8 +116,7 @@ class ExportFolderSheet(
         subtitleView.text = subtitle
         subtitleView.visibility = VISIBLE
         rows.removeAllViews()
-        buttons.removeAllViews()
-        primaryButton = null
+        clearButtons()
         scroller.scrollTo(0, 0)
     }
 
@@ -133,10 +132,11 @@ class ExportFolderSheet(
     }
 
     fun setSaving(label: String) {
-        primaryButton?.apply {
-            isEnabled = false
-            text = label
+        for (index in 0 until buttonRows.childCount) {
+            val row = buttonRows.getChildAt(index) as? LinearLayout ?: continue
+            for (child in 0 until row.childCount) row.getChildAt(child).isEnabled = false
         }
+        primaryButton?.text = label
     }
 
     fun showSaved(
@@ -154,10 +154,33 @@ class ExportFolderSheet(
         addButton(doneLabel, primary = true) { dismiss() }
     }
 
-    fun showFailed(title: String, body: String, retryLabel: String, onRetry: () -> Unit, closeLabel: String) {
+    /**
+     * The chosen place did not take the file. View and share sit on the first row when a private
+     * copy exists. Close, an optional other place, and retry sit on the next row so five labels
+     * do not clip. Retry is the primary button, so a follow-up save disables it.
+     */
+    fun showFailed(
+        title: String,
+        body: String,
+        viewLabel: String?,
+        onView: (() -> Unit)?,
+        shareLabel: String?,
+        onShare: (() -> Unit)?,
+        alternateLabel: String?,
+        onAlternate: (() -> Unit)?,
+        retryLabel: String,
+        onRetry: () -> Unit,
+        closeLabel: String,
+    ) {
         showMessage(title, body)
+        if (viewLabel != null && onView != null) {
+            addButton(viewLabel, primary = false, onClick = onView)
+            if (shareLabel != null && onShare != null) addButton(shareLabel, primary = false, onClick = onShare)
+            nextButtonRow()
+        }
         addButton(closeLabel, primary = false) { dismiss() }
-        addButton(retryLabel, primary = true, onClick = onRetry)
+        if (alternateLabel != null && onAlternate != null) addButton(alternateLabel, primary = false, onClick = onAlternate)
+        primaryButton = addButton(retryLabel, primary = true, onClick = onRetry)
     }
 
     fun dismiss() {
@@ -188,7 +211,23 @@ class ExportFolderSheet(
             setTextColor(palette.textMain)
             setLineSpacing(dp(4).toFloat(), 1f)
         })
-        buttons.removeAllViews()
+        clearButtons()
+    }
+
+    private fun newButtonRow() = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.END
+    }
+
+    private fun nextButtonRow() {
+        buttons = newButtonRow()
+        buttonRows.addView(buttons, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+    }
+
+    private fun clearButtons() {
+        buttonRows.removeAllViews()
+        buttons = newButtonRow()
+        buttonRows.addView(buttons)
         primaryButton = null
     }
 

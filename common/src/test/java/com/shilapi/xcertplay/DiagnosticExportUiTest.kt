@@ -114,6 +114,72 @@ class DiagnosticExportUiTest {
         }
     }
 
+    /** A stick that cannot be created stays a failure, and the card offers phone storage plus the private copy. */
+    @Test fun aFailedStickKeepsTheReportAndOffersPhoneStorage() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        registerReportProvider(activity.applicationContext)
+        val blocked = File(activity.cacheDir, "not-a-dir-ui").apply { writeText("x") }
+        val stick = File(blocked, "stick")
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
+            awaitText(activity, activity.getString(R.string.export_internal_storage))
+            ReflectionHelpers.callInstanceMethod<Unit>(
+                activity,
+                "exportHere",
+                ReflectionHelpers.ClassParameter.from(File::class.java, stick),
+            )
+            awaitText(activity, activity.getString(R.string.export_save_to_phone))
+            awaitText(activity, activity.getString(R.string.export_failed_kept))
+            assertNotNull(texts(activity).firstOrNull { it.text == activity.getString(R.string.share) })
+            assertNotNull(texts(activity).firstOrNull { it.text == activity.getString(R.string.view_diagnostic_report) })
+            assertTrue(texts(activity).none { it.text == activity.getString(R.string.diagnostic_report_saved) })
+            assertFalse(File(stick, "DiPlay").exists())
+            val kept = File(activity.filesDir, "diagnostic-reports").listFiles()!!
+            assertTrue(kept.any { it.readText().contains("API ${android.os.Build.VERSION.SDK_INT}") })
+        } finally {
+            blocked.delete()
+            controller.pause().stop().destroy()
+        }
+    }
+
+    /** The file on disk is the retained logs, not the one-megabyte digest. */
+    @Test fun theSavedFileKeepsEveryRetainedLogLine() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        registerReportProvider(activity.applicationContext)
+        val logs = File(activity.filesDir, "logs").apply { mkdirs() }
+        val older = buildString {
+            appendLine("HEAD-KEPT-LINE")
+            repeat(40_000) { append("older-line-").append(it).append(" xxxxxxxxxxxxxxxxxxxx\n") }
+            appendLine("TAIL-KEPT-LINE")
+        }
+        File(logs, "previous.log").writeText(older)
+        File(logs, "diplay.log").writeText("password=hunter2\nNEWER-LINE marker\n")
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
+            clickRow(activity, activity.getString(R.string.export_internal_storage))
+            clickRow(activity, activity.getString(R.string.export_save_to_disk))
+            awaitText(activity, "/DiPlay/DiPlay-")
+            val downloads = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "DiPlay",
+            )
+            val saved = downloads.listFiles()!!.single { it.name.startsWith("DiPlay-") && it.readText().contains("TAIL-KEPT-LINE") }
+            val text = saved.readText()
+            assertTrue(text.contains("HEAD-KEPT-LINE"))
+            assertTrue(text.contains("TAIL-KEPT-LINE"))
+            assertTrue(text.contains("NEWER-LINE marker"))
+            assertTrue(text.contains("--- previous.log ---"))
+            assertTrue(text.contains(DiagnosticRedactor.WITHHELD))
+            assertFalse(text.contains("hunter2"))
+            assertFalse(text.contains("lines omitted"))
+        } finally {
+            logs.deleteRecursively()
+            controller.pause().stop().destroy()
+        }
+    }
+
     /**
      * The header is what places a report: which build, which car, which settings. It is also the only
      * place the reason authentication failed can appear — "authentication unavailable" on its own cannot

@@ -3,6 +3,7 @@ package com.shilapi.xcertplay
 import android.os.Environment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -45,6 +46,34 @@ class DiagnosticExportStoreTest {
         assertTrue(folders.none { it.directory.absolutePath == blocked.absolutePath })
     }
 
+    /**
+     * Robolectric still lists a directory after chmod, so an unlistable stick is a [File] whose
+     * [File.list] returns null. That is the car's `/mnt/media_rw` when the app cannot read it.
+     */
+    @Test fun anUnlistableDirectoryIsStillChosen() {
+        val raw = File(context.cacheDir, "mnt/media_rw/locked-stick").apply { mkdirs() }
+        val unlistable = UnlistableDir(raw)
+        assertNull(unlistable.list())
+        val chosen = DiagnosticExportStore.chooseMounts(listOf(unlistable))
+        assertEquals(raw.absolutePath, chosen.single().absolutePath)
+    }
+
+    /** A listable raw stick stays. An unlistable /storage twin must not replace it. */
+    @Test fun aListableRawStickBeatsAnUnlistableTwin() {
+        val raw = File(context.cacheDir, "mnt/media_rw/twin-stick").apply { mkdirs() }
+        val shown = File(context.cacheDir, "storage/twin-stick").apply { mkdirs() }
+        val chosen = DiagnosticExportStore.chooseMounts(listOf(UnlistableDir(shown), raw))
+        assertEquals(listOf(raw.absolutePath), chosen.map { it.absolutePath })
+    }
+
+    /** When neither copy can be listed, still prefer the path outside `/mnt/media_rw/`. */
+    @Test fun anUnlistableStorageCopyBeatsAnUnlistableRawCopy() {
+        val raw = File(context.cacheDir, "mnt/media_rw/twin-stick").apply { mkdirs() }
+        val shown = File(context.cacheDir, "storage/twin-stick").apply { mkdirs() }
+        val chosen = DiagnosticExportStore.chooseMounts(listOf(UnlistableDir(raw), UnlistableDir(shown)))
+        assertEquals(listOf(shown.absolutePath), chosen.map { it.absolutePath })
+    }
+
     @Test fun candidatesReturnsTheMountRootNotThePackageFilesDir() {
         val usbRoot = File(context.cacheDir, "real-usb").apply { mkdirs() }
         File(usbRoot, "MyMusic").mkdirs()
@@ -69,5 +98,10 @@ class DiagnosticExportStoreTest {
     @Test fun exportViaRootGracefullyHandlesUnavailableService() {
         val target = File("/storage/usbotg/DiPlay/report.txt")
         assertFalse(DiagnosticExportStore.exportViaRoot(target, "test report", context.cacheDir))
+    }
+
+    /** [File.list] is not final. Returning null is the unlistable stick this process cannot chmod into. */
+    private class UnlistableDir(path: File) : File(path.absolutePath) {
+        override fun list(): Array<String>? = null
     }
 }

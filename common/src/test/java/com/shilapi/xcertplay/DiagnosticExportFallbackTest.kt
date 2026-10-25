@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,10 +35,22 @@ class DiagnosticExportFallbackTest {
         val outcome = DiagnosticExportStore.save(context, chosen, "DiPlay-test.txt", "report body")
         val saved = File(chosen, "DiPlay/DiPlay-test.txt")
         assertEquals(saved.absolutePath, outcome.primaryPath)
+        assertTrue(outcome.written)
         assertEquals("report body", saved.readText())
         assertFalse(File(other, "DiPlay/DiPlay-test.txt").exists())
         assertNotNull(outcome.shareableUri)
         assertEquals("report body", read(outcome.shareableUri!!))
+    }
+
+    /** The stick did not take the file. The private copy is still there, and the outcome stays a failure. */
+    @Test fun aFailedChosenWriteStillKeepsThePrivateCopy() {
+        val blocked = File(context.cacheDir, "not-a-dir-for-save").apply { writeText("x") }
+        val directory = File(blocked, "stick")
+        val outcome = DiagnosticExportStore.save(context, directory, "DiPlay-test.txt", "kept")
+        assertFalse(outcome.written)
+        assertEquals(File(directory, "DiPlay/DiPlay-test.txt").absolutePath, outcome.primaryPath)
+        assertFalse(File(directory, "DiPlay").exists())
+        assertEquals("kept", read(outcome.shareableUri!!))
     }
 
     @Test fun anEarlierShareUriCannotReadALaterExport() {
