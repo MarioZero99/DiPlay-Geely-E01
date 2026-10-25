@@ -1064,20 +1064,6 @@ class DiPlayActivity : ComponentActivity() {
         }
     }
 
-    private fun clusterMediaMetadataCard(columns: CardColumns) {
-        columns.card(R.string.cluster_media_metadata_title, R.drawable.ic_dp_display) { card ->
-            toggle(
-                parent = card,
-                title = getString(R.string.cluster_media_metadata_title),
-                description = getString(R.string.cluster_media_metadata_description),
-                value = AirPlayPersistence.loadClusterMediaMetadataEnabled(this),
-            ) { enabled ->
-                AirPlayPersistence.saveClusterMediaMetadataEnabled(this, enabled)
-                CarPlayMediaKeys.onClusterMetadataEnabledChanged(enabled)
-            }
-        }
-    }
-
     /**
      * Ends the app on purpose. The control sits next to the home control in the header, so it is on
      * every page rather than only at the bottom of the system settings.
@@ -1101,7 +1087,6 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun displayCards(columns: CardColumns) {
         displayPerformanceCard(columns)
-        clusterMediaMetadataCard(columns)
         audioRoutingCard(columns)
     }
 
