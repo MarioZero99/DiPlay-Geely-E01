@@ -87,22 +87,88 @@ internal object DiagnosticVolumeProbe {
         return candidates
     }
 
+    internal fun isMountedFileSystem(dir: File, mountsContent: String): Boolean {
+        val targetPath = dir.absolutePath.trimEnd('/')
+        for (line in mountsContent.lineSequence()) {
+            val parts = line.trim().split(Regex("\\s+"))
+            if (parts.size < 2) continue
+            val dev = parts[0]
+            val mountPoint = unescapeMountPoint(parts[1]).trimEnd('/')
+            if (mountPoint == targetPath) {
+                val isExternal = dev.startsWith("/dev/block/vold/") ||
+                    dev.startsWith("/dev/block/sd") ||
+                    dev.startsWith("/dev/fuse")
+                return isExternal
+            }
+        }
+        return false
+    }
+
+    internal fun filterExternalBlockDevices(rawNames: Collection<String>): List<String> {
+        val pattern = Regex("^sd[a-z][0-9]*$")
+        return rawNames
+            .map { it.substringAfterLast('/') }
+            .filter { pattern.matches(it) }
+            .sortedWith(Comparator { a, b ->
+                val aHasNum = a.any { it.isDigit() }
+                val bHasNum = b.any { it.isDigit() }
+                if (aHasNum && !bHasNum) -1
+                else if (!aHasNum && bHasNum) 1
+                else a.compareTo(b)
+            })
+    }
+
+    internal fun tryMountExternalUsb(procMountsContent: String): File? {
+        if (!com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) return null
+        val hasMountedSd = procMountsContent.lineSequence().any {
+            val dev = it.trim().split(Regex("\\s+")).firstOrNull() ?: ""
+            dev.startsWith("/dev/block/sd") || dev.startsWith("/dev/block/vold/")
+        }
+        if (hasMountedSd) return null
+
+        val devBlockDir = File("/dev/block")
+        val blockFiles = devBlockDir.list()?.toList().orEmpty()
+        val candidateDevs = filterExternalBlockDevices(blockFiles)
+        if (candidateDevs.isEmpty()) return null
+
+        val mountTarget = File("/mnt/udisk")
+        for (devName in candidateDevs) {
+            val devPath = "/dev/block/$devName"
+            val mountCmd = "mkdir -p /mnt/udisk && (mount -t vfat $devPath /mnt/udisk || mount -t exfat $devPath /mnt/udisk || mount -t ntfs $devPath /mnt/udisk || mount $devPath /mnt/udisk)"
+            val ok = com.shilapi.xcertplay.system.RootShellBridge.execute(mountCmd)
+            if (ok) {
+                DiagLog.i("DiagnosticExport", "Successfully mounted physical USB device $devPath to /mnt/udisk")
+                return mountTarget
+            }
+        }
+        return null
+    }
+
     fun probe(
         context: Context,
         extraMountPaths: Collection<String> = emptySet(),
         procMountsFile: File? = defaultProcMounts(),
     ): ProbeSummary {
         val candidates = linkedMapOf<String, File>()
+        var mountsContent = ""
 
         // Source 1: /proc/mounts, the kernel's own mount table.
         // This is the primary source: it names all currently mounted filesystems directly,
         // without guessing names or depending on broadcast timing.
         runCatching {
             if (procMountsFile != null && procMountsFile.exists() && procMountsFile.canRead()) {
-                val mountsContent = procMountsFile.readText()
+                mountsContent = procMountsFile.readText()
                 for (mount in parseMountPoints(mountsContent)) {
                     candidates[mount.absolutePath] = mount
                 }
+            }
+        }
+
+        // Source 1b: If /proc/mounts had no external volumes, try to mount unmounted physical USB block devices (e.g. sda1)
+        if (candidates.isEmpty() && mountsContent.isNotEmpty()) {
+            val mountedUsb = tryMountExternalUsb(mountsContent)
+            if (mountedUsb != null) {
+                candidates[mountedUsb.absolutePath] = mountedUsb
             }
         }
 
@@ -133,7 +199,9 @@ internal object DiagnosticVolumeProbe {
             for (rootPath in vendorMountRoots) {
                 val root = File(rootPath)
                 if (!root.isDirectory || isPrimaryStorage(root)) continue
-                val children = root.listFiles()?.filter { it.isDirectory && !isPrimaryStorage(it) }.orEmpty()
+                val children = root.listFiles()?.filter {
+                    it.isDirectory && !isPrimaryStorage(it) && (mountsContent.isEmpty() || isMountedFileSystem(it, mountsContent))
+                }.orEmpty()
                 for (child in children) {
                     candidates[child.absolutePath] = child
                 }
