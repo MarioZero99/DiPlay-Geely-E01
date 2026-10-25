@@ -130,6 +130,11 @@ internal object CarPlayMediaKeys {
         return builder.build()
     }
 
+    @Volatile private var lastBroadcastTrack: String? = null
+    @Volatile private var lastBroadcastArtist: String? = null
+    @Volatile private var lastBroadcastAlbum: String? = null
+    @Volatile private var lastBroadcastPlaying: Boolean? = null
+
     internal fun broadcastMediaChange(context: Context, nowPlaying: CarPlayNowPlaying?, playing: Boolean) {
         runCatching {
             val track = nowPlaying?.title.orEmpty()
@@ -139,28 +144,53 @@ internal object CarPlayMediaKeys {
             val position = nowPlaying?.elapsedMillis ?: 0L
             val id = nowPlaying?.artworkTransferId?.toLong() ?: 1L
 
-            val metaIntent = Intent("com.android.music.metachanged").apply {
-                putExtra("id", id)
-                putExtra("artist", artist)
-                putExtra("album", album)
-                putExtra("track", track)
-                putExtra("playing", playing)
-                putExtra("duration", duration)
-                putExtra("position", position)
-                putExtra("package", context.packageName)
+            val isMetaChanged = if (nowPlaying == null) {
+                lastBroadcastTrack != null
+            } else {
+                track != lastBroadcastTrack || artist != lastBroadcastArtist || album != lastBroadcastAlbum
             }
-            context.sendBroadcast(metaIntent)
 
-            val stateIntent = Intent("com.android.music.playstatechanged").apply {
-                putExtra("playing", playing)
-                putExtra("playstate", if (playing) 3 else 2) // 3 = PLAYING, 2 = PAUSED
-                putExtra("position", position)
-                putExtra("package", context.packageName)
+            val isStateChanged = playing != lastBroadcastPlaying
+
+            if (isMetaChanged) {
+                lastBroadcastTrack = if (nowPlaying != null) track else null
+                lastBroadcastArtist = if (nowPlaying != null) artist else null
+                lastBroadcastAlbum = if (nowPlaying != null) album else null
+
+                val metaIntent = Intent("com.android.music.metachanged").apply {
+                    putExtra("id", id)
+                    putExtra("artist", artist)
+                    putExtra("album", album)
+                    putExtra("track", track)
+                    putExtra("playing", playing)
+                    putExtra("duration", duration)
+                    putExtra("position", position)
+                    putExtra("package", context.packageName)
+                }
+                context.sendBroadcast(metaIntent)
             }
-            context.sendBroadcast(stateIntent)
+
+            if (isStateChanged) {
+                lastBroadcastPlaying = playing
+
+                val stateIntent = Intent("com.android.music.playstatechanged").apply {
+                    putExtra("playing", playing)
+                    putExtra("playstate", if (playing) 3 else 2) // 3 = PLAYING, 2 = PAUSED
+                    putExtra("position", position)
+                    putExtra("package", context.packageName)
+                }
+                context.sendBroadcast(stateIntent)
+            }
         }.onFailure { e ->
             DiagLog.w(TAG, "failed to send media broadcast", e)
         }
+    }
+
+    internal fun resetBroadcastState() {
+        lastBroadcastTrack = null
+        lastBroadcastArtist = null
+        lastBroadcastAlbum = null
+        lastBroadcastPlaying = null
     }
 
     @Volatile private var audioFocusTarget: ((Int) -> Unit)? = null
@@ -258,7 +288,7 @@ internal object CarPlayMediaKeys {
             context = null
         }
 
-        private fun onPlaybackChanged(playing: Boolean) {
+        protected open fun onPlaybackChanged(playing: Boolean) {
             if (playing) mainHandler.post { regainFocus() }
         }
     }
@@ -268,6 +298,24 @@ internal object CarPlayMediaKeys {
         private var session: MediaSession? = null
         private var sessionToken: Any? = null
         private var lastPublishedNowPlaying: CarPlayNowPlaying? = null
+
+        override fun onPlaybackChanged(playing: Boolean) {
+            super.onPlaybackChanged(playing)
+            mainHandler.post {
+                val currentSession = session ?: return@post
+                val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+                    PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or
+                    PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                currentSession.setPlaybackState(
+                    PlaybackState.Builder().setActions(actions).setState(
+                        if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                        PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                        1f,
+                    ).build(),
+                )
+                context?.let { ctx -> broadcastMediaChange(ctx, lastPublishedNowPlaying, playing) }
+            }
+        }
         private var currentArtwork: Bitmap? = null
 
         private val artworkWorker = Executors.newSingleThreadExecutor { r ->
@@ -385,6 +433,7 @@ internal object CarPlayMediaKeys {
             updateArtwork(null)
             lastPublishedNowPlaying = null
             context?.let { ctx -> broadcastMediaChange(ctx, null, false) }
+            resetBroadcastState()
             session?.let { sess ->
                 runCatching {
                     sess.setMetadata(null)
@@ -438,6 +487,7 @@ internal object CarPlayMediaKeys {
             lastPublishedNowPlaying = null
             updateArtwork(null)
             context?.let { ctx -> broadcastMediaChange(ctx, null, false) }
+            resetBroadcastState()
             session?.apply {
                 runCatching { setMetadata(null) }
                 isActive = false

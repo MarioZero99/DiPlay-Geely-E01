@@ -45,6 +45,7 @@ class CarPlayMediaKeysBroadcastTest {
 
     @Test
     fun broadcastMediaChangeSendsAndroidMusicMetachangedIntent() {
+        CarPlayMediaKeys.resetBroadcastState()
         val nowPlaying = CarPlayNowPlaying(
             title = "Song Title",
             artist = "Song Artist",
@@ -69,5 +70,46 @@ class CarPlayMediaKeysBroadcastTest {
         val stateIntent = broadcastIntents.firstOrNull { it.action == "com.android.music.playstatechanged" }
         assertNotNull(stateIntent)
         assertEquals(true, stateIntent?.getBooleanExtra("playing", false))
+    }
+
+    @Test
+    fun broadcastMediaChangeDeduplicatesRepeatedEvents() {
+        CarPlayMediaKeys.resetBroadcastState()
+        val shadow = org.robolectric.Shadows.shadowOf(context)
+        shadow.clearBroadcastIntents()
+
+        val song1 = CarPlayNowPlaying(
+            title = "Song 1",
+            artist = "Artist 1",
+            album = "Album 1",
+            playing = true,
+        )
+
+        // First publication: 1 meta + 1 state
+        CarPlayMediaKeys.broadcastMediaChange(context, song1, playing = true)
+        assertEquals(2, shadow.broadcastIntents.size)
+
+        // Second publication with identical metadata (e.g. artwork decoded later): 0 new intents
+        CarPlayMediaKeys.broadcastMediaChange(context, song1, playing = true)
+        assertEquals(2, shadow.broadcastIntents.size)
+
+        // Playback paused: only 1 state intent, no duplicate meta intent
+        CarPlayMediaKeys.broadcastMediaChange(context, song1, playing = false)
+        assertEquals(3, shadow.broadcastIntents.size)
+        val lastIntent = shadow.broadcastIntents.last()
+        assertEquals("com.android.music.playstatechanged", lastIntent.action)
+        assertEquals(false, lastIntent.getBooleanExtra("playing", true))
+
+        // New track arrives: 1 new meta intent
+        val song2 = CarPlayNowPlaying(
+            title = "Song 2",
+            artist = "Artist 2",
+            album = "Album 2",
+            playing = false,
+        )
+        CarPlayMediaKeys.broadcastMediaChange(context, song2, playing = false)
+        assertEquals(4, shadow.broadcastIntents.size)
+        assertEquals("com.android.music.metachanged", shadow.broadcastIntents.last().action)
+        assertEquals("Song 2", shadow.broadcastIntents.last().getStringExtra("track"))
     }
 }
