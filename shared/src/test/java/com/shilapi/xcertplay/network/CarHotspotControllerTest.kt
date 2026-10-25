@@ -95,9 +95,13 @@ class CarHotspotControllerTest {
     }
 
     @Test
-    fun anAcceptedDisableThatIsNotConfirmedYetIsNotARefusal() {
-        assertNull(sessionReleaseResult(callAccepted = true, confirmedOff = false, timeoutMillis = 2_000L))
+    fun aDisableMustBeConfirmedOffToSucceed() {
         assertNull(sessionReleaseResult(callAccepted = true, confirmedOff = true, timeoutMillis = 2_000L))
+        assertNull(sessionReleaseResult(callAccepted = false, confirmedOff = true, timeoutMillis = 2_000L))
+        assertEquals(
+            "the car did not report hotspot disabled within 2000ms",
+            sessionReleaseResult(callAccepted = true, confirmedOff = false, timeoutMillis = 2_000L),
+        )
     }
 
     @Test

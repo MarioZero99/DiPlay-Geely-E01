@@ -1287,12 +1287,9 @@ class CarPlayController(
             // Which family to publish is what the last run learned, not a fresh guess each time. A run
             // that published an address the phone never answered on leaves the other family behind for
             // the next attempt, so the two get tried in turn instead of the same one failing forever.
-            // On existing Wi-Fi (Same LAN / Personal Hotspot), IPv6 is the default preference when no
-            // explicit guess is specified.
+            // When not explicitly specified, HotspotAddressPolicy defaults to IPv4 first for universal
+            // subnet routing compatibility across AP and Station modes, with scoped IPv6 fallback.
             val preferredFamily = config.wirelessAddressFamily
-                ?: if (hotspotInfo.backend == WirelessHotspotBackend.EXISTING_WIFI) {
-                    HotspotAddressPolicy.FAMILY_IPV6
-                } else null
             val addressRecovery = HotspotAddressRecovery(
                 sample = { hotspotCandidates(hotspotInfo, fallbackToSnapshot = false) },
                 cancelled = { isStaleWirelessRun(generation) },

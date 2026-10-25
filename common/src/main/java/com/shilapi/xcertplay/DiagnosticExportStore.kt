@@ -71,10 +71,17 @@ internal object DiagnosticExportStore {
 
         // b. The contract-guaranteed directory on the stick.
         for (volume in probe.volumes) {
-            if (!volume.packageWritable) continue
+            if (!volume.packageWritable && !com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) continue
             val directory = volume.packageDir?.let { File(it, "DiPlay") } ?: continue
             val file = File(directory, fileName)
-            if (!syncWriteText(file, report)) continue
+            val written = if (volume.packageWritable && syncWriteText(file, report)) {
+                true
+            } else if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+                exportViaRoot(file, report, context.cacheDir)
+            } else {
+                false
+            }
+            if (!written) continue
             if (usbPackagePath == null) usbPackagePath = file.absolutePath
             savedPaths += file.absolutePath
             scanned += file.absolutePath
@@ -82,10 +89,17 @@ internal object DiagnosticExportStore {
 
         // a. The stick's root, where a driver finds it without being told the package path.
         for (volume in probe.volumes) {
-            if (!volume.rootWritable) continue
             val root = volume.rootDir ?: continue
+            if (volume.rootErrno == "ENOTDIR") continue
             val file = File(File(root, "DiPlay"), fileName)
-            if (!syncWriteText(file, report)) continue
+            val written = if (volume.rootWritable && syncWriteText(file, report)) {
+                true
+            } else if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+                exportViaRoot(file, report, context.cacheDir)
+            } else {
+                false
+            }
+            if (!written) continue
             if (usbRootPath == null) usbRootPath = file.absolutePath
             savedPaths += file.absolutePath
             scanned += file.absolutePath
@@ -272,6 +286,48 @@ internal object DiagnosticExportStore {
      * Tells the media database where the new files are. Without this the stick's own file manager
      * shows nothing until it is unplugged and plugged back in.
      */
+    internal fun exportViaRoot(targetFile: File, report: String, cacheDir: File): Boolean {
+        if (!com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) return false
+        val parentDir = targetFile.parentFile ?: return false
+        val tempFile = File(cacheDir, "diag_export_${System.currentTimeMillis()}.tmp")
+        val targetPath = targetFile.absolutePath
+        return try {
+            FileOutputStream(tempFile).use { stream ->
+                stream.write(report.toByteArray(Charsets.UTF_8))
+                stream.fd.sync()
+            }
+            val parentPath = parentDir.absolutePath
+            val tempPath = tempFile.absolutePath
+
+            val mkdirOk = com.shilapi.xcertplay.system.RootShellBridge.execute("mkdir -p \"$parentPath\"")
+            if (!mkdirOk) {
+                DiagLog.w("DiagnosticExport", "USB root copy $targetPath failed: mkdir -p rejected")
+                return false
+            }
+            val cpOk = com.shilapi.xcertplay.system.RootShellBridge.execute("cp -f \"$tempPath\" \"$targetPath\"")
+            if (!cpOk) {
+                DiagLog.w("DiagnosticExport", "USB root copy $targetPath failed: cp rejected")
+                return false
+            }
+            val chmodOk = com.shilapi.xcertplay.system.RootShellBridge.execute("chmod 644 \"$targetPath\"")
+            if (!chmodOk) {
+                DiagLog.w("DiagnosticExport", "USB root copy $targetPath: chmod 644 rejected, proceeding")
+            }
+            val syncOk = com.shilapi.xcertplay.system.RootShellBridge.execute("sync", timeoutMillis = 5_000L)
+            if (!syncOk) {
+                DiagLog.w("DiagnosticExport", "USB root copy $targetPath failed: sync rejected or timed out")
+                return false
+            }
+            DiagLog.i("DiagnosticExport", "USB root copy $targetPath success")
+            true
+        } catch (error: Throwable) {
+            DiagLog.w("DiagnosticExport", "USB root copy $targetPath failed: ${error.message}")
+            false
+        } finally {
+            tempFile.delete()
+        }
+    }
+
     private fun announce(context: Context, paths: List<String>) {
         if (paths.isEmpty()) return
         runCatching {

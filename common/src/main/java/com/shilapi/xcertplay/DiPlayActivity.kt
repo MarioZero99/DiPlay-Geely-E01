@@ -1990,6 +1990,7 @@ class DiPlayActivity : ComponentActivity() {
     private fun publishSyncResult(generation: Int, ready: Boolean) {
         runOnUiThread {
             if (isFinishing || !syncRequestStillCurrent(generation, wirelessSyncGeneration.get())) return@runOnUiThread
+            invalidateNetworkCache()
             val connectNow = connectAfterSync
             if (connectNow) connectAfterSync = false
             if (page == "home") refreshStatus() else render()
@@ -2518,15 +2519,21 @@ class DiPlayActivity : ComponentActivity() {
         andThen: () -> Unit = {},
     ) {
         applyConnectionSetting {
-            // Written with the mode, inside the store block, so a driver who is asked to confirm and
-            // then declines is left with both as they were. Setting the flag before the dialog left the
-            // page drawing the car hotspot while storage — and the connection — still held the other
-            // mode, which is the disagreement this change exists to remove.
             pendingCarHotspotSetup = setupPending
             AirPlayPersistence.saveWirelessHotspotMode(this, mode)
-            requestWirelessSync(WirelessSyncReason.MODE_SWITCH)
-            andThen()
-            toast(getString(R.string.saved_for_your_next_connection))
+            val proceedSync = {
+                requestWirelessSync(WirelessSyncReason.MODE_SWITCH)
+                andThen()
+                toast(getString(R.string.saved_for_your_next_connection))
+            }
+            if (CarPlayBackgroundSession.hasSession()) {
+                DiagLog.i(TAG_CAR_HOTSPOT, "Mode switch to $mode: stopping active session before radio sync")
+                CarPlayBackgroundSession.stop {
+                    runOnUiThread { proceedSync() }
+                }
+            } else {
+                proceedSync()
+            }
         }
     }
 
@@ -3110,11 +3117,17 @@ class DiPlayActivity : ComponentActivity() {
             // quiet until the driver tries — the refusal is what raises it, and that has not
             // changed — and when it is raised the whole list goes up with it.
             val shown = if (blocked || readiness.blocking.isEmpty()) readiness.gaps else emptyList()
+            val hotspotNote = if (deviceSupportsWireless() && carHotspotOff()) {
+                getString(R.string.msg_car_hotspot_off, hotspotSsid())
+            } else {
+                null
+            }
             card.updateState(
                 sessionPhase(CarPlayBackgroundSession.hasSession(), CarPlayBackgroundSession.active),
                 DiPlayPreferences.phoneName(this),
                 shown.map { gapText(it, readiness.adapter, it in readiness.blocking) },
                 blocked,
+                hotspotOffNote = hotspotNote,
             )
         }
         // The quick column reads the same live values: the car can join or leave a network, and its

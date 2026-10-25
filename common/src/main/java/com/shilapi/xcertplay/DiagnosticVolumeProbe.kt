@@ -67,14 +67,21 @@ internal object DiagnosticVolumeProbe {
             val fsType = parts[2].lowercase()
             if (fsType !in targetFs) continue
             if (mountPoint == "/" || mountPoint == "/mnt" || mountPoint.startsWith("/storage/emulated") || systemPrefixes.any { mountPoint.startsWith(it) }) continue
+            if (parts.size >= 4) {
+                val options = parts[3].split(",")
+                if (options.contains("ro")) continue
+            }
             // An external volume either comes from Android vold, or is mounted under /storage/ or /mnt/
             val isLikelyExternal = dev.startsWith("/dev/block/vold/") ||
+                dev.startsWith("/dev/block/sd") ||
                 mountPoint.startsWith("/storage/") ||
                 mountPoint.startsWith("/mnt/")
             if (!isLikelyExternal) continue
             val file = File(mountPoint)
-            if (file.isDirectory && !isPrimaryStorage(file)) {
-                candidates.add(file)
+            if (!isPrimaryStorage(file)) {
+                if (file.isDirectory || (dev.startsWith("/dev/block/") && com.shilapi.xcertplay.system.RootShellBridge.isAvailable())) {
+                    candidates.add(file)
+                }
             }
         }
         return candidates
@@ -120,12 +127,16 @@ internal object DiagnosticVolumeProbe {
         }
 
         // Source 4: static vendor roots, only as a fallback when /proc/mounts yielded nothing.
-        // Each root directory itself is probed; we do NOT split its subdirectories into separate volumes.
+        // On Android, USB sticks are mounted as subdirectories under container roots (e.g. /storage/usbotg/usbotg-sda1).
+        // Only actual mounted subdirectories are volumes — the container root itself is internal flash.
         if (candidates.isEmpty()) {
             for (rootPath in vendorMountRoots) {
                 val root = File(rootPath)
                 if (!root.isDirectory || isPrimaryStorage(root)) continue
-                candidates[root.absolutePath] = root
+                val children = root.listFiles()?.filter { it.isDirectory && !isPrimaryStorage(it) }.orEmpty()
+                for (child in children) {
+                    candidates[child.absolutePath] = child
+                }
             }
         }
 

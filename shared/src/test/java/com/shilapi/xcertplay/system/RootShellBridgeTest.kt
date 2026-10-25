@@ -36,20 +36,30 @@ class RootShellBridgeTest {
     }
 
     @Test
-    fun hotspotCommandFitsTheBinderBudget() {
-        val paths = listOf(
-            "/data/app/com.shihab.diplay-1/base.apk",
-            "/data/app/com.shihab.diplay.hudtest-1/base.apk",
-        )
-        paths.forEach { path ->
-            assertTrue(RootShellBridge.shellSafeApkPath(path))
-            val wrapped = RootShellBridge.wrap(RootShellBridge.hotspotCommand(path, "enable"))
-            assertTrue(wrapped.toByteArray(Charsets.UTF_8).size <= 220)
-        }
+    fun hotspotServiceCallCommandFormatsExpectedBinderInvocation() {
+        val enableCmd = RootShellBridge.hotspotServiceCallCommand(code = 28, enable = true)
+        assertEquals("/system/bin/service call wifi 28 i32 0 i32 1", enableCmd)
+        assertTrue(RootShellBridge.wrap(enableCmd).toByteArray(Charsets.UTF_8).size <= 220)
+
+        val disableCmd = RootShellBridge.hotspotServiceCallCommand(code = 28, enable = false)
+        assertEquals("/system/bin/service call wifi 28 i32 0 i32 0", disableCmd)
+        assertTrue(RootShellBridge.wrap(disableCmd).toByteArray(Charsets.UTF_8).size <= 220)
     }
 
     @Test
-    fun aPathWithSpacesIsNotPassedToTheShell() {
-        assertFalse(RootShellBridge.shellSafeApkPath("/data/app/my app/base.apk"))
+    fun wifiServiceCommandFormatsSvcWifiInvocation() {
+        assertEquals("/system/bin/svc wifi enable", RootShellBridge.wifiServiceCommand(true))
+        assertEquals("/system/bin/svc wifi disable", RootShellBridge.wifiServiceCommand(false))
+    }
+
+    @Test
+    fun getWifiApTransactionCodeGracefullyHandlesMissingFrameworkClass() {
+        RootShellBridge.setWifiApTransactionCodeForTesting(null)
+        val code = RootShellBridge.getWifiApTransactionCode()
+        // In JVM test without android framework stub, returns null or injected value
+        assertEquals(null, code)
+
+        RootShellBridge.setWifiApTransactionCodeForTesting(32)
+        assertEquals(32, RootShellBridge.getWifiApTransactionCode())
     }
 }

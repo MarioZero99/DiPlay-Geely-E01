@@ -71,6 +71,12 @@ class DiagnosticExportStoreTest {
         assertTrue(provider.deleted)
     }
 
+    @Test fun exportViaRootGracefullyHandlesUnavailableService() {
+        val target = File("/storage/usbotg/DiPlay/report.txt")
+        // In JVM test environment, RootShellBridge is not available, exportViaRoot should safely return false without crash
+        assertFalse(DiagnosticExportStore.exportViaRoot(target, "test report", RuntimeEnvironment.getApplication().cacheDir))
+    }
+
     @Test fun selectedDocumentIsWrittenButNeverDeletedOnFailure() {
         provider.denyWrite = true
         assertThrows(SecurityException::class.java) {

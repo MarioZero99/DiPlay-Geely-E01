@@ -108,7 +108,7 @@ internal fun apWaitPlan(nativeAccepted: Boolean, timeoutMillis: Long): ApWait =
  * is what finds out whether the radio was free. A confirmed-off hotspot is success either way.
  */
 internal fun sessionReleaseResult(callAccepted: Boolean, confirmedOff: Boolean, timeoutMillis: Long): String? =
-    if (confirmedOff || callAccepted) {
+    if (confirmedOff) {
         null
     } else {
         "the car did not report hotspot disabled within ${timeoutMillis}ms"
@@ -260,7 +260,8 @@ class CarHotspotController(context: Context) {
         }
         val manager = wifi ?: return "there is no Wi-Fi service"
         val deadline = SystemClock.elapsedRealtime() + timeoutMillis
-        var accepted = false
+
+        // 1. Native reflection
         val method = setApEnabled
         if (method != null) {
             val native = try {
@@ -268,26 +269,28 @@ class CarHotspotController(context: Context) {
             } catch (_: Throwable) {
                 false
             }
-            if (native) {
-                accepted = true
-                if (awaitPhase(ApPhase.OFF, deadline, stillCurrent)) return null
+            if (native && awaitPhase(ApPhase.OFF, deadline, stillCurrent)) {
+                return null
             }
         }
-        if (!accepted && stillCurrent() && RootShellBridge.isAvailable()) {
-            val path = appContext.packageCodePath
-            if (RootShellBridge.shellSafeApkPath(path)) {
-                DiagLog.i(TAG, "Native hotspot disable was not accepted, trying root")
-                if (RootShellBridge.execute(RootShellBridge.hotspotCommand(path, "disable"))) {
-                    accepted = true
+
+        // 2. Root service call
+        if (stillCurrent() && RootShellBridge.isAvailable()) {
+            val code = RootShellBridge.getWifiApTransactionCode()
+            if (code != null) {
+                DiagLog.i(TAG, "Trying root service call wifi $code to disable hotspot")
+                RootShellBridge.execute(RootShellBridge.hotspotServiceCallCommand(code, enable = false))
+                if (awaitPhase(ApPhase.OFF, deadline, stillCurrent)) {
+                    return null
                 }
             } else {
-                DiagLog.w(TAG, "Hotspot apk path is not safe to pass to a root shell")
+                DiagLog.w(TAG, "Cannot resolve WiFi AP transaction code for service call disable")
             }
         }
+
         if (!stillCurrent()) return null
-        val confirmed = awaitPhase(ApPhase.OFF, deadline, stillCurrent)
-        if (!stillCurrent()) return null
-        return sessionReleaseResult(accepted, confirmed, timeoutMillis)
+        val confirmed = isHotspotFullyOff()
+        return if (confirmed) null else "the car did not report hotspot disabled within ${timeoutMillis}ms"
     }
 
     private fun ensureStation(enabled: Boolean, timeoutMillis: Long, stillCurrent: () -> Boolean): Boolean {
@@ -302,7 +305,7 @@ class CarHotspotController(context: Context) {
         if (awaitStation(enabled, start + nativeMillis, stillCurrent)) return true
         if (!stillCurrent()) return false
         if (RootShellBridge.isAvailable()) {
-            val command = if (enabled) "/system/bin/svc wifi enable" else "/system/bin/svc wifi disable"
+            val command = RootShellBridge.wifiServiceCommand(enabled)
             DiagLog.i(TAG, "Native station ${if (enabled) "enable" else "disable"} unconfirmed, trying root")
             RootShellBridge.execute(command)
         }
@@ -313,23 +316,32 @@ class CarHotspotController(context: Context) {
     private fun enableAccessPointUntil(timeoutMillis: Long, stillCurrent: () -> Boolean): HotspotStartResult {
         val manager = wifi ?: return HotspotStartResult.NO_WIFI_SERVICE
         val start = SystemClock.elapsedRealtime()
+        val deadline = start + timeoutMillis
+
+        // 1. Native reflection
         val native = setApEnabled?.let { enableAccessPoint(it, manager) }
-        val plan = apWaitPlan(nativeAccepted = native == true, timeoutMillis = timeoutMillis)
-        val deadline = start + plan.waitMillis
-        if (plan.escalateToRoot && stillCurrent() && RootShellBridge.isAvailable()) {
-            val path = appContext.packageCodePath
-            if (RootShellBridge.shellSafeApkPath(path)) {
-                DiagLog.i(TAG, "Native hotspot enable was not accepted, trying root")
-                RootShellBridge.execute(RootShellBridge.hotspotCommand(path, "enable"))
+        if (native == true && awaitPhase(ApPhase.ON, deadline, stillCurrent)) {
+            return HotspotStartResult.READY
+        }
+
+        // 2. Root service call
+        if (stillCurrent() && RootShellBridge.isAvailable()) {
+            val code = RootShellBridge.getWifiApTransactionCode()
+            if (code != null) {
+                DiagLog.i(TAG, "Trying root service call wifi $code to enable hotspot")
+                RootShellBridge.execute(RootShellBridge.hotspotServiceCallCommand(code, enable = true))
+                if (awaitPhase(ApPhase.ON, deadline, stillCurrent)) {
+                    return HotspotStartResult.READY
+                }
             } else {
-                DiagLog.w(TAG, "Hotspot apk path is not safe to pass to a root shell")
+                DiagLog.w(TAG, "Cannot resolve WiFi AP transaction code for service call enable")
             }
         }
-        if (awaitPhase(ApPhase.ON, deadline, stillCurrent)) return HotspotStartResult.READY
+
         if (!stillCurrent()) return HotspotStartResult.TIMED_OUT
         return when {
             isHotspotFullyOn() -> HotspotStartResult.READY
-            native == null -> HotspotStartResult.PERMISSION_REQUIRED
+            native == null && !RootShellBridge.isAvailable() -> HotspotStartResult.PERMISSION_REQUIRED
             else -> HotspotStartResult.TIMED_OUT
         }
     }

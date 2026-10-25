@@ -71,7 +71,7 @@ class HeroStageCard(
     private val wiredNote: TextView
 
     /** The car-hotspot reminder, kept as a field so a wired choice can put it away. */
-    private val hotspotNoteView: TextView?
+    private val hotspotNoteView: TextView
 
     private var currentMode: Boolean? = initialConnectionMode
     private var paintedPhase: SessionPhase? = null
@@ -148,10 +148,9 @@ class HeroStageCard(
         notes.addView(gapsBox, LayoutParams(-1, -2))
         supportedConnectionView?.let { notes.addView(it, LayoutParams(-1, -2)) }
         adapterStatusView?.let { notes.addView(it, LayoutParams(-1, -2)) }
-        hotspotNoteView = hotspotOffNote?.let { note ->
-            label(note, 15, palette.accent).also {
-                notes.addView(it, LayoutParams(-1, -2).apply { topMargin = dp(6) })
-            }
+        hotspotNoteView = label(hotspotOffNote ?: "", 15, palette.accent).also {
+            it.visibility = if (hotspotOffNote != null) View.VISIBLE else View.GONE
+            notes.addView(it, LayoutParams(-1, -2).apply { topMargin = dp(6) })
         }
         setupError?.let {
             notes.addView(label(it, 15, palette.accent), LayoutParams(-1, -2).apply { topMargin = dp(6) })
@@ -221,7 +220,13 @@ class HeroStageCard(
     }
 
     /** In-place repaint: the tick calls this every second, so nothing here may rebuild the card. */
-    fun updateState(phase: SessionPhase, pairedPhone: String?, readinessGaps: List<String>?, isBlocked: Boolean) {
+    fun updateState(
+        phase: SessionPhase,
+        pairedPhone: String?,
+        readinessGaps: List<String>?,
+        isBlocked: Boolean,
+        hotspotOffNote: String? = null,
+    ) {
         currentPhase = phase
 
         pill.text = when (phase) {
@@ -257,18 +262,17 @@ class HeroStageCard(
         }
 
         paintGaps(gaps, blocked)
-        // The hotspot is the wireless route's business; a wired session never asks about one.
-        hotspotNoteView?.visibility = if (wirelessRoute) View.VISIBLE else View.GONE
-
-        // The pulse and the static alpha are exclusive: the animator drives this property every
-        // frame, so writing 0.65 underneath it was a value that could only ever be overwritten —
-        // and would freeze at the wrong brightness the moment the animator was stopped.
-        if (phase == SessionPhase.Connecting) {
-            startConnectingPulse()
+        // The hotspot is the wireless route's business; update or hide dynamically
+        if (hotspotOffNote != null && wirelessRoute) {
+            hotspotNoteView.text = hotspotOffNote
+            hotspotNoteView.visibility = View.VISIBLE
         } else {
-            stopConnectingPulse()
-            emblem.alpha = if (phase == SessionPhase.Live) 1.0f else 0.65f
+            hotspotNoteView.visibility = View.GONE
         }
+
+        // Keep the emblem solid and calm during connecting and live states to prevent screen flickering
+        stopConnectingPulse()
+        emblem.alpha = if (phase == SessionPhase.Live || phase == SessionPhase.Connecting) 1.0f else 0.65f
 
         // The card says what the session is doing and what the button will do next; it does not say
         // "disconnect on the home page first", because this *is* the home page — that line belongs
