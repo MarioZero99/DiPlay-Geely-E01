@@ -724,7 +724,7 @@ private class AudioRenderer(
                     // A brake or silence loop stores its own mark. Cold start waits until the first packet.
                     if (gateWaitMarkNs == 0L && queue.isNotEmpty()) {
                         gateWaitMarkNs = System.nanoTime()
-                    } else if (gateWaitMarkNs == 0L) {
+                    } else if (gateWaitMarkNs == 0L && !playbackStarted) {
                         val first = firstArrivalNs.get()
                         if (first != 0L) gateWaitMarkNs = first
                     }
@@ -1238,7 +1238,7 @@ private class AudioRenderer(
         // do NOT call track.pause() and do NOT escalate jitter buffer to 2.2s.
         // Instead, smoothly fade out valid sound, reset gateOpened to re-buffer next song cleanly,
         // and continuously feed 20ms silence chunks to AudioTrack so MT6735 ALSA DMA never runs dry.
-        if (playbackStarted && isWirelessMedia && queue.isEmpty()) {
+        if (playbackStarted && isWirelessMedia && (!gateOpened || queue.isEmpty())) {
             val headroomBytes = if (bytesPerSecond > 0) bytesPerSecond * SILENCE_HEADROOM_MS / 1000L else 0L
             if (unplayedBytes <= headroomBytes) {
                 if (!inSilencePadding) {

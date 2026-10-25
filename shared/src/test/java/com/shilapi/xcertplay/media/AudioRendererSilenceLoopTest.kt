@@ -82,10 +82,23 @@ class AudioRendererSilenceLoopTest {
             }
             assertTrue("断流期间末端必须持续写入全0静音帧填缝，防止硬件打结爆音", zeroWrites.isNotEmpty())
 
-            // 3. 再次注入新歌数据包 (50包蓄满开闸)，验证无缝起播且无异常
+            // 3. 模拟新曲首批数据包到达（未满 47 包门限，例如 5 包），验证在静音掩护下平稳蓄水，绝不中断静音
             writtenBuffers.clear()
-            repeat(50) { seq ->
+            repeat(5) { seq ->
                 sink.onAudioRtp(96, lpcmFormat(), rtpPacket(loudPcm), sample = (50 + seq) * 480)
+            }
+            Thread.sleep(100)
+
+            assertEquals("蓄水期间 AudioTrack 依然维持 PLAYING", AudioTrack.PLAYSTATE_PLAYING, track.playState)
+            val bufferingZeroWrites = synchronized(writtenBuffers) {
+                writtenBuffers.filter { buf -> buf.isNotEmpty() && buf.all { it == 0.toByte() } }
+            }
+            assertTrue("蓄水期间队列非空但门控未开，必须持续写入静音掩护声卡", bufferingZeroWrites.isNotEmpty())
+
+            // 4. 继续注入剩余数据包直至蓄满 50 包 (>= 47 门限)，触发开闸起播
+            writtenBuffers.clear()
+            repeat(45) { seq ->
+                sink.onAudioRtp(96, lpcmFormat(), rtpPacket(loudPcm), sample = (55 + seq) * 480)
             }
             Thread.sleep(150)
 
