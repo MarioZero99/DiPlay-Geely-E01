@@ -317,7 +317,7 @@ class QuickHudView(
             }
         }
         removeCallbacks(refreshTelemetryTask)
-        postDelayed(refreshTelemetryTask, 350L)
+        postDelayed(refreshTelemetryTask, TELEMETRY_REFRESH_INTERVAL_MILLIS)
     }
 
     private fun stopTelemetrySampling() {

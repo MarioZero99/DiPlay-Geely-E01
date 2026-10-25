@@ -1047,15 +1047,22 @@ class CarPlayHostActivity : ComponentActivity() {
             onDismiss = { hideQuickHud() },
             onSampleTelemetry = { callback ->
                 val isWired = !wirelessEnabled
-                val mediaMetrics = sink?.currentTelemetry()?.let {
-                    MediaMetrics(
-                        rxFps = it.rxFps,
-                        shownFps = it.shownFps,
-                        touchLatencyMs = it.touchLatencyMs,
-                        droppedFrames = it.recoveries,
-                    )
-                }
-                PerformanceMonitor.sampleAsync(this, isWired, mediaMetrics, callback)
+                val appContext = applicationContext
+                PerformanceMonitor.sampleAsync(
+                    context = appContext,
+                    isWired = isWired,
+                    mediaProvider = {
+                        sink?.currentTelemetry()?.let {
+                            MediaMetrics(
+                                rxFps = it.rxFps,
+                                shownFps = it.shownFps,
+                                touchLatencyMs = it.touchLatencyMs,
+                                droppedFrames = it.recoveries,
+                            )
+                        }
+                    },
+                    onResult = callback,
+                )
             },
         ).also { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         videoView = video
