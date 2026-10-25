@@ -57,6 +57,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.shilapi.xcertplay.airplay.AirPlayConfig
+import com.shilapi.performance.PerformanceMonitor
+import com.shilapi.performance.model.MediaMetrics
 import com.shilapi.xcertplay.airplay.AirPlayDisplaySettings
 import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeBasis
 import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeMm
@@ -1043,6 +1045,18 @@ class CarPlayHostActivity : ComponentActivity() {
             onToggleNight = { toggleQuickHudNight() },
             onExit = { exitFromQuickHud() },
             onDismiss = { hideQuickHud() },
+            onSampleTelemetry = { callback ->
+                val isWired = !wirelessEnabled
+                val mediaMetrics = sink?.currentTelemetry()?.let {
+                    MediaMetrics(
+                        rxFps = it.rxFps,
+                        shownFps = it.shownFps,
+                        touchLatencyMs = it.touchLatencyMs,
+                        droppedFrames = it.recoveries,
+                    )
+                }
+                PerformanceMonitor.sampleAsync(this, isWired, mediaMetrics, callback)
+            },
         ).also { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         videoView = video
         connectionPanel = panel

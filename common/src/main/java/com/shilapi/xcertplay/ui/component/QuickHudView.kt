@@ -11,6 +11,9 @@ import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.shilapi.performance.PerformanceMonitor
+import com.shilapi.performance.model.PerformanceSnapshot
+import com.shilapi.xcertplay.ExperimentalFeatures
 import com.shilapi.xcertplay.host.R
 
 /**
@@ -41,6 +44,7 @@ class QuickHudView(
     private val onToggleNight: () -> Unit,
     private val onExit: () -> Unit,
     private val onDismiss: () -> Unit,
+    private val onSampleTelemetry: (((PerformanceSnapshot) -> Unit) -> Unit)? = null,
 ) : FrameLayout(context) {
 
     private val disconnectButton: TextView
@@ -50,6 +54,8 @@ class QuickHudView(
     private val channelStrip: HorizontalScrollView
     private val channelRow: LinearLayout
     private val channels = mutableListOf<TextView>()
+    private var telemetryBar: LinearLayout? = null
+    private var telemetryLabel: TextView? = null
 
     private var isNight = night
     private var audioStream = audioStream
@@ -60,6 +66,18 @@ class QuickHudView(
         paintExit()
     }
     private val autoHide = Runnable { onDismiss() }
+
+    private val refreshTelemetryTask = object : Runnable {
+        override fun run() {
+            if (visibility != View.VISIBLE) return
+            onSampleTelemetry?.invoke { snapshot ->
+                if (visibility == View.VISIBLE) {
+                    telemetryLabel?.text = formatTelemetryLine(snapshot)
+                }
+            }
+            postDelayed(this, TELEMETRY_REFRESH_INTERVAL_MILLIS)
+        }
+    }
 
     init {
         setBackgroundColor(Color.TRANSPARENT)
@@ -140,6 +158,35 @@ class QuickHudView(
             channelStrip,
             LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) },
         )
+
+        if (ExperimentalFeatures.enabled) {
+            val strip = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = rounded(BAR_BG, 12)
+                setPadding(dp(14), dp(6), dp(14), dp(6))
+                isClickable = true
+                setOnClickListener { /* 消费点击事件，防穿透到蒙层 */ }
+            }
+            val label = TextView(context).apply {
+                textSize = 12f
+                setTextColor(TEXT_MUTED)
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                gravity = Gravity.CENTER
+                text = "..."
+                isSingleLine = true
+                isClickable = true
+                setOnClickListener { /* 消费点击事件，防穿透到蒙层 */ }
+            }
+            strip.addView(label)
+            telemetryBar = strip
+            telemetryLabel = label
+            column.addView(
+                strip,
+                LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(6) },
+            )
+        }
+
         addView(
             column,
             LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(16) },
@@ -161,11 +208,15 @@ class QuickHudView(
         channelStrip.visibility = View.GONE
         visibility = View.VISIBLE
         scheduleAutoHide()
+        if (ExperimentalFeatures.enabled && onSampleTelemetry != null) {
+            startTelemetrySampling()
+        }
     }
 
     /** Hides the bar and drops every pending timer; safe to call when it is already hidden. */
     fun dismissNow() {
         cancelTimers()
+        stopTelemetrySampling()
         channelStrip.visibility = View.GONE
         exitArmed = false
         visibility = View.GONE
@@ -255,6 +306,26 @@ class QuickHudView(
     private fun cancelTimers() {
         removeCallbacks(autoHide)
         removeCallbacks(disarmExit)
+        stopTelemetrySampling()
+    }
+
+    private fun startTelemetrySampling() {
+        PerformanceMonitor.resetCpuBaseline()
+        onSampleTelemetry?.invoke { snapshot ->
+            if (visibility == View.VISIBLE) {
+                telemetryLabel?.text = formatTelemetryLine(snapshot)
+            }
+        }
+        removeCallbacks(refreshTelemetryTask)
+        postDelayed(refreshTelemetryTask, 350L)
+    }
+
+    private fun stopTelemetrySampling() {
+        removeCallbacks(refreshTelemetryTask)
+    }
+
+    private fun formatTelemetryLine(snapshot: PerformanceSnapshot): String {
+        return "${snapshot.cpuText}  |  ${snapshot.memoryText}  |  ${snapshot.linkText}  |  ${snapshot.mediaText}"
     }
 
     private fun action(label: String, onClick: () -> Unit): TextView = TextView(context).apply {
@@ -300,6 +371,7 @@ class QuickHudView(
         const val AUTO_HIDE_MILLIS = 6_000L
         const val CHANNEL_WINDOW_MILLIS = 20_000L
         const val EXIT_ARM_MILLIS = 3_000L
+        const val TELEMETRY_REFRESH_INTERVAL_MILLIS = 2500L
 
         /** The stream numbers the settings page offers; the same range, without the grid. */
         val CHANNEL_RANGE = 0..20
