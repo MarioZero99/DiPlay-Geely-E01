@@ -1,14 +1,17 @@
 package com.shilapi.xcertplay
 
-import android.app.AlertDialog
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Environment
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import com.shilapi.xcertplay.host.R
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -16,7 +19,6 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import org.robolectric.shadows.ShadowAlertDialog
 import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.util.ReflectionHelpers
 import java.io.File
@@ -48,53 +50,64 @@ class DiagnosticExportUiTest {
         assertTrue(header, header.indexOf("Log losses") < header.indexOf("--- Performance"))
     }
 
-    /**
-     * One exit, and the dialog says what actually happened: no stick here, so it must not claim one,
-     * and the probe's own evidence line has to appear underneath the sentence.
-     */
-    @Test fun oneButtonExportReportsTheRealDestinationAndTheProbeLine() {
+    /** No stick: open phone storage, save, and the card names the file under Download/DiPlay. */
+    @Test fun savingPhoneStorageWritesUnderDownloadDiPlay() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
         val activity = controller.get()
-        val context = activity.applicationContext
-        registerReportProvider(context)
+        registerReportProvider(activity.applicationContext)
         try {
-            ReflectionHelpers.callInstanceMethod<Unit>(activity, "exportDiagnostics")
-            val saved = awaitDialog()
-            val texts = descendants(saved.window!!.decorView).filterIsInstance<TextView>().map { it.text.toString() }
-            // Robolectric has no USB volume: the title and the body must both refuse to claim one.
-            assertTrue(texts.any { it.contains("No writable USB drive detected") })
-            assertTrue(texts.any { it.contains("Download/DiPlay/DiPlay-") })
-            // The evidence line comes from the probe, not from the copy.
-            assertTrue(texts.any { it.contains("未发现外置存储卷") || it.contains("No external volume") })
-            saved.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
-            shadowOf(Looper.getMainLooper()).idle()
-            val viewer = ShadowAlertDialog.getLatestAlertDialog()
-            assertTrue(descendants(viewer.window!!.decorView).filterIsInstance<TextView>()
-                .any { it.isTextSelectable && it.text.contains("Android 9 / API 28") })
-            viewer.dismiss()
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
+            clickRow(activity, activity.getString(R.string.export_internal_storage))
+            clickRow(activity, activity.getString(R.string.export_save_to_disk))
+            val body = awaitText(activity, "/DiPlay/DiPlay-")
+            val downloads = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "DiPlay",
+            )
+            val saved = downloads.listFiles()!!.single { it.name.startsWith("DiPlay-") }
+            assertTrue(body.text.contains(saved.absolutePath))
+            assertTrue(saved.readText().contains("API ${android.os.Build.VERSION.SDK_INT}"))
         } finally {
             controller.pause().stop().destroy()
         }
     }
 
-    /** The other branch: a stick that took the bytes must be reported as the place they went. */
-    @Test fun aReportOnAStickSaysItWentToTheStickAndNamesTheFile() {
+    /**
+     * A stick is confirmed by the files on it. Saving from a subfolder still writes the mount root,
+     * and tapping a file leaves the card and the save button where they are.
+     */
+    @Test fun browsingAStickShowsItsFilesAndSavesAtTheMountRoot() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
         val activity = controller.get()
         val context = activity.applicationContext
         registerReportProvider(context)
         val stick = File(context.cacheDir, "usb-otg-sda1").apply { deleteRecursively(); mkdirs() }
+        File(stick, "readme.txt").writeText("hello")
+        File(stick, "Music").mkdirs()
         ReflectionHelpers.getField<MutableSet<String>>(activity, "mountedUsbPaths").add(stick.absolutePath)
         try {
-            ReflectionHelpers.callInstanceMethod<Unit>(activity, "exportDiagnostics")
-            val saved = awaitDialog()
-            assertEquals("Diagnostic report saved", shadowOf(saved).title.toString())
-            val body = descendants(saved.window!!.decorView).filterIsInstance<TextView>()
-                .first { it.text.contains("Report was saved to USB drive") }
-            val path = body.text.lines().first { it.contains("usb-otg-sda1") }
-            assertTrue("the file must exist where the dialog says it is", File(path).isFile)
-            assertTrue(File(path).readText().contains("Android 9 / API 28"))
-            saved.dismiss()
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
+            awaitText(activity, stick.name)
+            awaitText(activity, stick.absolutePath)
+            clickRow(activity, stick.name)
+            awaitText(activity, "readme.txt")
+            awaitText(activity, "Music/")
+            texts(activity).first { it.text == "readme.txt" }.performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            val save = texts(activity).first { it.text == activity.getString(R.string.export_save_to_disk) }
+            assertTrue(save.isEnabled)
+            assertTrue(save.isAttachedToWindow)
+            clickRow(activity, "Music/")
+            awaitText(activity, activity.getString(R.string.export_empty))
+            val whileInside = texts(activity).map { it.text.toString() }
+            assertTrue(whileInside.any { it == File(stick, "DiPlay").absolutePath })
+            assertFalse(whileInside.any { it.contains("/Music/DiPlay") })
+            clickRow(activity, activity.getString(R.string.export_save_to_disk))
+            val body = awaitText(activity, "/DiPlay/DiPlay-")
+            val saved = File(stick, "DiPlay").listFiles()!!.single { it.isFile }
+            assertEquals(saved.absolutePath, body.text.lines().first { it.contains("usb-otg-sda1") })
+            assertFalse(File(stick, "Music/DiPlay").exists())
+            assertNotNull(texts(activity).firstOrNull { it.text == activity.getString(R.string.share) })
         } finally {
             stick.deleteRecursively()
             controller.pause().stop().destroy()
@@ -147,14 +160,26 @@ class DiagnosticExportUiTest {
         ShadowContentResolver.registerProviderInternal(authority, DiagnosticReportProvider().apply { attachInfo(context, info) })
     }
 
-    private fun awaitDialog(): AlertDialog {
+    private fun awaitText(activity: DiPlayActivity, snippet: String): TextView {
         val deadline = System.nanoTime() + 5_000_000_000L
-        while (ShadowAlertDialog.getLatestAlertDialog() == null && System.nanoTime() < deadline) {
-            Thread.sleep(20)
+        while (System.nanoTime() < deadline) {
             shadowOf(Looper.getMainLooper()).idle()
+            val hit = texts(activity).firstOrNull { it.text?.contains(snippet) == true }
+            if (hit != null) return hit
+            Thread.sleep(20)
         }
-        return requireNotNull(ShadowAlertDialog.getLatestAlertDialog())
+        error("timed out waiting for $snippet")
     }
+
+    private fun clickRow(activity: DiPlayActivity, snippet: String) {
+        val label = awaitText(activity, snippet)
+        var current: View = label
+        while (!current.isClickable) current = current.parent as View
+        current.performClick()
+    }
+
+    private fun texts(activity: DiPlayActivity): List<TextView> =
+        descendants(activity.findViewById(android.R.id.content)).filterIsInstance<TextView>().toList()
 
     private fun descendants(view: View): Sequence<View> = sequence {
         yield(view)

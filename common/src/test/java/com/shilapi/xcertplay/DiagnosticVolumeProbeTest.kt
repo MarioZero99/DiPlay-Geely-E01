@@ -1,7 +1,10 @@
 package com.shilapi.xcertplay
 
 import android.content.ContextWrapper
-import org.junit.Assert.*
+import android.os.Environment
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -13,84 +16,38 @@ import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 // Robolectric 4.17 最低只支持 SDK 23：它的 DefaultSdkProvider 里注册的是 23..37，写 22 会在
-// 加载 runner 时直接报 unsupported SDK，测试一个都跑不到。这里验证的是卷枚举与 errno 格式化的
-// 逻辑，API 22 的平台差异由 Task 5 在车机上验，不靠单测假装覆盖。
+// 加载 runner 时直接报 unsupported SDK，测试一个都跑不到。这里验证的是卷枚举，API 22 的平台差异
+// 在车机上验，不靠单测假装覆盖。
 @Config(sdk = [23], manifest = Config.NONE)
 class DiagnosticVolumeProbeTest {
     @get:Rule val temp = TemporaryFolder()
     private val context get() = RuntimeEnvironment.getApplication()
 
-    @Test fun emptyVolumesGeneratesClearSummary() {
-        val summary = DiagnosticVolumeProbe.probe(context)
-        assertTrue(summary.summaryLine.contains("未发现外置存储卷") || summary.summaryLine.contains("No external volume"))
-    }
-
-    @Test fun detectsSecondaryVolumeFromExternalFilesDirs() {
-        val fakeUsbRoot = temp.newFolder("usbotg-sda1")
-        val fakePkgDir = File(fakeUsbRoot, "Android/data/${context.packageName}/files").apply { mkdirs() }
-
-        val contextWithUsb = object : ContextWrapper(context) {
-            override fun getExternalFilesDirs(type: String?): Array<File?> {
-                return arrayOf(context.getExternalFilesDir(null), fakePkgDir)
-            }
+    @Test fun candidatesUsesVolumeRootNotThePackageFilesDir() {
+        val usbRoot = temp.newFolder("usbotg-sda1")
+        val pkg = File(usbRoot, "Android/data/${context.packageName}/files").apply { mkdirs() }
+        val music = File(usbRoot, "MyMusic").apply { mkdirs() }
+        val wrapped = object : ContextWrapper(context) {
+            override fun getExternalFilesDirs(type: String?): Array<File?> =
+                arrayOf(context.getExternalFilesDir(null), pkg)
         }
-        val summary = DiagnosticVolumeProbe.probe(contextWithUsb)
-        assertEquals(1, summary.volumes.size)
-        val vol = summary.volumes.first()
-        assertEquals("usbotg-sda1", vol.name)
-        assertTrue(vol.packageWritable)
-        assertTrue(vol.rootWritable)
-        assertTrue(summary.summaryLine.contains("usbotg-sda1"))
+        val found = DiagnosticVolumeProbe.candidates(wrapped, emptySet(), procMountsFile = null)
+        assertTrue(found.any { it.absolutePath == usbRoot.absolutePath })
+        assertFalse(found.any { it.absolutePath == pkg.absolutePath })
+        assertFalse(found.any { it.absolutePath == music.absolutePath })
     }
 
-    @Test fun aVolumeRootBlockedByAFileIsReportedAsNotADirectory() {
-        val fakeUsbRoot = temp.newFolder("usbotg-sda1")
-        val fakePkgDir = File(fakeUsbRoot, "Android/data/${context.packageName}/files").apply { mkdirs() }
-        // The probe's own write test must never claim the root is writable when a file of the same
-        // name is in the way: mkdirs() fails and the real reason has to reach the screen.
-        File(fakeUsbRoot, "DiPlay").writeText("blocks the report directory")
-
-        val contextWithUsb = object : ContextWrapper(context) {
-            override fun getExternalFilesDirs(type: String?): Array<File?> {
-                return arrayOf(context.getExternalFilesDir(null), fakePkgDir)
-            }
-        }
-        val vol = DiagnosticVolumeProbe.probe(contextWithUsb).volumes.single()
-        assertFalse(vol.rootWritable)
-        assertTrue(vol.packageWritable)
-        assertEquals("ENOTDIR", vol.rootErrno)
-    }
-
-    @Test fun formatsPackageDirWritableAndRootEaccesTruthfully() {
-        val result = VolumeProbeResult(
-            name = "usbotg-sda1",
-            rootDir = File("/storage/usbotg/usbotg-sda1"),
-            rootWritable = false,
-            rootErrno = "EACCES",
-            packageDir = File("/storage/usbotg/usbotg-sda1/Android/data/com.shilapi.xcertplay/files"),
-            packageWritable = true,
-            packageErrno = null,
-        )
-        val line = DiagnosticVolumeProbe.formatSummary(listOf(result))
-        assertTrue(line.contains("usbotg-sda1"))
-        assertTrue(line.contains("可写(包目录)"))
-        assertTrue(line.contains("EACCES"))
-    }
-
-    @Test fun capturesExtraMountPathsFromMountedBroadcast() {
+    @Test fun candidatesKeepsAMountedBroadcastAndDropsTheHeadUnit() {
         val mountedDir = temp.newFolder("mnt-media-rw-usb")
-        val summary = DiagnosticVolumeProbe.probe(context, setOf(mountedDir.absolutePath))
-        assertTrue(summary.volumes.any { it.name == "mnt-media-rw-usb" })
-    }
-
-    /**
-     * The head unit broadcasts the same mount action for its own storage. Counting that as a stick
-     * would make every report "saved to USB drive", which is the false claim this path exists to stop.
-     */
-    @Test fun theHeadUnitsOwnStorageIsNeverCountedAsAStick() {
-        val primary = android.os.Environment.getExternalStorageDirectory()
-        val summary = DiagnosticVolumeProbe.probe(context, setOf(primary.absolutePath))
-        assertFalse(summary.volumes.any { it.rootDir?.absolutePath == primary.absolutePath })
+        val primary = Environment.getExternalStorageDirectory()
+        val found = DiagnosticVolumeProbe.candidates(
+            context,
+            setOf(mountedDir.absolutePath, primary.absolutePath, "/mnt/media_rw"),
+            procMountsFile = null,
+        )
+        assertTrue(found.any { it.absolutePath == mountedDir.absolutePath })
+        assertFalse(found.any { it.absolutePath == primary.absolutePath })
+        assertFalse(found.any { it.absolutePath == "/mnt/media_rw" })
     }
 
     @Test fun parsesProcMountsAndFiltersNonExternalFs() {
@@ -126,22 +83,6 @@ class DiagnosticVolumeProbeTest {
         assertEquals("/storage/USB DISK", DiagnosticVolumeProbe.unescapeMountPoint("/storage/USB\\040DISK"))
         assertEquals("/mnt/media_rw/USB 1", DiagnosticVolumeProbe.unescapeMountPoint("/mnt/media_rw/USB\\0401"))
         assertEquals("/normal/path", DiagnosticVolumeProbe.unescapeMountPoint("/normal/path"))
-    }
-
-    @Test fun probeTreatsMountPointItselfAsDiscreteVolumeWithoutSplittingSubdirectories() {
-        val usbRoot = temp.newFolder("real-usb")
-        val subDir = File(usbRoot, "MyMusic").apply { mkdirs() }
-        val pkgDir = File(usbRoot, "Android/data/${context.packageName}/files").apply { mkdirs() }
-
-        val mountsFile = temp.newFile("mounts")
-        mountsFile.writeText("/dev/block/vold/8_1 ${usbRoot.absolutePath} vfat rw 0 0\n")
-
-        val summary = DiagnosticVolumeProbe.probe(context, procMountsFile = mountsFile)
-        assertEquals(1, summary.volumes.size)
-        val vol = summary.volumes.first()
-        assertEquals(usbRoot.absolutePath, vol.rootDir?.absolutePath)
-        assertEquals(pkgDir.absolutePath, vol.packageDir?.absolutePath)
-        assertFalse("Subdirectory must not become its own volume", summary.volumes.any { it.rootDir?.absolutePath == subDir.absolutePath })
     }
 
     @Test fun filtersOutLinuxHostMountsLikeHomeAndBoot() {

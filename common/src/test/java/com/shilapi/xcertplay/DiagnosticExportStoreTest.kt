@@ -1,134 +1,73 @@
 package com.shilapi.xcertplay
 
-import android.content.ContentProvider
-import android.content.ContentValues
-import android.content.pm.ProviderInfo
-import android.database.Cursor
-import android.net.Uri
-import android.os.ParcelFileDescriptor
-import android.provider.MediaStore
-import org.junit.Assert.*
-import org.junit.Before
+import android.os.Environment
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import org.robolectric.shadows.ShadowContentResolver
 import java.io.File
-import java.io.IOException
 
-/** Exercise the Android 10 storage path, including OEM/provider failure responses. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [29], manifest = Config.NONE)
+@Config(sdk = [28])
 class DiagnosticExportStoreTest {
-    private lateinit var provider: DownloadsProvider
-    private val resolver get() = RuntimeEnvironment.getApplication().contentResolver
+    private val context get() = RuntimeEnvironment.getApplication()
 
-    @Before fun setup() {
-        val context = RuntimeEnvironment.getApplication()
-        provider = DownloadsProvider(File(context.cacheDir, "export-test.txt"))
-        provider.attachInfo(context, ProviderInfo().apply { authority = "media" })
-        ShadowContentResolver.registerProviderInternal("media", provider)
+    @Test fun foldersKeepTheOnlyListedCopyOfTheStick() {
+        val raw = File(context.cacheDir, "mnt/media_rw/usbotg-sda1").apply { mkdirs() }
+        File(raw, "song.mp3").writeText("a")
+        val folders = DiagnosticExportStore.folders(context, setOf(raw.absolutePath), procMountsFile = null)
+        assertTrue(folders.any { it.usb && it.directory.absolutePath == raw.absolutePath })
+        assertFalse(File(raw, "DiPlay").exists())
+        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        assertEquals(downloads.absolutePath, folders.last().directory.absolutePath)
+        assertFalse(folders.last().usb)
     }
 
-    @Test fun android10SavesUtf8ReportToDownloadsAndPublishesAfterClosingIt() {
-        val report = "DiPlay · diagnostic report\nVideo: H.264\n"
-        val uri = DiagnosticExportStore.saveToDownloads(resolver, "DiPlay-test.txt", report)
-        assertEquals(provider.uri, uri)
-        assertEquals(report, provider.file.readText())
-        assertEquals("Download/DiPlay", provider.insertValues!!.getAsString(MediaStore.Downloads.RELATIVE_PATH))
-        assertEquals("text/plain", provider.insertValues!!.getAsString(MediaStore.Downloads.MIME_TYPE))
-        assertEquals(1, provider.insertValues!!.getAsInteger(MediaStore.Downloads.IS_PENDING))
-        assertEquals(0, provider.publishValues!!.getAsInteger(MediaStore.Downloads.IS_PENDING))
-        assertEquals(report, provider.contentAtPublish)
-        assertFalse(provider.deleted)
+    @Test fun foldersPreferTheStorageCopyWhenBothList() {
+        val raw = File(context.cacheDir, "mnt/media_rw/usbotg-sda1").apply { mkdirs() }
+        val shown = File(context.cacheDir, "storage/usbotg/usbotg-sda1").apply { mkdirs() }
+        val folders = DiagnosticExportStore.folders(
+            context,
+            setOf(raw.absolutePath, shown.absolutePath),
+            procMountsFile = null,
+        )
+        val sticks = folders.filter { it.directory.name == "usbotg-sda1" }
+        assertEquals(shown.absolutePath, sticks.single().directory.absolutePath)
     }
 
-    @Test fun unavailableDownloadsDoesNotReturnFalseSuccess() {
-        provider.refuseInsert = true
-        assertThrows(IOException::class.java) {
-            DiagnosticExportStore.saveToDownloads(resolver, "test.txt", "report")
+    @Test fun foldersDropAPathTheAppCannotList() {
+        val blocked = File(context.cacheDir, "not-a-directory").apply { writeText("x") }
+        val folders = DiagnosticExportStore.folders(context, setOf(blocked.absolutePath), procMountsFile = null)
+        assertTrue(folders.none { it.directory.absolutePath == blocked.absolutePath })
+    }
+
+    @Test fun candidatesReturnsTheMountRootNotThePackageFilesDir() {
+        val usbRoot = File(context.cacheDir, "real-usb").apply { mkdirs() }
+        File(usbRoot, "MyMusic").mkdirs()
+        val pkg = File(usbRoot, "Android/data/${context.packageName}/files").apply { mkdirs() }
+        val mounts = File(context.cacheDir, "mounts-root").apply {
+            writeText("/dev/block/vold/8_1 ${usbRoot.absolutePath} vfat rw 0 0\n")
         }
-        assertNull(provider.publishValues)
-        assertFalse(provider.deleted)
+        val found = DiagnosticVolumeProbe.candidates(context, emptySet(), mounts)
+        assertEquals(listOf(usbRoot.absolutePath), found.map { it.absolutePath })
+        assertFalse(found.any { it.absolutePath == pkg.absolutePath })
+        assertFalse(found.any { it.name == "MyMusic" })
     }
 
-    @Test fun deniedWriteRemovesOnlyTheNewPendingEntry() {
-        provider.denyWrite = true
-        assertThrows(SecurityException::class.java) {
-            DiagnosticExportStore.saveToDownloads(resolver, "test.txt", "report")
-        }
-        assertTrue(provider.deleted)
-        assertNull(provider.publishValues)
-    }
-
-    @Test fun failedPublishDoesNotLeaveAnInvisibleReport() {
-        provider.refusePublish = true
-        assertThrows(IOException::class.java) {
-            DiagnosticExportStore.saveToDownloads(resolver, "test.txt", "report")
-        }
-        assertTrue(provider.deleted)
+    @Test fun childrenPutsDirectoriesFirst() {
+        val dir = File(context.cacheDir, "stick-list").apply { mkdirs() }
+        File(dir, "b.txt").writeText("b")
+        File(dir, "a-dir").mkdirs()
+        val names = DiagnosticExportStore.children(dir).map { it.name }
+        assertEquals(listOf("a-dir", "b.txt"), names)
     }
 
     @Test fun exportViaRootGracefullyHandlesUnavailableService() {
         val target = File("/storage/usbotg/DiPlay/report.txt")
-        // In JVM test environment, RootShellBridge is not available, exportViaRoot should safely return false without crash
-        assertFalse(DiagnosticExportStore.exportViaRoot(target, "test report", RuntimeEnvironment.getApplication().cacheDir))
-    }
-
-    @Test fun selectedDocumentIsWrittenButNeverDeletedOnFailure() {
-        provider.denyWrite = true
-        assertThrows(SecurityException::class.java) {
-            DiagnosticExportStore.write(resolver, provider.uri, "report")
-        }
-        assertFalse(provider.deleted)
-    }
-
-    @Test fun getAvailableTargetsIncludesUsbAndInternalDownloads() {
-        val context = RuntimeEnvironment.getApplication()
-        val fakeUsb = File(context.cacheDir, "fake-usbotg-sda1").apply { mkdirs() }
-        val targets = DiagnosticExportStore.getAvailableTargets(context, setOf(fakeUsb.absolutePath))
-        assertTrue("Targets list must not be empty", targets.isNotEmpty())
-        assertTrue("Must include internal downloads target", targets.any { !it.isUsb && it.title.contains("机身存储") })
-        assertTrue("Must include external USB target", targets.any { it.isUsb && it.destinationDir.absolutePath.contains("fake-usbotg-sda1") })
-    }
-
-    private class DownloadsProvider(val file: File) : ContentProvider() {
-        val uri: Uri = Uri.parse("content://media/external/downloads/41")
-        var insertValues: ContentValues? = null
-        var publishValues: ContentValues? = null
-        var contentAtPublish: String? = null
-        var deleted = false
-        var refuseInsert = false
-        var denyWrite = false
-        var refusePublish = false
-        override fun onCreate() = true
-        override fun insert(uri: Uri, values: ContentValues?): Uri? {
-            assertEquals(MediaStore.Downloads.EXTERNAL_CONTENT_URI, uri)
-            insertValues = ContentValues(values)
-            return if (refuseInsert) null else this.uri
-        }
-        override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-            assertEquals(this.uri, uri)
-            assertEquals("wt", mode)
-            if (denyWrite) throw SecurityException("Test provider refused write")
-            return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_CREATE or
-                ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_TRUNCATE)
-        }
-        override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int {
-            assertEquals(this.uri, uri)
-            publishValues = ContentValues(values)
-            contentAtPublish = file.readText()
-            return if (refusePublish) 0 else 1
-        }
-        override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {
-            assertEquals(this.uri, uri)
-            deleted = true
-            file.delete()
-            return 1
-        }
-        override fun getType(uri: Uri) = "text/plain"
-        override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = null
+        assertFalse(DiagnosticExportStore.exportViaRoot(target, "test report", context.cacheDir))
     }
 }
