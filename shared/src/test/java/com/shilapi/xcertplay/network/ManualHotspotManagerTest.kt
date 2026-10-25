@@ -68,7 +68,7 @@ class ManualHotspotManagerTest {
     }
 
     @Test
-    fun driverFrequencyMismatchWithExpectedBandThrows() {
+    fun driverFrequencyMismatchWithExpectedBandFallsBackToChannelZeroWithoutKillingConnection() {
         val manager = ManualHotspotManager(
             context = context,
             ssid = "Car_Hotspot_Test",
@@ -78,62 +78,19 @@ class ManualHotspotManagerTest {
             security = ManualHotspotSecurity.WPA2,
             onDiagnostic = { diagnostics += it },
             driverRadioReader = { _, _ ->
+                // Driver reports 2.4 GHz (e.g. single-radio residue on E01) when 5 GHz was expected
                 LegacyHotspotRadio.Reading(2412, null)
             },
             localInterfaceLocator = { mockInterface },
-            settleThresholdMs = 50L,
         )
 
-        try {
-            java.util.concurrent.Executors.newSingleThreadExecutor().submit {
-                manager.start(300L)
-            }.get()
-            fail("Expected ExecutionException caused by IOException")
-        } catch (e: Exception) {
-            val cause = e.cause ?: e
-            assertTrue(
-                "Expected cause to be IOException but was ${cause.javaClass.name}",
-                cause is IOException,
-            )
-            assertTrue(
-                "Expected message to contain 'Manual hotspot is not running on 5 GHz', but was: ${cause.message}",
-                cause.message?.contains("Manual hotspot is not running on 5 GHz") == true,
-            )
-        }
-    }
-
-    @Test
-    fun transientFrequencyMismatchSettlesBeforeTimeout() {
-        val readCount = AtomicInteger(0)
-        val manager = ManualHotspotManager(
-            context = context,
-            ssid = "Car_Hotspot_Test",
-            passphrase = "password1234",
-            band = ManualHotspotBand.GHZ_5,
-            channel = 0,
-            security = ManualHotspotSecurity.WPA2,
-            onDiagnostic = { diagnostics += it },
-            driverRadioReader = { _, _ ->
-                val count = readCount.incrementAndGet()
-                if (count <= 2) {
-                    // First two reads return stale 2.4 GHz STA PLL frequency
-                    LegacyHotspotRadio.Reading(2412, null)
-                } else {
-                    // Subsequent reads return settled 5 GHz frequency
-                    LegacyHotspotRadio.Reading(5180, null)
-                }
-            },
-            localInterfaceLocator = { mockInterface },
-            settleThresholdMs = 600L,
-        )
-
+        // Must NOT abort connection with IOException; must safely report channel 0 so iPhone scans reliably
         val info = java.util.concurrent.Executors.newSingleThreadExecutor().submit<WirelessHotspotInfo> {
-            manager.start(2500L)
+            manager.start(500L)
         }.get()
-        assertEquals(36, info.channel)
-        assertEquals(5180, info.frequencyMHz)
+        assertEquals(0, info.channel)
+        assertNull(info.frequencyMHz)
         assertEquals("5 GHz", info.bandLabel)
-        assertTrue(readCount.get() >= 3)
     }
 
     @Test
@@ -150,7 +107,6 @@ class ManualHotspotManagerTest {
                 LegacyHotspotRadio.Reading(null, "driver frequency query errno=95")
             },
             localInterfaceLocator = { mockInterface },
-            settleThresholdMs = 50L,
         )
 
         val info = java.util.concurrent.Executors.newSingleThreadExecutor().submit<WirelessHotspotInfo> {
@@ -162,8 +118,7 @@ class ManualHotspotManagerTest {
     }
 
     @Test
-    fun incompatibleFrequencyFollowedByNullDoesNotSucceed() {
-        val readCount = AtomicInteger(0)
+    fun scanFrequencyProvidesAuthoritativeChannel() {
         val manager = ManualHotspotManager(
             context = context,
             ssid = "Car_Hotspot_Test",
@@ -173,35 +128,51 @@ class ManualHotspotManagerTest {
             security = ManualHotspotSecurity.WPA2,
             onDiagnostic = { diagnostics += it },
             driverRadioReader = { _, _ ->
-                val count = readCount.incrementAndGet()
-                if (count == 1) {
-                    // First read returns incompatible 2.4 GHz frequency
-                    LegacyHotspotRadio.Reading(2412, null)
-                } else {
-                    // Subsequent reads return null (ioctl error)
-                    LegacyHotspotRadio.Reading(null, "driver query errno=95")
-                }
+                // Driver query is unavailable or suspicious
+                LegacyHotspotRadio.Reading(null, "driver query errno=95")
             },
             localInterfaceLocator = { mockInterface },
-            settleThresholdMs = 300L,
         )
 
-        try {
-            java.util.concurrent.Executors.newSingleThreadExecutor().submit {
-                manager.start(800L)
-            }.get()
-            fail("Expected ExecutionException caused by IOException, but start() succeeded")
-        } catch (e: Exception) {
-            val cause = e.cause ?: e
-            assertTrue(
-                "Expected cause to be IOException but was ${cause.javaClass.name}",
-                cause is IOException,
-            )
-            assertTrue(
-                "Expected message to contain 'Manual hotspot is not running on 5 GHz', but was: ${cause.message}",
-                cause.message?.contains("Manual hotspot is not running on 5 GHz") == true,
-            )
+        val scanResult = android.net.wifi.ScanResult().apply {
+            SSID = "Car_Hotspot_Test"
+            BSSID = "02:00:00:00:00:01"
+            frequency = 5180
         }
+        shadowOf(wifi).setScanResults(listOf(scanResult))
+
+        val info = java.util.concurrent.Executors.newSingleThreadExecutor().submit<WirelessHotspotInfo> {
+            manager.start(500L)
+        }.get()
+        assertEquals(36, info.channel)
+        assertEquals(5180, info.frequencyMHz)
+        assertEquals("5 GHz", info.bandLabel)
+    }
+
+    @Test
+    fun carHotspotBandMismatchWithPreferenceDoesNotAbort() {
+        val manager = ManualHotspotManager(
+            context = context,
+            ssid = "Car_Hotspot_Test",
+            passphrase = "password1234",
+            band = ManualHotspotBand.GHZ_5,
+            channel = 0,
+            security = ManualHotspotSecurity.WPA2,
+            onDiagnostic = { diagnostics += it },
+            driverRadioReader = { _, _ ->
+                // Driver reports car hotspot running on 2.4 GHz
+                LegacyHotspotRadio.Reading(2412, null)
+            },
+            localInterfaceLocator = { mockInterface },
+        )
+
+        // The app must not abort when car hotspot runs on 2.4 GHz while user preference had 5 GHz;
+        // it must safely report channel 0 so the iPhone can scan and connect on 2.4 GHz
+        val info = java.util.concurrent.Executors.newSingleThreadExecutor().submit<WirelessHotspotInfo> {
+            manager.start(500L)
+        }.get()
+        assertEquals(0, info.channel)
+        assertEquals("5 GHz", info.bandLabel)
     }
 
     @Test
