@@ -104,17 +104,6 @@ class AndroidMediaSink(
         publishMediaGain("focus")
     }
 
-    /**
-     * Suppresses starvation brake and resets escalated jitter buffer gating during track transitions.
-     * Prevents false underrun detection when iPhone pauses/resumes audio during song changes.
-     */
-    fun notifyTrackTransition(windowMs: Long = 3500L) {
-        val untilNs = System.nanoTime() + windowMs * 1_000_000L
-        audioRenderers.values.filter { it.format.audioType == "media" }.forEach {
-            it.notifyTrackTransition(untilNs)
-        }
-    }
-
     fun setScreenStreamActiveChangedListener(listener: ((Int, Boolean) -> Unit)?) {
         synchronized(screenStateLock) {
             screenStreamActiveChanged = listener
@@ -656,7 +645,8 @@ private class AudioRenderer(
     private val fadeByteCount = PcmSmoother.fadeByteCount(format.sampleRate, format.channels)
     private val stagingBuffer = ByteArray(fadeByteCount)
     private var stagedBytes = 0
-    private val trackTransitionUntilNs = AtomicLong(0L)
+    @Volatile private var inSilencePadding = false
+    private val silenceChunk by lazy { PcmSmoother.createSilence(format.sampleRate, format.channels, SILENCE_CHUNK_MS) }
     private var droppedPacketsLogged = false
     private var firstAacPayloadLogged = false
     private var firstOpusShortPacketLogged = false
@@ -690,11 +680,6 @@ private class AudioRenderer(
             mediaGain = gain
             track?.let { setTrackGain(it, gain) }
         }
-    }
-
-    fun notifyTrackTransition(untilNs: Long) {
-        trackTransitionUntilNs.set(untilNs)
-        jitterBuffer.onTrackTransition()
     }
 
     fun start() {
@@ -735,10 +720,11 @@ private class AudioRenderer(
             }
             createTrack()
             while (running) {
-                if (isWirelessMedia && !playbackStarted && !gateOpened) {
-                    // A brake stores its own mark. Cold start waits until the first packet so the
-                    // clock is not the moment the thread began.
-                    if (gateWaitMarkNs == 0L) {
+                if (isWirelessMedia && !gateOpened) {
+                    // A brake or silence loop stores its own mark. Cold start waits until the first packet.
+                    if (gateWaitMarkNs == 0L && queue.isNotEmpty()) {
+                        gateWaitMarkNs = System.nanoTime()
+                    } else if (gateWaitMarkNs == 0L) {
                         val first = firstArrivalNs.get()
                         if (first != 0L) gateWaitMarkNs = first
                     }
@@ -757,7 +743,7 @@ private class AudioRenderer(
                     DiagLog.i(
                         TAG,
                         "audio gate opened audioType=${format.audioType} rate=${format.sampleRate} " +
-                            "target=$target queue=$queued holdMs=$holdMs",
+                            "target=$target queue=$queued holdMs=$holdMs inSilencePadding=$inSilencePadding",
                     )
                 }
                 queue.poll(AUDIO_POLL_MILLIS, TimeUnit.MILLISECONDS)?.let(::handle)
@@ -1143,8 +1129,9 @@ private class AudioRenderer(
             return
         }
 
-        // Wireless media: smooth fade-in for cold start or underrun recovery
-        if (!fadeApplied) {
+        // Wireless media: smooth fade-in for cold start or recovery from silence padding
+        if (!fadeApplied || inSilencePadding) {
+            inSilencePadding = false
             PcmSmoother.applyFadeIn(data, offset, minOf(length, fadeByteCount), format.sampleRate, format.channels)
             fadeApplied = true
         }
@@ -1246,43 +1233,48 @@ private class AudioRenderer(
             snapshotBufferedMs = queueMs + trackMs
         }
 
-        // Starvation brake for wireless media:
-        // Do NOT trigger starvation brake during a track transition or if buffered audio has already cleanly drained to completion.
-        val inTrackTransition = now < trackTransitionUntilNs.get()
-        if (playbackStarted && isWirelessMedia && !inTrackTransition && unplayedBytes > 0 && lastRx > 0L &&
-            (now - lastRx > (snapshotBufferedMs + 100L) * 1_000_000L)) {
-            val sinceRxMs = (now - lastRx) / 1_000_000L
-            val snapshotMs = snapshotBufferedMs
-            val trackMs = snapshotTrackMs
-            val queued = queue.size
-            codec?.let(::drainCodec)
-            if (stagedBytes > 0) {
-                PcmSmoother.applyFadeOut(stagingBuffer, 0, stagedBytes, format.sampleRate, format.channels)
-                writeCompletelyToTrack(stagingBuffer, 0, stagedBytes)
+        // Silence Loop for wireless media:
+        // When upstream stops sending packets (song change, seek, pause, buffering),
+        // do NOT call track.pause() and do NOT escalate jitter buffer to 2.2s.
+        // Instead, smoothly fade out valid sound, reset gateOpened to re-buffer next song cleanly,
+        // and continuously feed 20ms silence chunks to AudioTrack so MT6735 ALSA DMA never runs dry.
+        if (playbackStarted && isWirelessMedia && queue.isEmpty()) {
+            val headroomBytes = if (bytesPerSecond > 0) bytesPerSecond * SILENCE_HEADROOM_MS / 1000L else 0L
+            if (unplayedBytes <= headroomBytes) {
+                if (!inSilencePadding) {
+                    // Transitioning into silence: smoothly fade out staged valid audio
+                    codec?.let(::drainCodec)
+                    if (stagedBytes > 0) {
+                        val frameBytes = if (format.channels >= 2) 4 else 2
+                        val alignedBytes = (stagedBytes / frameBytes) * frameBytes
+                        if (alignedBytes > 0) {
+                            PcmSmoother.applyFadeOut(stagingBuffer, 0, alignedBytes, format.sampleRate, format.channels)
+                            writeCompletelyToTrack(stagingBuffer, 0, alignedBytes)
+                        }
+                        stagedBytes = 0
+                    }
+                    inSilencePadding = true
+                    gateOpened = false // Next song will accumulate 47 packets before releasing
+                    fadeApplied = false // Next song will fade in smoothly
+                    gateWaitMarkNs = 0L
+                    DiagLog.i(TAG, "wireless media entered silence padding audioType=${format.audioType} unplayedBytes=$unplayedBytes")
+                }
+
+                // Check for true idle timeout (e.g. 30 seconds of total silence without packets)
+                if (lastRx > 0L && (now - lastRx > IDLE_TIMEOUT_NS)) {
+                    runCatching { track.pause() }
+                    playbackStarted = false
+                    inSilencePadding = false
+                    gateOpened = false
+                    fadeApplied = false
+                    stagedBytes = 0
+                    prebufferBytes = 0
+                    DiagLog.i(TAG, "wireless media idle timeout reached (30s), paused track audioType=${format.audioType}")
+                } else {
+                    // Feed 20ms silence chunk to keep MT6735 hardware DAC smoothly ticking with zeros
+                    writeCompletelyToTrack(silenceChunk, 0, silenceChunk.size)
+                }
             }
-            val silence = PcmSmoother.createSilence(format.sampleRate, format.channels, 40)
-            writeCompletelyToTrack(silence, 0, silence.size)
-            track.pause()
-            playbackStarted = false
-            gateOpened = false
-            fadeApplied = false
-            stagedBytes = 0
-            prebufferBytes = 0
-            jitterBuffer.onUnderrunDetected()
-            gateWaitMarkNs = System.nanoTime()
-            rebufferCount++
-            val targetHold = jitterBuffer.targetHoldPackets()
-            DiagLog.w(
-                TAG,
-                "wireless media starvation brake audioType=${format.audioType} " +
-                    "sinceRxMs=$sinceRxMs snapshotMs=$snapshotMs trackMs=$trackMs " +
-                    "queue=$queued targetHold=$targetHold",
-            )
-            report(
-                "Audio: starvation brake triggered audioType=${format.audioType} " +
-                    "sinceRxMs=$sinceRxMs snapshotMs=$snapshotMs trackMs=$trackMs " +
-                    "queue=$queued targetHold=$targetHold",
-            )
         }
 
         val platformReportsUnderruns = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
@@ -1300,12 +1292,13 @@ private class AudioRenderer(
                 rebufferCount++
             }
             DrainAction.PAUSE_AND_REBUFFER -> {
-                // The hardware buffer has actually drained. Pause without flushing or discarding PCM,
-                // then use the configured start threshold again when music resumes.
-                track.pause()
-                playbackStarted = false
-                prebufferBytes = 0
-                rebufferCount++
+                // Wireless media is managed by Silence Loop and should not be paused here.
+                if (!isWirelessMedia) {
+                    track.pause()
+                    playbackStarted = false
+                    prebufferBytes = 0
+                    rebufferCount++
+                }
             }
         }
         // Tail buffer play-out:
@@ -1410,6 +1403,9 @@ private class AudioRenderer(
         const val OPUS_SEEK_PRE_ROLL_NANOS = 80_000_000L
         const val INPUT_TIMEOUT_US = 10_000L
         const val AUDIO_POLL_MILLIS = 10L
+        const val SILENCE_CHUNK_MS = 20
+        const val SILENCE_HEADROOM_MS = 100L
+        const val IDLE_TIMEOUT_NS = 30_000_000_000L
         const val BUFFER_TAIL_WAIT_NS = 500_000_000L
         // Holds a burst after a Wi-Fi gap (~4 s of AAC) instead of dropping it.
         const val MAX_QUEUED_PACKETS = 192
