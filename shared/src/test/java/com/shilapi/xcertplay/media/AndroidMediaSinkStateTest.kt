@@ -18,4 +18,9 @@ class AndroidMediaSinkStateTest {
         sink.setScreenStreamActiveChangedListener { type, active -> afterClose.add(type to active) }
         assertTrue(afterClose.isEmpty())
     }
+
+    @Test fun wirelessSinkCanBeInstantiatedAndClosed() {
+        val wirelessSink = AndroidMediaSink(isWireless = true)
+        wirelessSink.close()
+    }
 }

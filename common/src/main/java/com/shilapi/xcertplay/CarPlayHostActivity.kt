@@ -2101,6 +2101,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 onScreenStreamStateChanged(controllerGeneration, type, active)
             },
             mediaBufferMillis = AirPlayPersistence.loadMediaBufferMillis(this),
+            isWireless = wirelessEnabled,
             onAudioDiagnostic = { message ->
                 diagnosticLog?.let { enqueueSessionLine(it, message) }
             },

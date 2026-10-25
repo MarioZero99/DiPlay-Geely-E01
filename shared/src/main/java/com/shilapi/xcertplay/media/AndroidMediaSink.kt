@@ -42,6 +42,7 @@ class AndroidMediaSink(
     private val navigationStreamType: Int = NavigationAudioStream.deviceDefault,
     onScreenStreamActiveChanged: ((Int, Boolean) -> Unit)? = null,
     private val mediaBufferMillis: Int = MediaAudioBuffer.DEFAULT_MILLIS,
+    private val isWireless: Boolean = false,
     private val onAudioDiagnostic: (String) -> Unit = {},
     /** True while any music ("media") audio stream is running; called from media threads. */
     private val onMediaAudioChanged: (Boolean) -> Unit = {},
@@ -54,7 +55,7 @@ class AndroidMediaSink(
     private val videoDecoders = ConcurrentHashMap<Int, VideoDecoder>()
     private val mediaAudioTypes = mutableSetOf<Int>()
     private val audioRenderers = ConcurrentHashMap<Int, AudioRenderer>()
-    @Volatile private var mediaGain = 1f
+    private val compositeGain = CompositeMediaGain()
     private val microphoneUplinks = ConcurrentHashMap<Int, MicrophoneUplink>()
     private val pendingVideoCodec = ConcurrentHashMap<Int, VideoCodec>()
     private val videoRecoveryHandlers = ConcurrentHashMap<Int, () -> Unit>()
@@ -98,11 +99,10 @@ class AndroidMediaSink(
      */
     fun onExternalAudioFocus(change: Int) {
         val gain = mediaTrackGainForFocus(change) ?: return
-        if (mediaGain == gain) return
-        mediaGain = gain
         DiagLog.i("DiPlay-AudioFocus", "media gain=$gain focus=$change")
         onAudioDiagnostic("Audio: media gain=$gain focus=$change")
-        audioRenderers.values.forEach { it.applyMediaGain(gain) }
+        val effectiveGain = compositeGain.setFocusGain(gain)
+        audioRenderers.values.filter { it.format.audioType == "media" }.forEach { it.applyMediaGain(effectiveGain) }
     }
 
     fun setScreenStreamActiveChangedListener(listener: ((Int, Boolean) -> Unit)?) {
@@ -139,7 +139,16 @@ class AndroidMediaSink(
     }
 
     override fun onAudioStarted(type: Int, format: AudioFormat, firstSample: Int) {
-        audioRenderer(type, format).start()
+        val renderer = audioRenderer(type, format)
+        val isNav = AudioChannelMapper.map(
+            audioType = format.audioType,
+            payloadType = format.payloadType,
+            mode = if (advancedAudioChannelMapping) AudioChannelMappingMode.AUTOMOTIVE_BUS else AudioChannelMappingMode.MOBILE_COMPATIBLE,
+            navigationStreamType = navigationStreamType,
+        ).channel == AudioChannel.NAVIGATION
+        val gain = compositeGain.onStreamStarted(type, isNav)
+        audioRenderers.values.filter { it.format.audioType == "media" }.forEach { it.applyMediaGain(gain) }
+        renderer.start()
         if (format.audioType == "media") updateMediaAudio(type, true)
     }
 
@@ -150,6 +159,8 @@ class AndroidMediaSink(
     override fun onAudioStopped(type: Int) {
         audioRenderers.remove(type)?.close()
         updateMediaAudio(type, false)
+        val gain = compositeGain.onStreamStopped(type)
+        audioRenderers.values.filter { it.format.audioType == "media" }.forEach { it.applyMediaGain(gain) }
     }
 
     private fun updateMediaAudio(type: Int, active: Boolean) {
@@ -207,9 +218,16 @@ class AndroidMediaSink(
         val existing = audioRenderers[type]
         if (existing?.format == format) return existing
         existing?.close()
-        return AudioRenderer(format, advancedAudioChannelMapping, navigationStreamType, mediaBufferMillis, onAudioDiagnostic).also {
+        return AudioRenderer(
+            format = format,
+            advancedAudioChannelMapping = advancedAudioChannelMapping,
+            navigationStreamType = navigationStreamType,
+            mediaBufferMillis = mediaBufferMillis,
+            isWireless = isWireless,
+            report = onAudioDiagnostic,
+        ).also {
             audioRenderers[type] = it
-            if (format.audioType == "media") it.applyMediaGain(mediaGain)
+            if (format.audioType == "media") it.applyMediaGain(compositeGain.effectiveGain())
         }
     }
 }
@@ -585,6 +603,7 @@ private class AudioRenderer(
     private val advancedAudioChannelMapping: Boolean,
     private val navigationStreamType: Int,
     private val mediaBufferMillis: Int,
+    private val isWireless: Boolean,
     private val report: (String) -> Unit,
 ) : Closeable {
     private data class AudioPacket(val rtp: ByteArray, val sample: Int)
@@ -599,6 +618,14 @@ private class AudioRenderer(
     private var prebufferBytes = 0
     private var startThresholdBytes = 0
     private var fadeApplied = false
+    private val isWirelessMedia = isWireless && format.audioType == "media"
+    private val jitterBuffer = WirelessHoldJitterBuffer(isWireless, format.audioType, format.sampleRate)
+    private var gateOpened = false
+    private var snapshotLastRx = 0L
+    private var snapshotBufferedMs = 0L
+    private val fadeByteCount = PcmSmoother.fadeByteCount(format.sampleRate, format.channels)
+    private val stagingBuffer = ByteArray(fadeByteCount)
+    private var stagedBytes = 0
     private var droppedPacketsLogged = false
     private var firstAacPayloadLogged = false
     private var firstOpusShortPacketLogged = false
@@ -671,6 +698,16 @@ private class AudioRenderer(
             }
             createTrack()
             while (running) {
+                if (isWirelessMedia && !playbackStarted && !gateOpened) {
+                    if (!jitterBuffer.isReadyToDrain(queue.size)) {
+                        Thread.sleep(AUDIO_POLL_MILLIS)
+                        maintainPlaybackBuffer()
+                        logStatsIfDue()
+                        continue
+                    } else {
+                        gateOpened = true
+                    }
+                }
                 queue.poll(AUDIO_POLL_MILLIS, TimeUnit.MILLISECONDS)?.let(::handle)
                 // Output becomes ready asynchronously, including after the last packet of a burst.
                 // Waiting for the next UDP packet can strand decoded sound for hundreds of ms.
@@ -1043,10 +1080,51 @@ private class AudioRenderer(
                     "head=${data.copyOfRange(offset, end).toHexString()}",
             )
         }
+        if (!isWirelessMedia) {
+            if (!fadeApplied) {
+                applyFadeIn(data, offset, length)
+                fadeApplied = true
+            }
+            writeTrackWithProgress(track, data, offset, length)
+            return
+        }
+
+        // Wireless media: smooth fade-in for cold start or underrun recovery
         if (!fadeApplied) {
-            applyFadeIn(data, offset, length)
+            PcmSmoother.applyFadeIn(data, offset, minOf(length, fadeByteCount), format.sampleRate, format.channels)
             fadeApplied = true
         }
+
+        var inOffset = offset
+        var inRemaining = length
+
+        while (inRemaining > 0 && running) {
+            if (stagedBytes + inRemaining <= fadeByteCount) {
+                System.arraycopy(data, inOffset, stagingBuffer, stagedBytes, inRemaining)
+                stagedBytes += inRemaining
+                inRemaining = 0
+            } else {
+                val availableFromStaging = stagedBytes
+                val overflow = (stagedBytes + inRemaining) - fadeByteCount
+                val writeFromStaging = minOf(availableFromStaging, overflow)
+                if (writeFromStaging > 0) {
+                    writeTrackWithProgress(track, stagingBuffer, 0, writeFromStaging)
+                    if (writeFromStaging < stagedBytes) {
+                        System.arraycopy(stagingBuffer, writeFromStaging, stagingBuffer, 0, stagedBytes - writeFromStaging)
+                    }
+                    stagedBytes -= writeFromStaging
+                }
+                val writeFromData = minOf(inRemaining - (fadeByteCount - stagedBytes), inRemaining)
+                if (writeFromData > 0) {
+                    writeTrackWithProgress(track, data, inOffset, writeFromData)
+                    inOffset += writeFromData
+                    inRemaining -= writeFromData
+                }
+            }
+        }
+    }
+
+    private fun writeTrackWithProgress(track: AudioTrack, data: ByteArray, offset: Int, length: Int) {
         var written = 0
         while (written < length && running) {
             val writeLength = if (playbackStarted) {
@@ -1075,6 +1153,21 @@ private class AudioRenderer(
         }
     }
 
+    private fun writeCompletelyToTrack(data: ByteArray, offset: Int, length: Int) {
+        val track = track ?: return
+        var written = 0
+        while (written < length && running) {
+            val count = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                track.write(data, offset + written, length - written, AudioTrack.WRITE_BLOCKING)
+            } else {
+                track.write(data, offset + written, length - written)
+            }
+            if (count <= 0) break
+            written += count
+            bufferProgress.written(count)
+        }
+    }
+
     private fun startPlayback(track: AudioTrack) {
         underrunsAtPlaybackStart = track.compatUnderruns()
         track.play()
@@ -1083,6 +1176,39 @@ private class AudioRenderer(
 
     private fun maintainPlaybackBuffer() {
         val track = track ?: return
+        val now = System.nanoTime()
+        val lastRx = lastArrivalNs.get()
+
+        val unplayedBytes = if (bytesPerSecond > 0) bufferProgress.queuedBytes(track.playbackHeadPosition) else 0
+        if (lastRx != 0L && lastRx != snapshotLastRx) {
+            snapshotLastRx = lastRx
+            val queueMs = queue.size * 1024L * 1000L / format.sampleRate
+            val trackMs = if (bytesPerSecond > 0) unplayedBytes * 1000L / bytesPerSecond else 0L
+            snapshotBufferedMs = queueMs + trackMs
+        }
+
+        // Starvation brake for wireless media:
+        if (playbackStarted && isWirelessMedia && lastRx > 0L &&
+            (now - lastRx > (snapshotBufferedMs + 50L) * 1_000_000L)) {
+            codec?.let(::drainCodec)
+            if (stagedBytes > 0) {
+                PcmSmoother.applyFadeOut(stagingBuffer, 0, stagedBytes, format.sampleRate, format.channels)
+                writeCompletelyToTrack(stagingBuffer, 0, stagedBytes)
+            }
+            val silence = PcmSmoother.createSilence(format.sampleRate, format.channels, 40)
+            writeCompletelyToTrack(silence, 0, silence.size)
+            track.pause()
+            playbackStarted = false
+            gateOpened = false
+            fadeApplied = false
+            stagedBytes = 0
+            prebufferBytes = 0
+            jitterBuffer.onUnderrunDetected()
+            rebufferCount++
+            DiagLog.w(TAG, "wireless media starvation brake: escalated gate to ${jitterBuffer.targetHoldPackets()} packets")
+            report("Audio: starvation brake triggered audioType=${format.audioType} targetHold=${jitterBuffer.targetHoldPackets()}")
+        }
+
         val platformReportsUnderruns = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
         val underrunDetected = if (platformReportsUnderruns) {
             track.compatUnderruns() > underrunsAtPlaybackStart
@@ -1106,10 +1232,16 @@ private class AudioRenderer(
                 rebufferCount++
             }
         }
-        // A short final burst may never reach the start threshold. Play it after a bounded wait.
-        if (!playbackStarted && prebufferBytes > 0 && queue.isEmpty() &&
-            System.nanoTime() - lastPcmWriteNs >= BUFFER_TAIL_WAIT_NS) {
-            startPlayback(track)
+        // Tail buffer play-out:
+        if (!isWirelessMedia) {
+            if (!playbackStarted && prebufferBytes > 0 && queue.isEmpty() &&
+                System.nanoTime() - lastPcmWriteNs >= BUFFER_TAIL_WAIT_NS) {
+                startPlayback(track)
+            }
+        } else {
+            if (!playbackStarted && gateOpened && queue.isEmpty() && prebufferBytes > 0) {
+                startPlayback(track)
+            }
         }
     }
 
@@ -1155,6 +1287,7 @@ private class AudioRenderer(
 
     @Synchronized
     private fun release() {
+        jitterBuffer.onStreamDestroyed()
         val codec = codec
         this.codec = null
         if (codec != null) {
