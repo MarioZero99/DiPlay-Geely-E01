@@ -52,6 +52,27 @@ internal object DiagnosticVolumeProbe {
     internal fun defaultProcMounts(): File? =
         if (Build.FINGERPRINT == "robolectric") null else File("/proc/mounts")
 
+    internal fun defaultProcPartitions(): File? =
+        if (Build.FINGERPRINT == "robolectric") null else File("/proc/partitions")
+
+    internal data class PartitionInfo(val name: String, val blocks: Long)
+
+    internal fun readPhysicalPartitions(partitionsContent: String): List<String> {
+        val pattern = Regex("^sd[a-z][0-9]+$")
+        return partitionsContent.lineSequence()
+            .mapNotNull { line ->
+                val parts = line.trim().split(Regex("\\s+"))
+                if (parts.size >= 4) {
+                    val blocks = parts[2].toLongOrNull() ?: 0L
+                    val name = parts[3]
+                    if (pattern.matches(name)) PartitionInfo(name, blocks) else null
+                } else null
+            }
+            .sortedByDescending { it.blocks }
+            .map { it.name }
+            .toList()
+    }
+
     internal fun parseMountPoints(mountsContent: String): List<File> {
         val candidates = mutableListOf<File>()
         val systemPrefixes = listOf(
@@ -105,20 +126,17 @@ internal object DiagnosticVolumeProbe {
     }
 
     internal fun filterExternalBlockDevices(rawNames: Collection<String>): List<String> {
-        val pattern = Regex("^sd[a-z][0-9]*$")
+        val pattern = Regex("^sd[a-z][0-9]+$")
         return rawNames
             .map { it.substringAfterLast('/') }
             .filter { pattern.matches(it) }
-            .sortedWith(Comparator { a, b ->
-                val aHasNum = a.any { it.isDigit() }
-                val bHasNum = b.any { it.isDigit() }
-                if (aHasNum && !bHasNum) -1
-                else if (!aHasNum && bHasNum) 1
-                else a.compareTo(b)
-            })
+            .sorted()
     }
 
-    internal fun tryMountExternalUsb(procMountsContent: String): File? {
+    internal fun tryMountExternalUsb(
+        procMountsContent: String,
+        procPartitionsFile: File? = defaultProcPartitions(),
+    ): File? {
         if (!com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) return null
         val hasMountedSd = procMountsContent.lineSequence().any {
             val dev = it.trim().split(Regex("\\s+")).firstOrNull() ?: ""
@@ -126,19 +144,40 @@ internal object DiagnosticVolumeProbe {
         }
         if (hasMountedSd) return null
 
-        val devBlockDir = File("/dev/block")
-        val blockFiles = devBlockDir.list()?.toList().orEmpty()
-        val candidateDevs = filterExternalBlockDevices(blockFiles)
+        val partitionsContent = runCatching {
+            if (procPartitionsFile != null && procPartitionsFile.exists() && procPartitionsFile.canRead()) {
+                procPartitionsFile.readText()
+            } else null
+        }.getOrNull()
+
+        val candidateDevs = if (!partitionsContent.isNullOrBlank()) {
+            readPhysicalPartitions(partitionsContent)
+        } else {
+            val devBlockDir = File("/dev/block")
+            val blockFiles = devBlockDir.list()?.toList().orEmpty()
+            filterExternalBlockDevices(blockFiles)
+        }
         if (candidateDevs.isEmpty()) return null
 
         val mountTarget = File("/mnt/udisk")
+
+        // Stale mount cleanup: if /mnt/udisk is currently in mounts, lazy unmount it first
+        if (isMountedFileSystem(mountTarget, procMountsContent)) {
+            com.shilapi.xcertplay.system.RootShellBridge.execute("umount -l /mnt/udisk 2>/dev/null", timeoutMillis = 2000L)
+        }
+
         for (devName in candidateDevs) {
             val devPath = "/dev/block/$devName"
-            val mountCmd = "mkdir -p /mnt/udisk && (mount -t vfat $devPath /mnt/udisk || mount $devPath /mnt/udisk)"
-            val ok = com.shilapi.xcertplay.system.RootShellBridge.execute(mountCmd)
+            val mountCmd = "mkdir -p /mnt/udisk && (mount -t vfat $devPath /mnt/udisk || mount -t ntfs $devPath /mnt/udisk || mount -t exfat $devPath /mnt/udisk)"
+            val ok = com.shilapi.xcertplay.system.RootShellBridge.execute(mountCmd, timeoutMillis = 4000L)
             if (ok) {
-                DiagLog.i("DiagnosticExport", "Successfully mounted physical USB device $devPath to /mnt/udisk")
-                return mountTarget
+                val updatedMounts = runCatching { File("/proc/mounts").readText() }.getOrNull() ?: ""
+                if (isMountedFileSystem(mountTarget, updatedMounts)) {
+                    DiagLog.i("DiagnosticExport", "Successfully mounted physical USB device $devPath to /mnt/udisk")
+                    return mountTarget
+                } else {
+                    DiagLog.w("DiagnosticExport", "Mount command returned 0 but /mnt/udisk is not in /proc/mounts")
+                }
             }
         }
         return null
@@ -148,6 +187,7 @@ internal object DiagnosticVolumeProbe {
         context: Context,
         extraMountPaths: Collection<String> = emptySet(),
         procMountsFile: File? = defaultProcMounts(),
+        procPartitionsFile: File? = defaultProcPartitions(),
     ): ProbeSummary {
         val candidates = linkedMapOf<String, File>()
         var mountsContent = ""
@@ -166,7 +206,7 @@ internal object DiagnosticVolumeProbe {
 
         // Source 1b: If /proc/mounts had no external volumes, try to mount unmounted physical USB block devices (e.g. sda1)
         if (candidates.isEmpty() && mountsContent.isNotEmpty()) {
-            val mountedUsb = tryMountExternalUsb(mountsContent)
+            val mountedUsb = tryMountExternalUsb(mountsContent, procPartitionsFile)
             if (mountedUsb != null) {
                 candidates[mountedUsb.absolutePath] = mountedUsb
             }

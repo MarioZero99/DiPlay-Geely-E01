@@ -137,21 +137,23 @@ object RootShellBridge {
 
     private fun executeBlocking(originalCommand: String, wrapped: String): Boolean {
         val binder = findExtraUtilsService() ?: return false
-        return try {
-            val output = transact(binder, wrapped)
-            val (rc, body) = extractOutput(output)
-            if (rc == 0) {
-                if (originalCommand.contains("service call")) {
-                    DiagLog.i(TAG, "service call reply: $body")
+        return synchronized("ExtraUtilsService_Global_Lock".intern()) {
+            try {
+                val output = transact(binder, wrapped)
+                val (rc, body) = extractOutput(output)
+                if (rc == 0) {
+                    if (originalCommand.contains("service call")) {
+                        DiagLog.i(TAG, "service call reply: $body")
+                    }
+                    true
+                } else {
+                    DiagLog.w(TAG, "Root command failed (rc=$rc, cmd='$originalCommand'): $body")
+                    false
                 }
-                true
-            } else {
-                DiagLog.w(TAG, "Root command failed (rc=$rc, cmd='$originalCommand'): $body")
+            } catch (error: Throwable) {
+                DiagLog.w(TAG, "Root transaction failed: ${error.message}")
                 false
             }
-        } catch (error: Throwable) {
-            DiagLog.w(TAG, "Root transaction failed: ${error.message}")
-            false
         }
     }
 

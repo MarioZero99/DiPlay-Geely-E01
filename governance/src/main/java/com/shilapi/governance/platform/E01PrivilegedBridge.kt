@@ -67,12 +67,14 @@ object E01PrivilegedBridge {
             "Privileged command exceeds $MAX_COMMAND_BYTES bytes"
         }
         if (binder == null) return Result.ServiceUnavailable
-        val reply = try {
-            transact(binder, wrapped)
-        } catch (error: Throwable) {
-            return Result.TransactionFailed(error.javaClass.simpleName)
+        return synchronized("ExtraUtilsService_Global_Lock".intern()) {
+            val reply = try {
+                transact(binder, wrapped)
+            } catch (error: Throwable) {
+                return@synchronized Result.TransactionFailed(error.javaClass.simpleName)
+            }
+            classify(reply)
         }
-        return classify(reply)
     }
 
     internal fun findExtraUtilsService(): IBinder? = try {

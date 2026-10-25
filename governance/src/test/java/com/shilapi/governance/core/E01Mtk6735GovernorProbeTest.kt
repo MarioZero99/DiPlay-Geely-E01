@@ -1,23 +1,31 @@
 package com.shilapi.governance.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class E01Mtk6735GovernorProbeTest {
 
     @Test
-    fun probeCommandIsUnderBudget() {
+    fun probeCommandIsUnderBudgetAndUsesSystemProperty() {
         val cmd = E01Mtk6735Governor.CMD_CHECK_NATP
         assertTrue("Probe command must be under 220 bytes budget", cmd.length <= 220)
-        assertEquals("pidof natp", cmd)
+        assertEquals("getprop init.svc.run_natp", cmd)
     }
 
     @Test
-    fun parseNatpAliveClassifiesOutputCorrectly() {
-        assertTrue("PID output means natp is alive", E01Mtk6735Governor.parseNatpAlive("2341\n"))
-        assertTrue("Multiple PIDs mean natp is alive", E01Mtk6735Governor.parseNatpAlive("1200 1201"))
-        org.junit.Assert.assertFalse("Empty output means natp is dead", E01Mtk6735Governor.parseNatpAlive(""))
-        org.junit.Assert.assertFalse("Whitespace output means natp is dead", E01Mtk6735Governor.parseNatpAlive("  \n"))
+    fun parseNatpAliveClassifiesInitServiceStatusCorrectly() {
+        assertEquals(true, E01Mtk6735Governor.parseNatpAlive("running\n"))
+        assertEquals(true, E01Mtk6735Governor.parseNatpAlive("stopping\n"))
+        assertEquals(false, E01Mtk6735Governor.parseNatpAlive("stopped\n"))
+        // Empty, whitespace, or missing property value must be UNKNOWN (null), NOT falsely reported as dead (false)
+        assertNull(E01Mtk6735Governor.parseNatpAlive(""))
+        assertNull(E01Mtk6735Governor.parseNatpAlive("  \n"))
+        assertNull(E01Mtk6735Governor.parseNatpAlive("unknown_state"))
+        // Fallback PID or process listing support
+        assertEquals(true, E01Mtk6735Governor.parseNatpAlive("2341\n"))
+        assertEquals(true, E01Mtk6735Governor.parseNatpAlive("root 2341 1 /system/bin/natp\n"))
     }
 }

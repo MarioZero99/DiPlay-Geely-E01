@@ -22,6 +22,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  */
 object VehicleGovernance {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val installed = java.util.concurrent.atomic.AtomicBoolean(false)
 
     @Volatile
     private var governor: IVehicleGovernor = NoOpGovernor
@@ -74,6 +75,10 @@ object VehicleGovernance {
         isExperimentalAllowed: Boolean = true,
         customGovernor: IVehicleGovernor? = null,
     ) {
+        if (!installed.compareAndSet(false, true)) {
+            log("VehicleGovernance", "Already installed, ignoring duplicate install call")
+            return
+        }
         val store = GovernancePersistence(application)
         persistence = store
 
@@ -134,6 +139,7 @@ object VehicleGovernance {
     }
 
     internal fun resetForTesting() {
+        installed.set(false)
         governor = NoOpGovernor
         persistence = null
     }

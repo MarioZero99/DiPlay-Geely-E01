@@ -33,11 +33,24 @@ class E01Mtk6735Governor(
         const val CMD_SELF_HEAL =
             "pm enable com.ecarx.xiaoka"
 
-        // 10 bytes raw, 56 bytes wrapped <= 220 bytes budget
+        // 25 bytes raw, 68 bytes wrapped <= 220 bytes budget
         const val CMD_CHECK_NATP =
-            "pidof natp"
+            "getprop init.svc.run_natp"
 
-        fun parseNatpAlive(output: String): Boolean = output.trim().isNotEmpty()
+        fun parseNatpAlive(output: String): Boolean? {
+            val trimmed = output.trim()
+            if (trimmed.isEmpty()) return null
+            val lower = trimmed.lowercase()
+            return when {
+                lower == "running" || lower == "stopping" -> true
+                lower == "stopped" -> false
+                lower.contains("running") -> true
+                lower.contains("stopped") -> false
+                trimmed.lines().any { it.contains("natp") } -> true
+                trimmed.matches(Regex("^[0-9\\s]+$")) -> true
+                else -> null
+            }
+        }
     }
 
     override val isSupported: Boolean = true
@@ -53,7 +66,7 @@ class E01Mtk6735Governor(
         val result = E01PrivilegedBridge.execute(CMD_CHECK_NATP)
         return when (result) {
             is E01PrivilegedBridge.Result.Success -> parseNatpAlive(result.output)
-            is E01PrivilegedBridge.Result.CommandFailed -> false
+            // Non-zero exit code (e.g. 127 command not found) means probe failed, NOT that process is dead!
             else -> null
         }
     }
@@ -67,6 +80,9 @@ class E01Mtk6735Governor(
         } else {
             com.shilapi.governance.VehicleGovernance.log(TAG, "Suppression failed [$reason]: $result")
         }
+        try {
+            Thread.sleep(300L)
+        } catch (_: InterruptedException) {}
         val alive = probeNatpInternal()
         com.shilapi.governance.VehicleGovernance.log(TAG, "Suppression completed [$reason] success=$success, natp alive=$alive")
         success
@@ -81,7 +97,7 @@ class E01Mtk6735Governor(
         } else {
             com.shilapi.governance.VehicleGovernance.log(TAG, "Restoration failed [$reason]: $result")
         }
-        val alive = probeNatpInternal()
+        val alive = if (reason == "app-exit") null else probeNatpInternal()
         com.shilapi.governance.VehicleGovernance.log(TAG, "Restoration completed [$reason] success=$success, natp alive=$alive")
         success
     }

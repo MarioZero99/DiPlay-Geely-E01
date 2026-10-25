@@ -41,7 +41,7 @@ class DiagnosticVolumeMountTest {
     }
 
     @Test
-    fun parseBlockDevicesFiltersInternalPartitions() {
+    fun parseBlockDevicesFiltersInternalPartitionsAndRejectsRawDisks() {
         val blockList = listOf(
             "mmcblk0",
             "mmcblk0p1",
@@ -51,6 +51,23 @@ class DiagnosticVolumeMountTest {
             "zram0",
         )
         val externalDevs = DiagnosticVolumeProbe.filterExternalBlockDevices(blockList)
-        org.junit.Assert.assertEquals(listOf("sda1", "sda"), externalDevs)
+        // Raw disk "sda" is rejected to prevent mounting whole disk and corrupting partition tables
+        org.junit.Assert.assertEquals(listOf("sda1"), externalDevs)
+    }
+
+    @Test
+    fun readPhysicalPartitionsParsesAndSortsBySizeDescending() {
+        val partitionsContent = """
+            major minor  #blocks  name
+
+               8        0  120176640 sda
+               8        1     102400 sda1
+               8        2  120074240 sda2
+             179        0   15269888 mmcblk0
+             179        1      65536 mmcblk0p1
+        """.trimIndent()
+        val partitions = DiagnosticVolumeProbe.readPhysicalPartitions(partitionsContent)
+        // sda (raw disk) and mmcblk are rejected; sda2 (larger data partition) is prioritized before sda1 (smaller EFI partition)
+        org.junit.Assert.assertEquals(listOf("sda2", "sda1"), partitions)
     }
 }

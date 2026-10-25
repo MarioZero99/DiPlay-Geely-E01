@@ -269,7 +269,6 @@ class DiPlayActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         DiagCrashHandler.install(this)
         VehicleGovernance.diagnosticLogger = { tag, msg -> DiagLog.i(tag, msg) }
-        VehicleGovernance.install(application, isExperimentalAllowed = true)
         languagePreferenceAtCreate = AppLocale.preference(this)
         WindowCompat.setDecorFitsSystemWindows(window, true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -1087,7 +1086,22 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun displayCards(columns: CardColumns) {
         displayPerformanceCard(columns)
+        clusterMediaMetadataCard(columns)
         audioRoutingCard(columns)
+    }
+
+    private fun clusterMediaMetadataCard(columns: CardColumns) {
+        columns.card(R.string.cluster_media_metadata_title, R.drawable.ic_dp_display) { card ->
+            toggle(
+                parent = card,
+                title = getString(R.string.cluster_media_metadata_title),
+                description = getString(R.string.cluster_media_metadata_description),
+                value = AirPlayPersistence.loadClusterMediaMetadataEnabled(this),
+            ) { enabled ->
+                AirPlayPersistence.saveClusterMediaMetadataEnabled(this, enabled)
+                CarPlayMediaKeys.onClusterMetadataEnabledChanged(enabled)
+            }
+        }
     }
 
     private fun displayPerformanceCard(columns: CardColumns) {

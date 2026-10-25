@@ -112,4 +112,70 @@ class CarPlayMediaKeysBroadcastTest {
         assertEquals("com.android.music.metachanged", shadow.broadcastIntents.last().action)
         assertEquals("Song 2", shadow.broadcastIntents.last().getStringExtra("track"))
     }
+
+    @Test
+    fun broadcastMediaChangeAllowsLateArrivingDurationAndArtworkId() {
+        CarPlayMediaKeys.resetBroadcastState()
+        val shadow = org.robolectric.Shadows.shadowOf(context)
+        shadow.clearBroadcastIntents()
+
+        // Packet 1: Initial title/artist arrives first, duration is still 0
+        val packet1 = CarPlayNowPlaying(
+            title = "Late Song",
+            artist = "Late Artist",
+            album = "Late Album",
+            durationMillis = 0L,
+            playing = true,
+        )
+        CarPlayMediaKeys.broadcastMediaChange(context, packet1, playing = true)
+        val initialMeta = shadow.broadcastIntents.first { it.action == "com.android.music.metachanged" }
+        assertEquals(0L, initialMeta.getLongExtra("duration", -1L))
+        val initialId = initialMeta.getLongExtra("id", -1L)
+        assertTrue("Initial ID must be a valid positive non-zero hash", initialId > 0L)
+
+        // Packet 2: Next iAP2 packet delivers duration
+        val packet2 = CarPlayNowPlaying(
+            title = "Late Song",
+            artist = "Late Artist",
+            album = "Late Album",
+            durationMillis = 240000L,
+            playing = true,
+        )
+        CarPlayMediaKeys.broadcastMediaChange(context, packet2, playing = true)
+        val durationMeta = shadow.broadcastIntents.last { it.action == "com.android.music.metachanged" }
+        assertEquals("Late arriving duration must trigger broadcast update", 240000L, durationMeta.getLongExtra("duration", -1L))
+
+        // Packet 3: Artwork transfer ID arrives later
+        val packet3 = packet2.copy(artworkTransferId = 88)
+        CarPlayMediaKeys.broadcastMediaChange(context, packet3, playing = true)
+        val artMeta = shadow.broadcastIntents.last { it.action == "com.android.music.metachanged" }
+        assertEquals("Late arriving artwork transfer ID must trigger broadcast update", 88L, artMeta.getLongExtra("id", -1L))
+    }
+
+    @Test
+    fun broadcastMediaChangeSendsStoppedOnDisconnectAndPreservesPositionOnPause() {
+        CarPlayMediaKeys.resetBroadcastState()
+        val shadow = org.robolectric.Shadows.shadowOf(context)
+        shadow.clearBroadcastIntents()
+
+        val playingSong = CarPlayNowPlaying(
+            title = "Position Song",
+            artist = "Position Artist",
+            elapsedMillis = 45000L,
+            durationMillis = 180000L,
+            playing = true,
+        )
+        CarPlayMediaKeys.broadcastMediaChange(context, playingSong, playing = true)
+
+        // User pauses playback
+        CarPlayMediaKeys.broadcastMediaChange(context, playingSong, playing = false)
+        val pauseIntent = shadow.broadcastIntents.last { it.action == "com.android.music.playstatechanged" }
+        assertEquals(2, pauseIntent.getIntExtra("playstate", -1)) // 2 = PAUSED
+        assertEquals("Pause broadcast must preserve last known position instead of 0", 45000L, pauseIntent.getLongExtra("position", -1L))
+
+        // CarPlay disconnects: nowPlaying is null
+        CarPlayMediaKeys.broadcastMediaChange(context, null, playing = false)
+        val stopIntent = shadow.broadcastIntents.last { it.action == "com.android.music.playstatechanged" }
+        assertEquals("Disconnect must send playstate 1 (STOPPED) to clear cluster display", 1, stopIntent.getIntExtra("playstate", -1))
+    }
 }
