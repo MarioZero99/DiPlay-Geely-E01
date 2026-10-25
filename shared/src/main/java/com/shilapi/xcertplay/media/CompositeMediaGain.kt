@@ -38,4 +38,16 @@ class CompositeMediaGain(
         val duck = if (activeNavigationStreams.isNotEmpty()) duckFactor else 1.0f
         return minOf(externalFocusGain, duck)
     }
+
+    /** One consistent read for a diagnostic line. */
+    @Synchronized
+    fun state(): MediaGainState =
+        MediaGainState(effectiveGain(), externalFocusGain, activeNavigationStreams.size)
 }
+
+/** Effective music gain, the external focus gain, and how many navigation streams are open. */
+data class MediaGainState(
+    val effective: Float,
+    val focus: Float,
+    val navigationStreams: Int,
+)

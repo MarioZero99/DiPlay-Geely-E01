@@ -56,6 +56,7 @@ class AndroidMediaSink(
     private val mediaAudioTypes = mutableSetOf<Int>()
     private val audioRenderers = ConcurrentHashMap<Int, AudioRenderer>()
     private val compositeGain = CompositeMediaGain()
+    @Volatile private var loggedMediaGain = Float.NaN
     private val microphoneUplinks = ConcurrentHashMap<Int, MicrophoneUplink>()
     private val pendingVideoCodec = ConcurrentHashMap<Int, VideoCodec>()
     private val videoRecoveryHandlers = ConcurrentHashMap<Int, () -> Unit>()
@@ -99,10 +100,8 @@ class AndroidMediaSink(
      */
     fun onExternalAudioFocus(change: Int) {
         val gain = mediaTrackGainForFocus(change) ?: return
-        DiagLog.i("DiPlay-AudioFocus", "media gain=$gain focus=$change")
-        onAudioDiagnostic("Audio: media gain=$gain focus=$change")
-        val effectiveGain = compositeGain.setFocusGain(gain)
-        audioRenderers.values.filter { it.format.audioType == "media" }.forEach { it.applyMediaGain(effectiveGain) }
+        compositeGain.setFocusGain(gain)
+        publishMediaGain("focus")
     }
 
     fun setScreenStreamActiveChangedListener(listener: ((Int, Boolean) -> Unit)?) {
@@ -146,8 +145,8 @@ class AndroidMediaSink(
             mode = if (advancedAudioChannelMapping) AudioChannelMappingMode.AUTOMOTIVE_BUS else AudioChannelMappingMode.MOBILE_COMPATIBLE,
             navigationStreamType = navigationStreamType,
         ).channel == AudioChannel.NAVIGATION
-        val gain = compositeGain.onStreamStarted(type, isNav)
-        audioRenderers.values.filter { it.format.audioType == "media" }.forEach { it.applyMediaGain(gain) }
+        compositeGain.onStreamStarted(type, isNav)
+        publishMediaGain(format.audioType)
         renderer.start()
         if (format.audioType == "media") updateMediaAudio(type, true)
     }
@@ -157,10 +156,12 @@ class AndroidMediaSink(
     }
 
     override fun onAudioStopped(type: Int) {
-        audioRenderers.remove(type)?.close()
+        val stopped = audioRenderers.remove(type)
+        val audioType = stopped?.format?.audioType ?: "unknown"
+        stopped?.close()
         updateMediaAudio(type, false)
-        val gain = compositeGain.onStreamStopped(type)
-        audioRenderers.values.filter { it.format.audioType == "media" }.forEach { it.applyMediaGain(gain) }
+        compositeGain.onStreamStopped(type)
+        publishMediaGain(audioType)
     }
 
     private fun updateMediaAudio(type: Int, active: Boolean) {
@@ -229,6 +230,21 @@ class AndroidMediaSink(
             audioRenderers[type] = it
             if (format.audioType == "media") it.applyMediaGain(compositeGain.effectiveGain())
         }
+    }
+
+    /** Pushes the current music gain to media tracks and logs when that gain changes. */
+    private fun publishMediaGain(audioType: String) {
+        val state = compositeGain.state()
+        audioRenderers.values.filter { it.format.audioType == "media" }.forEach {
+            it.applyMediaGain(state.effective)
+        }
+        if (state.effective == loggedMediaGain) return
+        loggedMediaGain = state.effective
+        DiagLog.i(
+            "DiPlay-AudioFocus",
+            "media effective=${state.effective} focus=${state.focus} nav=${state.navigationStreams} " +
+                "audioType=$audioType",
+        )
     }
 }
 
@@ -623,6 +639,9 @@ private class AudioRenderer(
     private var gateOpened = false
     private var snapshotLastRx = 0L
     private var snapshotBufferedMs = 0L
+    private var snapshotTrackMs = 0L
+    private var gateWaitMarkNs = 0L
+    private val firstArrivalNs = AtomicLong()
     private val fadeByteCount = PcmSmoother.fadeByteCount(format.sampleRate, format.channels)
     private val stagingBuffer = ByteArray(fadeByteCount)
     private var stagedBytes = 0
@@ -671,6 +690,7 @@ private class AudioRenderer(
         if (started) {
             packetsReceived.incrementAndGet()
             val now = System.nanoTime()
+            firstArrivalNs.compareAndSet(0L, now)
             val previous = lastArrivalNs.getAndSet(now)
             if (previous != 0L) maxArrivalGapMs.accumulateAndGet((now - previous) / 1_000_000L, ::maxOf)
         }
@@ -699,14 +719,29 @@ private class AudioRenderer(
             createTrack()
             while (running) {
                 if (isWirelessMedia && !playbackStarted && !gateOpened) {
+                    // A brake stores its own mark. Cold start waits until the first packet so the
+                    // clock is not the moment the thread began.
+                    if (gateWaitMarkNs == 0L) {
+                        val first = firstArrivalNs.get()
+                        if (first != 0L) gateWaitMarkNs = first
+                    }
                     if (!jitterBuffer.isReadyToDrain(queue.size)) {
                         Thread.sleep(AUDIO_POLL_MILLIS)
                         maintainPlaybackBuffer()
                         logStatsIfDue()
                         continue
-                    } else {
-                        gateOpened = true
                     }
+                    val mark = gateWaitMarkNs
+                    val holdMs = if (mark == 0L) -1L else (System.nanoTime() - mark) / 1_000_000L
+                    val queued = queue.size
+                    val target = jitterBuffer.targetHoldPackets()
+                    gateOpened = true
+                    gateWaitMarkNs = 0L
+                    DiagLog.i(
+                        TAG,
+                        "audio gate opened audioType=${format.audioType} rate=${format.sampleRate} " +
+                            "target=$target queue=$queued holdMs=$holdMs",
+                    )
                 }
                 queue.poll(AUDIO_POLL_MILLIS, TimeUnit.MILLISECONDS)?.let(::handle)
                 // Output becomes ready asynchronously, including after the last packet of a burst.
@@ -831,14 +866,16 @@ private class AudioRenderer(
         report("Audio: ready audioType=${format.audioType} codec=${format.codec} " +
             "rate=${format.sampleRate} channels=${format.channels} " +
             "route=$routeLabel " +
-            "bufferMs=${capacityBytes * 1000L / bytesPerSecond} startMs=${startThresholdBytes * 1000L / bytesPerSecond}")
+            "bufferMs=${capacityBytes * 1000L / bytesPerSecond} startMs=${startThresholdBytes * 1000L / bytesPerSecond} " +
+            "wireless=$isWireless target=${jitterBuffer.targetHoldPackets()}")
         DiagLog.i(
             TAG,
             "audio track prepared type=${format.payloadType} audioType=${format.audioType} " +
                 "codec=${format.codec} " +
                 "rate=${format.sampleRate} channels=${format.channels} " +
                 "route=$routeLabel " +
-                "buffer=${capacityBytes * 1000L / bytesPerSecond}ms start=${startThresholdBytes * 1000L / bytesPerSecond}",
+                "buffer=${capacityBytes * 1000L / bytesPerSecond}ms start=${startThresholdBytes * 1000L / bytesPerSecond}ms " +
+                "wireless=$isWireless target=${jitterBuffer.targetHoldPackets()}",
         )
     }
 
@@ -1145,10 +1182,7 @@ private class AudioRenderer(
             lastPcmWriteNs = System.nanoTime()
             if (!playbackStarted) {
                 prebufferBytes += count
-                if (prebufferBytes >= startThresholdBytes) {
-                    startPlayback(track)
-                    DiagLog.i(TAG, "audio playback started type=${format.payloadType}")
-                }
+                if (prebufferBytes >= startThresholdBytes) startPlayback(track, "threshold")
             }
         }
     }
@@ -1168,10 +1202,17 @@ private class AudioRenderer(
         }
     }
 
-    private fun startPlayback(track: AudioTrack) {
+    private fun startPlayback(track: AudioTrack, reason: String) {
         underrunsAtPlaybackStart = track.compatUnderruns()
         track.play()
         playbackStarted = true
+        val prebufferMs = if (bytesPerSecond > 0) prebufferBytes * 1000L / bytesPerSecond else 0L
+        val startMs = if (bytesPerSecond > 0) startThresholdBytes * 1000L / bytesPerSecond else 0L
+        DiagLog.i(
+            TAG,
+            "audio playback started audioType=${format.audioType} reason=$reason " +
+                "prebufferMs=$prebufferMs startMs=$startMs queue=${queue.size}",
+        )
     }
 
     private fun maintainPlaybackBuffer() {
@@ -1184,12 +1225,17 @@ private class AudioRenderer(
             snapshotLastRx = lastRx
             val queueMs = queue.size * 1024L * 1000L / format.sampleRate
             val trackMs = if (bytesPerSecond > 0) unplayedBytes * 1000L / bytesPerSecond else 0L
+            snapshotTrackMs = trackMs
             snapshotBufferedMs = queueMs + trackMs
         }
 
         // Starvation brake for wireless media:
         if (playbackStarted && isWirelessMedia && lastRx > 0L &&
             (now - lastRx > (snapshotBufferedMs + 50L) * 1_000_000L)) {
+            val sinceRxMs = (now - lastRx) / 1_000_000L
+            val snapshotMs = snapshotBufferedMs
+            val trackMs = snapshotTrackMs
+            val queued = queue.size
             codec?.let(::drainCodec)
             if (stagedBytes > 0) {
                 PcmSmoother.applyFadeOut(stagingBuffer, 0, stagedBytes, format.sampleRate, format.channels)
@@ -1204,9 +1250,20 @@ private class AudioRenderer(
             stagedBytes = 0
             prebufferBytes = 0
             jitterBuffer.onUnderrunDetected()
+            gateWaitMarkNs = System.nanoTime()
             rebufferCount++
-            DiagLog.w(TAG, "wireless media starvation brake: escalated gate to ${jitterBuffer.targetHoldPackets()} packets")
-            report("Audio: starvation brake triggered audioType=${format.audioType} targetHold=${jitterBuffer.targetHoldPackets()}")
+            val targetHold = jitterBuffer.targetHoldPackets()
+            DiagLog.w(
+                TAG,
+                "wireless media starvation brake audioType=${format.audioType} " +
+                    "sinceRxMs=$sinceRxMs snapshotMs=$snapshotMs trackMs=$trackMs " +
+                    "queue=$queued targetHold=$targetHold",
+            )
+            report(
+                "Audio: starvation brake triggered audioType=${format.audioType} " +
+                    "sinceRxMs=$sinceRxMs snapshotMs=$snapshotMs trackMs=$trackMs " +
+                    "queue=$queued targetHold=$targetHold",
+            )
         }
 
         val platformReportsUnderruns = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
@@ -1236,11 +1293,11 @@ private class AudioRenderer(
         if (!isWirelessMedia) {
             if (!playbackStarted && prebufferBytes > 0 && queue.isEmpty() &&
                 System.nanoTime() - lastPcmWriteNs >= BUFFER_TAIL_WAIT_NS) {
-                startPlayback(track)
+                startPlayback(track, "tail")
             }
         } else {
             if (!playbackStarted && gateOpened && queue.isEmpty() && prebufferBytes > 0) {
-                startPlayback(track)
+                startPlayback(track, "drain")
             }
         }
     }
