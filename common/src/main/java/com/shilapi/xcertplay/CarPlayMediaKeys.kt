@@ -56,6 +56,17 @@ internal object CarPlayMediaKeys {
     fun bindAudioFocusTarget(target: ((Int) -> Unit)?) {
         audioFocusTarget = target
     }
+
+    @Volatile private var trackTransitionTarget: ((Long) -> Unit)? = null
+
+    fun bindTrackTransitionTarget(target: ((Long) -> Unit)?) {
+        trackTransitionTarget = target
+    }
+
+    fun notifyTrackTransition(windowMs: Long = 3500L) {
+        trackTransitionTarget?.invoke(windowMs)
+    }
+
     fun onIphonePlaying(playing: Boolean) {
         if (playing) mainHandler.post { backend.regainFocus() }
     }
@@ -152,6 +163,9 @@ internal object CarPlayMediaKeys {
             val duration = if (isCleared) 0L else (nowPlaying?.durationMillis ?: 0L)
 
             val isTrackChanged = !isCleared && (lastBroadcastTrack != null && (track != lastBroadcastTrack || artist != lastBroadcastArtist))
+            if (isTrackChanged) {
+                notifyTrackTransition()
+            }
 
             val elapsed = forcedPosition ?: run {
                 val raw = nowPlaying?.elapsedMillis
@@ -323,6 +337,9 @@ internal object CarPlayMediaKeys {
             ?: SteeringWheelKeyMappings.DEFAULT
 
         protected fun send(index: Int) {
+            if (index == 4 || index == 5) {
+                notifyTrackTransition()
+            }
             val sent = controller?.sendMediaButton(index) ?: false
             DiagLog.i(TAG, "media key -> CarPlay $index sent=$sent")
         }

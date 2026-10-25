@@ -42,6 +42,11 @@ class WirelessHoldJitterBuffer(
         hasUnderrun = false
     }
 
+    /** Called on track transition or manual seek/switch to reset penalty and allow fast playback. */
+    fun onTrackTransition() {
+        hasUnderrun = false
+    }
+
     /** True if the compressed queue has accumulated enough packets to open the gate. */
     fun isReadyToDrain(currentQueuePackets: Int): Boolean =
         currentQueuePackets >= targetHoldPackets()

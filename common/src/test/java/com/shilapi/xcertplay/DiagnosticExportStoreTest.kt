@@ -85,6 +85,15 @@ class DiagnosticExportStoreTest {
         assertFalse(provider.deleted)
     }
 
+    @Test fun getAvailableTargetsIncludesUsbAndInternalDownloads() {
+        val context = RuntimeEnvironment.getApplication()
+        val fakeUsb = File(context.cacheDir, "fake-usbotg-sda1").apply { mkdirs() }
+        val targets = DiagnosticExportStore.getAvailableTargets(context, setOf(fakeUsb.absolutePath))
+        assertTrue("Targets list must not be empty", targets.isNotEmpty())
+        assertTrue("Must include internal downloads target", targets.any { !it.isUsb && it.title.contains("机身存储") })
+        assertTrue("Must include external USB target", targets.any { it.isUsb && it.destinationDir.absolutePath.contains("fake-usbotg-sda1") })
+    }
+
     private class DownloadsProvider(val file: File) : ContentProvider() {
         val uri: Uri = Uri.parse("content://media/external/downloads/41")
         var insertValues: ContentValues? = null

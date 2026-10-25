@@ -10,7 +10,10 @@
     <string name="experimental_features_hint">只在本地版里有。这些功能还在车上试。</string>
     <string name="experimental_report_upload">报告上传</string>
     <string name="experimental_report_upload_hint">把诊断报告传到项目自己的日志仓，方便事后看车上那一次跑出了什么。不按按钮就不会发送。</string>
-    <string name="experimental_voice_governance_title">原厂语音治理</string>
+    <string name="vehicle_governance_title">车机治理</string>
+    <string name="vehicle_governance_hint">针对吉利 E01 车机的后台服务抑制与系统诊断日志。</string>
+    <string name="voice_governance_non_vehicle_hint">（当前为非车机环境 · 配置在真车上自动生效）</string>
+    <string name="experimental_voice_governance_title">车机治理 (natp 语音)</string>
     <string name="cluster_media_metadata_title">仪表多媒体卡片 (实验性)</string>
     <string name="cluster_media_metadata_description">播放音乐时向仪表盘多媒体卡片同步歌名、歌手与专辑封面。切换歌曲或封面更新时即时下发，不影响主屏投屏。</string>
     <string name="suppress_native_voice_title">抑制后台语音 (natp + 晓咖)</string>
@@ -362,6 +365,8 @@
     <string name="save_and_reconnect">保存并重新连接</string>
     <string name="save_details">保存详情</string>
     <string name="save_diagnostic_report">保存诊断报告</string>
+    <string name="select_export_destination_title">选择诊断报告导出位置</string>
+    <string name="confirm_export">确定保存</string>
     <string name="save_hotspot_details_and_use_this_mode">保存热点信息并使用此模式</string>
     <string name="save_the_name_and_password_from_the_car_s_hotspot_settings">请先保存车机热点设置中的名称和密码</string>
     <string name="save_your_hotspot_details_in_connection_setup_first">请先在“连接设置”中保存热点信息</string>

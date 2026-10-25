@@ -2247,6 +2247,7 @@ class CarPlayHostActivity : ComponentActivity() {
         controller = snapshot.controller
         sink = snapshot.sink
         CarPlayMediaKeys.bindAudioFocusTarget(snapshot.sink::onExternalAudioFocus)
+        CarPlayMediaKeys.bindTrackTransitionTarget(snapshot.sink::notifyTrackTransition)
         CarPlayBackgroundSession.store(snapshot.controller, snapshot.sink, snapshot.width, snapshot.height, this) { terminate, completion ->
             runOnUiThread {
                 shutdown(terminateProcess = terminate, reason = "DiPlay disconnect", completion = completion)
@@ -2336,6 +2337,7 @@ class CarPlayHostActivity : ComponentActivity() {
         )
         sink = renderer
         CarPlayMediaKeys.bindAudioFocusTarget(renderer::onExternalAudioFocus)
+        CarPlayMediaKeys.bindTrackTransitionTarget(renderer::notifyTrackTransition)
         currentSurface?.let(::attachSurface)
         clusterSurface?.let { renderer.setSurface(SCREEN_TYPE_ALT, it) }
         val media = createMediaEngine(renderer)
@@ -2535,6 +2537,7 @@ class CarPlayHostActivity : ComponentActivity() {
         val oldController = controller
         val oldSink = sink
         CarPlayMediaKeys.detach(oldController)
+        CarPlayMediaKeys.bindTrackTransitionTarget(null)
         CarPlayBackgroundSession.clear(oldController, keepOwner = true)
         controller = null
         sink = null
@@ -2679,6 +2682,7 @@ class CarPlayHostActivity : ComponentActivity() {
         val oldController = controller
         val oldSink = sink
         CarPlayMediaKeys.detach(oldController)
+        CarPlayMediaKeys.bindTrackTransitionTarget(null)
         CarPlayBackgroundSession.clear(oldController)
         controller = null
         sink = null

@@ -104,6 +104,17 @@ class AndroidMediaSink(
         publishMediaGain("focus")
     }
 
+    /**
+     * Suppresses starvation brake and resets escalated jitter buffer gating during track transitions.
+     * Prevents false underrun detection when iPhone pauses/resumes audio during song changes.
+     */
+    fun notifyTrackTransition(windowMs: Long = 3500L) {
+        val untilNs = System.nanoTime() + windowMs * 1_000_000L
+        audioRenderers.values.filter { it.format.audioType == "media" }.forEach {
+            it.notifyTrackTransition(untilNs)
+        }
+    }
+
     fun setScreenStreamActiveChangedListener(listener: ((Int, Boolean) -> Unit)?) {
         synchronized(screenStateLock) {
             screenStreamActiveChanged = listener
@@ -645,6 +656,7 @@ private class AudioRenderer(
     private val fadeByteCount = PcmSmoother.fadeByteCount(format.sampleRate, format.channels)
     private val stagingBuffer = ByteArray(fadeByteCount)
     private var stagedBytes = 0
+    private val trackTransitionUntilNs = AtomicLong(0L)
     private var droppedPacketsLogged = false
     private var firstAacPayloadLogged = false
     private var firstOpusShortPacketLogged = false
@@ -678,6 +690,11 @@ private class AudioRenderer(
             mediaGain = gain
             track?.let { setTrackGain(it, gain) }
         }
+    }
+
+    fun notifyTrackTransition(untilNs: Long) {
+        trackTransitionUntilNs.set(untilNs)
+        jitterBuffer.onTrackTransition()
     }
 
     fun start() {
@@ -1230,8 +1247,10 @@ private class AudioRenderer(
         }
 
         // Starvation brake for wireless media:
-        if (playbackStarted && isWirelessMedia && lastRx > 0L &&
-            (now - lastRx > (snapshotBufferedMs + 50L) * 1_000_000L)) {
+        // Do NOT trigger starvation brake during a track transition or if buffered audio has already cleanly drained to completion.
+        val inTrackTransition = now < trackTransitionUntilNs.get()
+        if (playbackStarted && isWirelessMedia && !inTrackTransition && unplayedBytes > 0 && lastRx > 0L &&
+            (now - lastRx > (snapshotBufferedMs + 100L) * 1_000_000L)) {
             val sinceRxMs = (now - lastRx) / 1_000_000L
             val snapshotMs = snapshotBufferedMs
             val trackMs = snapshotTrackMs

@@ -56,6 +56,14 @@ class WirelessHoldJitterBufferTest {
         assertFalse(buffer.hasUnderrun)
         assertEquals(47, buffer.targetHoldPackets())
         assertTrue(buffer.isReadyToDrain(47))
+
+        // Underrun again, then track transition resets penalty
+        buffer.onUnderrunDetected()
+        assertTrue(buffer.hasUnderrun)
+        assertEquals(104, buffer.targetHoldPackets())
+        buffer.onTrackTransition()
+        assertFalse("Track transition must reset underrun penalty to prevent permanent delay", buffer.hasUnderrun)
+        assertEquals(47, buffer.targetHoldPackets())
     }
 
     @Test

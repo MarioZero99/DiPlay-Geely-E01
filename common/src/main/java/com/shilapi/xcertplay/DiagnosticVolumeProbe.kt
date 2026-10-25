@@ -37,6 +37,7 @@ internal object DiagnosticVolumeProbe {
         "/mnt/usb_storage",
         "/mnt/udisk",
         "/mnt/usb",
+        "/mnt/media_rw",
     )
 
     internal fun unescapeMountPoint(raw: String): String {
@@ -55,7 +56,7 @@ internal object DiagnosticVolumeProbe {
         val candidates = mutableListOf<File>()
         val systemPrefixes = listOf(
             "/system", "/data", "/dev", "/proc", "/sys", "/mnt/secure", "/mnt/asec", "/mnt/obb",
-            "/mnt/shell", "/mnt/runtime", "/mnt/media_rw", "/cache", "/config",
+            "/mnt/shell", "/mnt/runtime", "/cache", "/config",
         )
         val targetFs = setOf("vfat", "exfat", "texfat", "ntfs", "fuse", "fuseblk", "ext4", "ext3", "ext2", "f2fs")
         for (line in mountsContent.lineSequence()) {
@@ -65,7 +66,9 @@ internal object DiagnosticVolumeProbe {
             val mountPoint = unescapeMountPoint(parts[1])
             val fsType = parts[2].lowercase()
             if (fsType !in targetFs) continue
-            if (mountPoint == "/" || mountPoint == "/mnt" || mountPoint.startsWith("/storage/emulated") || systemPrefixes.any { mountPoint.startsWith(it) }) continue
+            // Exact parent only. /mnt/media_rw has no filesystem of its own;
+            // /mnt/media_rw/usbotg-sda1 is the stick and must be kept.
+            if (mountPoint == "/" || mountPoint == "/mnt" || mountPoint == "/mnt/media_rw" || mountPoint.startsWith("/storage/emulated") || systemPrefixes.any { mountPoint.startsWith(it) }) continue
             if (parts.size >= 4) {
                 val options = parts[3].split(",")
                 if (options.contains("ro")) continue
@@ -144,7 +147,8 @@ internal object DiagnosticVolumeProbe {
         }
 
         // Source 2: /proc/mounts, the kernel's own mount table.
-        // This is a direct source naming currently mounted filesystems, filtering out system & raw mirrors (/mnt/media_rw).
+        // Drops system mounts and the empty parent /mnt/media_rw. A child such as
+        // /mnt/media_rw/usbotg-sda1 is the stick and is kept.
         runCatching {
             if (procMountsFile != null && procMountsFile.exists() && procMountsFile.canRead()) {
                 mountsContent = procMountsFile.readText()

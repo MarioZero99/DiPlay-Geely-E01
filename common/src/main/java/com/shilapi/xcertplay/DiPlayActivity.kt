@@ -968,18 +968,43 @@ class DiPlayActivity : ComponentActivity() {
         systemCards(columns)
     }
 
+    private fun vehicleGovernanceCards(columns: CardColumns) {
+        voiceGovernanceCard(columns)
+        diagnosticsCard(columns)
+    }
+
+    private fun diagnosticsCard(columns: CardColumns) {
+        columns.card(R.string.diagnostics, R.drawable.ic_dp_diagnostics) { card ->
+            exportButton = button(if (exportInProgress) getString(R.string.saving_report) else getString(R.string.save_diagnostic_report), false) {
+                showExportTargetPicker()
+            }.apply { isEnabled = !exportInProgress }
+            card.addView(exportButton, matchButton(10, 60))
+
+            if (SupabaseLogUpload.enabled(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_KEY)) {
+                uploadButton = button(
+                    if (uploadInProgress) getString(R.string.uploading_report) else getString(R.string.generate_and_upload_report),
+                    false,
+                ) { uploadGeneratedReport() }.apply { isEnabled = !uploadInProgress }
+                card.addView(uploadButton, matchButton(16, 60))
+            }
+
+            card.addView(
+                label(
+                    getString(R.string.reports_save_to_usb_then_downloads) +
+                        getString(R.string.nothing_is_sent_automatically_protocol_payloads_and_creden),
+                    14,
+                    MUTED,
+                ).apply { setPadding(0, dp(12), 0, 0) },
+            )
+        }
+    }
+
     private fun systemCards(columns: CardColumns) {
         // The certificate source and the identity the iPhone is shown are deliberately not on this
         // page. Both decide whether the car authenticates as an Apple-licensed accessory, a wrong
         // value costs CarPlay outright, and no driver can diagnose that from the screen. They stay
         // at their built-in values.
-        columns.card(R.string.diagnostics, R.drawable.ic_dp_diagnostics) { card ->
-            exportButton = button(if (exportInProgress) getString(R.string.saving_report) else getString(R.string.save_diagnostic_report), false) {
-                exportDiagnostics()
-            }.apply { isEnabled = !exportInProgress }
-            card.addView(exportButton, matchButton(10, 60))
-            card.addView(label(getString(R.string.reports_save_to_usb_then_downloads) + getString(R.string.nothing_is_sent_automatically_protocol_payloads_and_creden), 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
-        }
+        vehicleGovernanceCards(columns)
         columns.card(R.string.automatic_connection, R.drawable.ic_dp_automation) { card ->
             toggle(card, getString(R.string.open_after_the_car_starts), getString(R.string.availability_depends_on_your_head_unit_s_startup_settings), AirPlayPersistence.loadAutoStartOnBoot(this)) { AirPlayPersistence.saveAutoStartOnBoot(this, it) }
             toggle(card, getString(R.string.report_location_to_iphone), getString(R.string.report_android_location_to_the_iphone), locationReportingEnabled) { setLocationReporting(it) }
@@ -987,7 +1012,6 @@ class DiPlayActivity : ComponentActivity() {
                 AirPlayPersistence.saveDebugLogsEnabled(this, it)
             }
         }
-        voiceGovernanceCard(columns)
         columns.card(R.string.permissions_and_connection_help, R.drawable.ic_dp_permissions) { card ->
             card.addView(label(getString(R.string.nearby_devices_connects_your_iphone_microphone_enables_sir), 16, MUTED))
             card.addView(button(getString(R.string.app_permissions), false) { openSystem(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }, matchButton(16, 60))
@@ -1034,13 +1058,18 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun voiceGovernanceCard(columns: CardColumns) {
-        if (!VehicleGovernance.isSupported) return
         columns.card(R.string.experimental_voice_governance_title, R.drawable.ic_dp_permissions) { card ->
+            val isSupported = VehicleGovernance.isSupported
             val isSuppressed = VehicleGovernance.isSuppressionConfigured()
+            val desc = if (isSupported) {
+                getString(R.string.suppress_native_voice_desc)
+            } else {
+                getString(R.string.suppress_native_voice_desc) + "\n" + getString(R.string.voice_governance_non_vehicle_hint)
+            }
             toggle(
                 parent = card,
                 title = getString(R.string.suppress_native_voice_title),
-                description = getString(R.string.suppress_native_voice_desc),
+                description = desc,
                 value = isSuppressed,
             ) { requested ->
                 if (requested) {
@@ -1048,6 +1077,7 @@ class DiPlayActivity : ComponentActivity() {
                         .setTitle(getString(R.string.suppress_native_voice_title))
                         .setMessage(getString(R.string.suppress_native_voice_confirm_body))
                         .setNegativeButton(getString(R.string.cancel)) { _, _ -> render() }
+                        .setOnCancelListener { render() }
                         .setPositiveButton(getString(R.string.maintenance_continue)) { _, _ ->
                             VehicleGovernance.setSuppressionEnabled(true) {
                                 runOnUiThread { render() }
@@ -3142,6 +3172,40 @@ class DiPlayActivity : ComponentActivity() {
     }
     private fun reportFileName() = "DiPlay-${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())}.txt"
 
+    private fun showExportTargetPicker() {
+        if (exportInProgress) return
+        exportInProgress = true
+        exportButton?.apply { isEnabled = false; text = getString(R.string.saving_report) }
+        val appContext = applicationContext
+        val mounted = mountedUsbPaths.toSet()
+        Thread({
+            val targets = DiagnosticExportStore.getAvailableTargets(appContext, mounted)
+            runOnUiThread {
+                exportInProgress = false
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                exportButton?.apply { isEnabled = true; text = getString(R.string.save_diagnostic_report) }
+                if (targets.isEmpty()) {
+                    exportDiagnostics(null)
+                    return@runOnUiThread
+                }
+                val items = targets.map { "${it.title}\n${it.subtitle}" }.toTypedArray()
+                var checkedIndex = 0
+
+                AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.select_export_destination_title))
+                    .setSingleChoiceItems(items, checkedIndex) { _, which ->
+                        checkedIndex = which
+                    }
+                    .setPositiveButton(getString(R.string.confirm_export)) { _, _ ->
+                        val chosen = targets.getOrNull(checkedIndex) ?: targets.first()
+                        exportDiagnostics(chosen)
+                    }
+                    .setNegativeButton(getString(R.string.close), null)
+                    .show()
+            }
+        }, "diplay-target-picker").start()
+    }
+
     /**
      * One button, one exit. The store decides which layer can take the bytes; this only reports what
      * it decided, in the words that decision deserves.
@@ -3150,7 +3214,9 @@ class DiPlayActivity : ComponentActivity() {
      * to it, and doing that while the page is laid out is disk I/O on the drawing thread — the one
      * pause a driver notices as a frozen screen.
      */
-    private fun exportDiagnostics() {
+    private fun exportDiagnostics() = exportDiagnostics(null)
+
+    private fun exportDiagnostics(selectedTarget: ExportTarget? = null) {
         if (exportInProgress) return
         exportInProgress = true
         exportButton?.apply { isEnabled = false; text = getString(R.string.saving_report) }
@@ -3160,7 +3226,12 @@ class DiPlayActivity : ComponentActivity() {
         Thread({
             val result = runCatching {
                 val report = buildDiagnosticReport(appContext)
-                DiagnosticExportStore.export(appContext, fileName, report, mounted) to report
+                val outcome = if (selectedTarget != null) {
+                    DiagnosticExportStore.exportToSelectedTarget(appContext, selectedTarget, fileName, report)
+                } else {
+                    DiagnosticExportStore.export(appContext, fileName, report, mounted)
+                }
+                outcome to report
             }
             runOnUiThread {
                 exportInProgress = false
@@ -3173,7 +3244,7 @@ class DiPlayActivity : ComponentActivity() {
                         // action left is the one that failed, so the button offers it again.
                         AlertDialog.Builder(this).setTitle(getString(R.string.could_not_save_the_report))
                             .setMessage(getString(R.string.diagnostic_report_save_failed_body))
-                            .setPositiveButton(getString(R.string.save_diagnostic_report)) { _, _ -> exportDiagnostics() }
+                            .setPositiveButton(getString(R.string.save_diagnostic_report)) { _, _ -> exportDiagnostics(selectedTarget) }
                             .setNegativeButton(getString(R.string.close), null).show()
                     },
                 )
