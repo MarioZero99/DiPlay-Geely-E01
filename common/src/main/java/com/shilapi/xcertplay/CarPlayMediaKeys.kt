@@ -101,6 +101,68 @@ internal object CarPlayMediaKeys {
         }
     }
 
+    internal fun buildMediaMetadata(nowPlaying: CarPlayNowPlaying, artwork: Bitmap?): MediaMetadata? {
+        val hasContent = nowPlaying.title != null || nowPlaying.artist != null || nowPlaying.album != null || artwork != null
+        if (!hasContent) return null
+        val builder = MediaMetadata.Builder()
+        nowPlaying.title?.let {
+            builder.putString(MediaMetadata.METADATA_KEY_TITLE, it)
+            builder.putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, it)
+        }
+        nowPlaying.artist?.let {
+            builder.putString(MediaMetadata.METADATA_KEY_ARTIST, it)
+            builder.putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, it)
+        }
+        nowPlaying.album?.let {
+            builder.putString(MediaMetadata.METADATA_KEY_ALBUM, it)
+            builder.putString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION, it)
+        }
+        nowPlaying.durationMillis?.let { duration ->
+            if (duration > 0) {
+                builder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
+            }
+        }
+        if (artwork != null && !artwork.isRecycled) {
+            builder.putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
+            builder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
+            builder.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, artwork)
+        }
+        return builder.build()
+    }
+
+    internal fun broadcastMediaChange(context: Context, nowPlaying: CarPlayNowPlaying?, playing: Boolean) {
+        runCatching {
+            val track = nowPlaying?.title.orEmpty()
+            val artist = nowPlaying?.artist.orEmpty()
+            val album = nowPlaying?.album.orEmpty()
+            val duration = nowPlaying?.durationMillis ?: 0L
+            val position = nowPlaying?.elapsedMillis ?: 0L
+            val id = nowPlaying?.artworkTransferId?.toLong() ?: 1L
+
+            val metaIntent = Intent("com.android.music.metachanged").apply {
+                putExtra("id", id)
+                putExtra("artist", artist)
+                putExtra("album", album)
+                putExtra("track", track)
+                putExtra("playing", playing)
+                putExtra("duration", duration)
+                putExtra("position", position)
+                putExtra("package", context.packageName)
+            }
+            context.sendBroadcast(metaIntent)
+
+            val stateIntent = Intent("com.android.music.playstatechanged").apply {
+                putExtra("playing", playing)
+                putExtra("playstate", if (playing) 3 else 2) // 3 = PLAYING, 2 = PAUSED
+                putExtra("position", position)
+                putExtra("package", context.packageName)
+            }
+            context.sendBroadcast(stateIntent)
+        }.onFailure { e ->
+            DiagLog.w(TAG, "failed to send media broadcast", e)
+        }
+    }
+
     @Volatile private var audioFocusTarget: ((Int) -> Unit)? = null
 
     private interface Backend {
@@ -344,9 +406,21 @@ internal object CarPlayMediaKeys {
             artworkQueue.clear()
             updateArtwork(null)
             lastPublishedNowPlaying = null
+            context?.let { ctx -> broadcastMediaChange(ctx, null, false) }
             session?.let { sess ->
-                runCatching { sess.setMetadata(null) }
-                    .onFailure { DiagLog.w(TAG, "failed to clear cluster metadata", it) }
+                runCatching {
+                    sess.setMetadata(null)
+                    val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+                        PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or
+                        PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                    sess.setPlaybackState(
+                        PlaybackState.Builder().setActions(actions).setState(
+                            PlaybackState.STATE_PAUSED,
+                            PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                            1f,
+                        ).build(),
+                    )
+                }.onFailure { DiagLog.w(TAG, "failed to clear cluster metadata", it) }
             }
         }
 
@@ -358,31 +432,29 @@ internal object CarPlayMediaKeys {
             }
             val currentSession = session ?: return
             runCatching {
-                val hasContent = nowPlaying != null && (nowPlaying.title != null || nowPlaying.artist != null || nowPlaying.album != null || artwork != null)
-                val metadata = if (hasContent) buildMetadata(nowPlaying!!, artwork) else null
+                val metadata = nowPlaying?.let { buildMediaMetadata(it, artwork) }
                 currentSession.setMetadata(metadata)
+
+                val isPlaying = nowPlaying?.playing ?: false
+                val position = nowPlaying?.elapsedMillis ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN
+                val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+                    PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or
+                    PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                currentSession.setPlaybackState(
+                    PlaybackState.Builder().setActions(actions).setState(
+                        if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                        position,
+                        1f,
+                    ).build(),
+                )
+
+                broadcastMediaChange(currentContext, nowPlaying, isPlaying)
                 DiagLog.d(TAG, "cluster metadata published: title=${nowPlaying?.title} artist=${nowPlaying?.artist} hasArt=${artwork != null}")
             }.onFailure { e ->
                 DiagLog.w(TAG, "failed to publish cluster metadata", e)
             }
         }
 
-        private fun buildMetadata(nowPlaying: CarPlayNowPlaying, artwork: Bitmap?): MediaMetadata {
-            val builder = MediaMetadata.Builder()
-            nowPlaying.title?.let { builder.putString(MediaMetadata.METADATA_KEY_TITLE, it) }
-            nowPlaying.artist?.let { builder.putString(MediaMetadata.METADATA_KEY_ARTIST, it) }
-            nowPlaying.album?.let { builder.putString(MediaMetadata.METADATA_KEY_ALBUM, it) }
-            nowPlaying.durationMillis?.let { duration ->
-                if (duration > 0) {
-                    builder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
-                }
-            }
-            if (artwork != null && !artwork.isRecycled) {
-                builder.putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
-                builder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
-            }
-            return builder.build()
-        }
 
         override fun release() {
             sessionToken = null
