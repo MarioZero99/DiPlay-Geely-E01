@@ -1,7 +1,6 @@
 package com.shilapi.performance.sampler
 
 import android.content.Context
-import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import com.shilapi.performance.model.LinkMetrics
@@ -24,6 +23,10 @@ object LinkSampler {
         val rssi = if (rssiDbm != 0 && rssiDbm > -127) "($rssiDbm dBm)" else ""
 
         val parts = mutableListOf<String>()
+        val cleanSsid = ssid?.trim('\"')?.trim()
+        if (!cleanSsid.isNullOrEmpty() && cleanSsid != "<unknown ssid>") {
+            parts.add(cleanSsid)
+        }
         if (band.isNotEmpty()) parts.add(band)
         if (speed.isNotEmpty()) parts.add(speed)
         val stats = parts.joinToString(" · ")
@@ -51,7 +54,13 @@ object LinkSampler {
             }.getOrDefault(false)
 
             if (isHotspotEnabled) {
-                return LinkMetrics(LinkType.CAR_HOTSPOT, "热点已开启")
+                val apSsid = runCatching {
+                    val config = WifiManager::class.java.getMethod("getWifiApConfiguration").invoke(wifi)
+                    config?.javaClass?.getField("SSID")?.get(config) as? String
+                }.getOrNull()?.trim('\"')?.trim()?.takeIf { it.isNotEmpty() }
+
+                val detail = if (apSsid != null) "$apSsid · 热点已开启" else "热点已开启"
+                return LinkMetrics(LinkType.CAR_HOTSPOT, detail)
             }
 
             // 2. 探测 Wi-Fi 客户端连接状态

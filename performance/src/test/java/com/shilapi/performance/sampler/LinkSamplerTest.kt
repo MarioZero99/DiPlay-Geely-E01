@@ -13,24 +13,35 @@ class LinkSamplerTest {
     }
 
     @Test
-    fun formatsWifiDetailCorrectly() {
+    fun formatsWifiDetailWithSsidWhenProvided() {
         val detail = LinkSampler.formatWifiDetail(
-            ssid = "CarConnect",
+            ssid = "Geely-E01",
             frequencyMhz = 5180,
             linkSpeedMbps = 433,
             rssiDbm = -55,
         )
-        assertEquals("5 GHz · 433 Mbps (-55 dBm)", detail)
+        assertEquals("Geely-E01 · 5 GHz · 433 Mbps (-55 dBm)", detail)
     }
 
     @Test
-    fun formats24GhzWifiDetailCorrectly() {
+    fun formats24GhzWifiDetailWithoutSsidWhenEmpty() {
         val detail = LinkSampler.formatWifiDetail(
-            ssid = "CarConnect",
+            ssid = "",
             frequencyMhz = 2437,
             linkSpeedMbps = 72,
             rssiDbm = -68,
         )
         assertEquals("2.4 GHz · 72 Mbps (-68 dBm)", detail)
+    }
+
+    @Test
+    fun formatsWifiDetailOmittingUnknownSsidPlaceholder() {
+        val detail = LinkSampler.formatWifiDetail(
+            ssid = "<unknown ssid>",
+            frequencyMhz = 5180,
+            linkSpeedMbps = 433,
+            rssiDbm = -55,
+        )
+        assertEquals("5 GHz · 433 Mbps (-55 dBm)", detail)
     }
 }
