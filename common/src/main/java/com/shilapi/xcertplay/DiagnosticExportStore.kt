@@ -1,321 +1,82 @@
 package com.shilapi.xcertplay
 
-import android.content.ContentResolver
-import android.content.ContentValues
 import android.content.Context
 import android.media.MediaScannerConnection
 import android.net.Uri
-import android.os.Build
 import android.os.Environment
-import android.provider.MediaStore
-import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
+import com.shilapi.xcertplay.host.R
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 
-/**
- * Where the report ended up, named for what it is rather than for how it was written: a stick's root
- * is the one place a driver finds without instructions, the package directory is the one place the
- * platform lets an app write on a second volume, and the two device columns are what is left when no
- * stick is writable.
- */
-internal enum class ExportDestination {
-    USB_ROOT,
-    USB_PACKAGE_DIR,
-    DEVICE_DOWNLOADS,
-    DEVICE_PRIVATE,
-}
-
-/**
- * @property shareableUri signed by this app's FileProvider for the managed internal copy, or null
- * when even that copy could not be made. A stick's own file is never handed to the provider: no path
- * in its config maps a second volume, so asking would throw exactly where the share sheet should open.
- */
-internal data class ExportTarget(
-    val id: String,
-    val title: String,
-    val subtitle: String,
-    val destinationDir: File,
-    val isUsb: Boolean,
+/** One folder the export card can open. [usb] is false only for the head unit's own Download directory. */
+internal data class ExportFolder(
+    val label: String,
+    val directory: File,
+    val usb: Boolean,
 )
 
+/**
+ * Where the report went. [primaryPath] is the file under the folder the user confirmed.
+ * [shareableUri] is the private copy the FileProvider may sign, or null when that copy failed.
+ */
 internal data class ExportOutcome(
-    val destination: ExportDestination,
     val primaryPath: String,
     val shareableUri: Uri?,
-    val probeSummary: String,
-    val allSavedPaths: List<String>,
 )
 
-/** Saves an app-owned report without depending on an OEM's document-picker activity. */
+/** Saves one diagnostic report into the folder the user confirmed, plus a private copy for sharing. */
 internal object DiagnosticExportStore {
-    data class SavedReport(
-        val uri: Uri,
-        val savedInApp: Boolean = false,
-        val savedPath: String? = null,
-    )
-
-    fun getAvailableTargets(
+    fun folders(
         context: Context,
         extraMountPaths: Collection<String> = emptySet(),
-    ): List<ExportTarget> {
-        val targets = mutableListOf<ExportTarget>()
-        val probe = DiagnosticVolumeProbe.probe(context, extraMountPaths)
-        val seenCanonicalPaths = mutableSetOf<String>()
-
-        for (volume in probe.volumes) {
-            val dir = volume.rootDir ?: volume.packageDir ?: continue
-            val canonicalPath = runCatching { dir.canonicalPath }.getOrDefault(dir.absolutePath)
-            if (!seenCanonicalPaths.add(canonicalPath)) continue
-            val volName = volume.name
-            val freeSpace = formatFreeSpace(dir)
-            val desc = if (volume.rootWritable || volume.packageWritable || com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-                "已挂载 · 可写 ($freeSpace) · ${dir.absolutePath}"
-            } else {
-                "已挂载 · 需Root ($freeSpace) · ${dir.absolutePath}"
-            }
-            targets.add(
-                ExportTarget(
-                    id = dir.absolutePath,
-                    title = "🏷️ 外置 U 盘 ($volName)",
-                    subtitle = desc,
-                    destinationDir = File(dir, "DiPlay"),
-                    isUsb = true,
-                )
-            )
-        }
-
+        procMountsFile: File? = DiagnosticVolumeProbe.defaultProcMounts(),
+    ): List<ExportFolder> {
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val downloadFree = formatFreeSpace(downloads)
-        targets.add(
-            ExportTarget(
-                id = "device_downloads",
-                title = "📱 机身存储 (下载目录)",
-                subtitle = "内部空间 ($downloadFree) · ${downloads.absolutePath}/DiPlay",
-                destinationDir = File(downloads, "DiPlay"),
-                isUsb = false,
-            )
-        )
-
-        return targets
+        val usb = preferListedCopy(
+            DiagnosticVolumeProbe.candidates(context, extraMountPaths, procMountsFile)
+                .filter { canList(it) && it.absolutePath != downloads.absolutePath },
+        ).map { ExportFolder(it.name, it, usb = true) }
+        return usb + ExportFolder(context.getString(R.string.export_internal_storage), downloads, usb = false)
     }
 
-    private fun formatFreeSpace(dir: File): String = runCatching {
-        val free = dir.freeSpace
-        if (free <= 0L) return@runCatching "未知空间"
-        val mb = free / (1024 * 1024)
-        if (mb >= 1024) {
-            String.format(java.util.Locale.US, "%.1f GB 可用", mb / 1024.0)
-        } else {
-            "$mb MB 可用"
-        }
-    }.getOrDefault("未知空间")
-
-    fun exportToSelectedTarget(
-        context: Context,
-        target: ExportTarget,
-        fileName: String,
-        report: String,
-    ): ExportOutcome {
-        val savedPaths = mutableListOf<String>()
-        val scanned = mutableListOf<String>()
-        val file = File(target.destinationDir, fileName)
-
-        val written = if (syncWriteText(file, report)) {
-            true
-        } else if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-            exportViaRoot(file, report, context.cacheDir)
-        } else {
-            false
-        }
-
-        if (written) {
-            savedPaths += file.absolutePath
-            scanned += file.absolutePath
-        }
-
-        // Always save an internal backup copy for the Android share sheet
-        val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrNull()
-        backup?.let { savedPaths += it.file.absolutePath }
-
-        announce(context, scanned)
-
-        val destination = when {
-            target.isUsb && written -> ExportDestination.USB_ROOT
-            written -> ExportDestination.DEVICE_DOWNLOADS
-            backup != null -> ExportDestination.DEVICE_PRIVATE
-            else -> throw IOException("Report storage is unavailable")
-        }
-
-        val primary = if (written) file.absolutePath else (backup?.file?.absolutePath ?: file.absolutePath)
-        return ExportOutcome(
-            destination = destination,
-            primaryPath = primary,
-            shareableUri = backup?.uri,
-            probeSummary = target.subtitle,
-            allSavedPaths = savedPaths,
-        )
+    /** Directories first, then files, by lower-case name. An unreadable directory is an empty list. */
+    fun children(directory: File): List<File> {
+        val listed = runCatching { directory.listFiles() }.getOrNull() ?: return emptyList()
+        return listed.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
     }
 
     /**
-     * One exit for a diagnostic report: the managed copy the app can always share, then the stick's
-     * package directory, then the stick's root, then the device's own Downloads.
-     *
-     * The stick order is the platform's order, not a preference — `<vol>/Android/data/<pkg>/files` is
-     * the directory the API guarantees, `<vol>/DiPlay` is the one a driver can find — so b comes before
-     * a, and the outcome names whichever actually took the bytes.
+     * Two paths with the same leaf are one stick. Prefer the copy that is not under `/mnt/media_rw/`,
+     * which is the path a file manager shows. A raw path that is the only one still listable stays.
      */
-    fun export(
-        context: Context,
-        fileName: String,
-        report: String,
-        extraMountPaths: Collection<String> = emptySet(),
-    ): ExportOutcome {
-        val probe = DiagnosticVolumeProbe.probe(context, extraMountPaths)
-        val savedPaths = mutableListOf<String>()
-        val scanned = mutableListOf<String>()
-
-        var usbPackagePath: String? = null
-        var usbRootPath: String? = null
-
-        // b. The contract-guaranteed directory on the stick.
-        for (volume in probe.volumes) {
-            if (!volume.packageWritable && !com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) continue
-            val directory = volume.packageDir?.let { File(it, "DiPlay") } ?: continue
-            val file = File(directory, fileName)
-            val written = if (volume.packageWritable && syncWriteText(file, report)) {
-                true
-            } else if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-                exportViaRoot(file, report, context.cacheDir)
-            } else {
-                false
+    internal fun preferListedCopy(dirs: List<File>): List<File> {
+        val chosen = linkedMapOf<String, File>()
+        for (dir in dirs) {
+            val have = chosen[dir.name]
+            val raw = dir.path.contains("/mnt/media_rw/")
+            if (have == null || (have.path.contains("/mnt/media_rw/") && !raw)) {
+                chosen[dir.name] = dir
             }
-            if (!written) continue
-            if (usbPackagePath == null) usbPackagePath = file.absolutePath
-            savedPaths += file.absolutePath
-            scanned += file.absolutePath
         }
+        return chosen.values.toList()
+    }
 
-        // a. The stick's root, where a driver finds it without being told the package path.
-        for (volume in probe.volumes) {
-            val root = volume.rootDir ?: continue
-            if (volume.rootErrno == "ENOTDIR") continue
-            val file = File(File(root, "DiPlay"), fileName)
-            val written = if (volume.rootWritable && syncWriteText(file, report)) {
-                true
-            } else if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-                exportViaRoot(file, report, context.cacheDir)
-            } else {
-                false
-            }
-            if (!written) continue
-            if (usbRootPath == null) usbRootPath = file.absolutePath
-            savedPaths += file.absolutePath
-            scanned += file.absolutePath
-        }
-
-        // c. The head unit's own public Downloads. On Android 5 this is granted at install by the
-        // manifest's WRITE_EXTERNAL_STORAGE (maxSdkVersion 28), so it is the fallback that almost
-        // always works — and the only sentence a driver can act on when no stick took the report.
-        val downloadPath = saveToDeviceDownloads(context, fileName, report)
-        downloadPath?.let { savedPaths += it; scanned += it }
-
-        // d. The managed copy the app owns, written last and only for the share sheet: it is the one
-        // file the FileProvider is allowed to sign, and a driver with a full /data must still get the
-        // stick copy. Its failure is not the export's failure.
+    /**
+     * Writes `<directory>/DiPlay/<fileName>` and nothing else. The private backup is only for the
+     * share sheet. A failure here throws: the card must not claim the report was saved on the device.
+     */
+    fun save(context: Context, directory: File, fileName: String, report: String): ExportOutcome {
+        val file = File(directory, "DiPlay/$fileName")
+        val written = syncWriteText(file, report) || exportViaRoot(file, report, context.cacheDir)
+        if (!written) throw IOException("Report storage is unavailable")
+        announce(context, listOf(file.absolutePath))
         val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrNull()
-        backup?.let { savedPaths += it.file.absolutePath }
-
-        announce(context, scanned)
-
-        val destination: ExportDestination
-        val primaryPath: String
-        when {
-            usbRootPath != null -> { destination = ExportDestination.USB_ROOT; primaryPath = usbRootPath }
-            usbPackagePath != null -> { destination = ExportDestination.USB_PACKAGE_DIR; primaryPath = usbPackagePath }
-            downloadPath != null -> { destination = ExportDestination.DEVICE_DOWNLOADS; primaryPath = downloadPath }
-            backup != null -> { destination = ExportDestination.DEVICE_PRIVATE; primaryPath = backup.file.absolutePath }
-            else -> throw IOException("Report storage is unavailable")
-        }
-
-        return ExportOutcome(
-            destination = destination,
-            primaryPath = primaryPath,
-            shareableUri = backup?.uri,
-            probeSummary = probe.summaryLine,
-            allSavedPaths = savedPaths,
-        )
+        return ExportOutcome(file.absolutePath, backup?.uri)
     }
 
-    /** Android 9 and OEMs without working Downloads storage can still export privately. */
-    fun saveWithoutPicker(context: Context, fileName: String, report: String): SavedReport {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
-                return SavedReport(saveToDownloads(context.contentResolver, fileName, report))
-            } catch (_: Exception) {
-                // Preserve the report even when the OEM's public storage provider is absent.
-            }
-        }
-        val saved = try {
-            // Use Android's package-specific directory, including debug application IDs.
-            // No storage permission or document-picker activity is needed.
-            val externalFiles = context.getExternalFilesDir(null)
-            if (externalFiles != null) {
-                saveInDirectory(context, File(externalFiles, "diagnostic-reports"), fileName, report)
-            } else {
-                saveInDirectory(context, File(context.filesDir, "diagnostic-reports"), fileName, report, savedInApp = true)
-            }
-        } catch (_: Exception) {
-            // A missing, read-only or full external volume must not prevent export.
-            saveInDirectory(context, File(context.filesDir, "diagnostic-reports"), fileName, report, savedInApp = true)
-        }
-        exportCopiesToAccessibleStorage(context, fileName, report)
-        return saved
-    }
-
-    /** Best-effort copies so a driver with no picker can pull the report off a stick or card. */
-    private fun exportCopiesToAccessibleStorage(context: Context, fileName: String, report: String) {
-        runCatching {
-            val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            writeReportTo(File(downloads, "DiPlay"), fileName, report)
-        }
-        runCatching {
-            writeReportTo(File(Environment.getExternalStorageDirectory(), "DiPlay"), fileName, report)
-        }
-        runCatching {
-            val volumes = context.getExternalFilesDirs(null) ?: return@runCatching
-            for (index in 1 until volumes.size) {
-                val volume = volumes[index] ?: continue
-                writeReportTo(File(volume, "diagnostic-reports"), fileName, report)
-            }
-        }
-        runCatching {
-            usbVolumeDirectories().forEach { writeReportTo(File(it, "DiPlay"), fileName, report) }
-        }
-    }
-
-    // A stick is a child of these roots, not the root itself. On this car the physical
-    // mount is /mnt/media_rw/usbotg-sda1. /mnt/media_rw is only the empty parent, so it
-    // stays in the list and its children are scanned. Do not drop that tree.
-    private val usbMountRoots = listOf(
-        "/storage/usbotg",
-        "/storage/udisk",
-        "/mnt/usb_storage",
-        "/mnt/udisk",
-        "/mnt/usb",
-        "/mnt/media_rw",
-    )
-
-    private fun usbVolumeDirectories(): List<File> = usbMountRoots.flatMap { path ->
-        val root = File(path)
-        if (!root.isDirectory) emptyList()
-        else listOf(root) + root.listFiles().orEmpty().filter { it.isDirectory }
-    }
-
-    private fun writeReportTo(directory: File, fileName: String, report: String) {
-        syncWriteText(File(directory, fileName), report)
-    }
+    private fun canList(dir: File): Boolean = dir.isDirectory && runCatching { dir.list() }.getOrNull() != null
 
     private data class Backup(val uri: Uri?, val file: File)
 
@@ -344,17 +105,6 @@ internal object DiagnosticExportStore {
         }
     }
 
-    private fun saveInDirectory(
-        context: Context,
-        directory: File,
-        fileName: String,
-        report: String,
-        savedInApp: Boolean = false,
-    ): SavedReport {
-        val backup = saveBackupIn(context, directory, fileName, report)
-        return SavedReport(backup.uri!!, savedInApp = savedInApp, savedPath = if (savedInApp) null else backup.file.absolutePath)
-    }
-
     /**
      * Writes the bytes and then asks the kernel to push them onto the stick's own hardware.
      *
@@ -378,25 +128,7 @@ internal object DiagnosticExportStore {
         }
     }
 
-    /** The device's own public Downloads, which is only ever the fallback for a stick that took nothing. */
-    private fun saveToDeviceDownloads(context: Context, fileName: String, report: String): String? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return runCatching {
-                saveToDownloads(context.contentResolver, fileName, report)
-                "Download/DiPlay/$fileName"
-            }.getOrNull()
-        }
-        return runCatching {
-            val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            val file = File(File(downloads, "DiPlay"), fileName)
-            if (syncWriteText(file, report)) file.absolutePath else null
-        }.getOrNull()
-    }
-
-    /**
-     * Tells the media database where the new files are. Without this the stick's own file manager
-     * shows nothing until it is unplugged and plugged back in.
-     */
+    /** Copies one file into place with root when the app itself cannot write the mount. */
     internal fun exportViaRoot(targetFile: File, report: String, cacheDir: File): Boolean {
         if (!com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) return false
         val parentDir = targetFile.parentFile ?: return false
@@ -439,40 +171,11 @@ internal object DiagnosticExportStore {
         }
     }
 
+    /** Tells the media database about the new file, or a file manager shows nothing until the stick is replugged. */
     private fun announce(context: Context, paths: List<String>) {
         if (paths.isEmpty()) return
         runCatching {
             MediaScannerConnection.scanFile(context, paths.toTypedArray(), Array(paths.size) { "text/plain" }, null)
         }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.Q)
-    fun saveToDownloads(resolver: ContentResolver, fileName: String, report: String): Uri {
-        val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-            put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/DiPlay")
-            put(MediaStore.Downloads.IS_PENDING, 1)
-        }
-        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Downloads could not create the report")
-        try {
-            write(resolver, uri, report)
-            val published = resolver.update(uri, ContentValues().apply {
-                put(MediaStore.Downloads.IS_PENDING, 0)
-            }, null, null)
-            if (published != 1) throw IOException("Downloads could not publish the report")
-            return uri
-        } catch (error: Exception) {
-            // Only remove the entry created by this call; never leave a partial report behind.
-            runCatching { resolver.delete(uri, null, null) }
-            throw error
-        }
-    }
-
-    fun write(resolver: ContentResolver, uri: Uri, report: String) {
-        val stream = resolver.openOutputStream(uri, "wt")
-            ?: throw IOException("Report destination is unavailable")
-        stream.bufferedWriter(Charsets.UTF_8).use { it.write(report) }
     }
 }

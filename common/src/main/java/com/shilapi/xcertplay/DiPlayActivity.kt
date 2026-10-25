@@ -27,11 +27,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
-import android.text.SpannableString
-import android.text.Spanned
-import android.text.TextUtils
-import android.text.style.AbsoluteSizeSpan
-import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -75,6 +70,7 @@ import com.shilapi.xcertplay.transport.adapter.AdapterPage
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
 import com.shilapi.xcertplay.ui.component.ConfirmSheetView
+import com.shilapi.xcertplay.ui.component.ExportFolderSheet
 import com.shilapi.xcertplay.ui.component.HeroStageCard
 import com.shilapi.xcertplay.ui.component.QuickWidgetsView
 import com.shilapi.xcertplay.ui.component.SettingsScreenView
@@ -170,6 +166,10 @@ class DiPlayActivity : ComponentActivity() {
     private var initialLaunch = true
     private var notificationTransport = true
     private var exportInProgress = false
+    private var browseGeneration = 0
+    private var browseRequest = 0
+    private var exportSheet: ExportFolderSheet? = null
+    private var exportRoots: List<ExportFolder> = emptyList()
     private var uploadInProgress = false
     private var navigationStreamType = NavigationAudioStream.deviceDefault
     private var testToneTrack: AudioTrack? = null
@@ -312,6 +312,8 @@ class DiPlayActivity : ComponentActivity() {
         wakeCarHotspotInBackground()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // The export card sits above the exit question. Back closes that card first.
+                exportSheet?.let { it.dismiss(); return }
                 // The exit question is drawn over everything else, so it is answered or dismissed
                 // before back is allowed to mean anything about pages.
                 exitSheet?.let { it.dismiss(); return }
@@ -441,6 +443,12 @@ class DiPlayActivity : ComponentActivity() {
         updateLink?.close()
         updateLink = null
         releaseAdapterPage()
+        // Drop the card without animating. A fade callback would run after this activity is gone.
+        browseGeneration++
+        browseRequest++
+        exportSheet?.removeImmediately()
+        exportSheet = null
+        exportRoots = emptyList()
         super.onDestroy()
     }
 
@@ -474,6 +482,7 @@ class DiPlayActivity : ComponentActivity() {
         // page rather than on a header with nothing under it.
         if (page !in KNOWN_PAGES) page = "home"
         hero = null; widgets = null; cockpitHost = null; exitSheet = null
+        // exportSheet stays. The page underneath is rebuilt; the card is put back after setContentView.
         // Read here rather than per view: the car's own day/night signal arrives as a configuration
         // change, which calls render(), so one read per redraw is exactly one read per signal.
         themeScheduleAtRender = AirPlayPersistence.loadThemeSchedule(this)
@@ -491,6 +500,7 @@ class DiPlayActivity : ComponentActivity() {
         // redraw on a head unit that runs with 26 MB free.
         if (page == "home") {
             setContentView(cockpitRoot())
+            reattachExportSheet()
             refreshStatus()
             return
         }
@@ -500,6 +510,7 @@ class DiPlayActivity : ComponentActivity() {
             val scroll = (screen as? SettingsScreenView)?.activeScrollView()
             pageScroll = scroll
             if (scroll != null) restoreScroll(scroll, pageScrollY)
+            reattachExportSheet()
             refreshStatus()
             return
         }
@@ -534,7 +545,19 @@ class DiPlayActivity : ComponentActivity() {
         setContentView(scroll)
         pageScroll = scroll
         restoreScroll(scroll, pageScrollY)
+        reattachExportSheet()
         refreshStatus()
+    }
+
+    /** setContentView drops every child of the old page, including a card that is still in use. */
+    private fun reattachExportSheet() {
+        val sheet = exportSheet ?: return
+        val host = findViewById<ViewGroup>(android.R.id.content) ?: return
+        if (sheet.parent != host) {
+            (sheet.parent as? ViewGroup)?.removeView(sheet)
+            host.addView(sheet, FrameLayout.LayoutParams(-1, -1))
+        }
+        sheet.settle()
     }
 
     /**
@@ -976,7 +999,7 @@ class DiPlayActivity : ComponentActivity() {
     private fun diagnosticsCard(columns: CardColumns) {
         columns.card(R.string.diagnostics, R.drawable.ic_dp_diagnostics) { card ->
             exportButton = button(if (exportInProgress) getString(R.string.saving_report) else getString(R.string.save_diagnostic_report), false) {
-                showExportTargetPicker()
+                showExportBrowser()
             }.apply { isEnabled = !exportInProgress }
             card.addView(exportButton, matchButton(10, 60))
 
@@ -3172,120 +3195,153 @@ class DiPlayActivity : ComponentActivity() {
     }
     private fun reportFileName() = "DiPlay-${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())}.txt"
 
-    private fun showExportTargetPicker() {
-        if (exportInProgress) return
-        exportInProgress = true
-        exportButton?.apply { isEnabled = false; text = getString(R.string.saving_report) }
-        val appContext = applicationContext
+    /**
+     * Opens the folder card. Listing stays off this thread: a stick that is slow to read used to
+     * freeze the page. [browseGeneration] drops a result that arrives after the card is closed.
+     * [browseRequest] drops a result for a folder the user has already left.
+     */
+    private fun showExportBrowser() {
+        if (exportInProgress || exportSheet != null) return
+        val host = cockpitHost ?: findViewById<ViewGroup>(android.R.id.content) ?: return
+        val generation = ++browseGeneration
+        val request = ++browseRequest
         val mounted = mountedUsbPaths.toSet()
+        val sheet = ExportFolderSheet(this, palette) {
+            browseGeneration++
+            browseRequest++
+            exportSheet = null
+            exportRoots = emptyList()
+        }
+        exportSheet = sheet
+        host.addView(sheet, FrameLayout.LayoutParams(-1, -1))
+        sheet.showLoading(getString(R.string.save_diagnostic_report), getString(R.string.export_loading))
         Thread({
-            val targets = DiagnosticExportStore.getAvailableTargets(appContext, mounted)
+            val roots = runCatching { DiagnosticExportStore.folders(applicationContext, mounted) }.getOrDefault(emptyList())
             runOnUiThread {
-                exportInProgress = false
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                exportButton?.apply { isEnabled = true; text = getString(R.string.save_diagnostic_report) }
-                if (targets.isEmpty()) {
-                    exportDiagnostics(null)
-                    return@runOnUiThread
-                }
-                val items = targets.map { "${it.title}\n${it.subtitle}" }.toTypedArray()
-                var checkedIndex = 0
-
-                AlertDialog.Builder(this)
-                    .setTitle(getString(R.string.select_export_destination_title))
-                    .setSingleChoiceItems(items, checkedIndex) { _, which ->
-                        checkedIndex = which
-                    }
-                    .setPositiveButton(getString(R.string.confirm_export)) { _, _ ->
-                        val chosen = targets.getOrNull(checkedIndex) ?: targets.first()
-                        exportDiagnostics(chosen)
-                    }
-                    .setNegativeButton(getString(R.string.close), null)
-                    .show()
+                if (!browseAlive(generation, request)) return@runOnUiThread
+                exportRoots = roots
+                showMountList()
             }
-        }, "diplay-target-picker").start()
+        }, "diplay-export-list").start()
     }
 
-    /**
-     * One button, one exit. The store decides which layer can take the bytes; this only reports what
-     * it decided, in the words that decision deserves.
-     *
-     * Nothing is probed here. Proving a volume writable means creating a directory and writing a file
-     * to it, and doing that while the page is laid out is disk I/O on the drawing thread — the one
-     * pause a driver notices as a frozen screen.
-     */
-    private fun exportDiagnostics() = exportDiagnostics(null)
-
-    private fun exportDiagnostics(selectedTarget: ExportTarget? = null) {
+    private fun showMountList() {
         if (exportInProgress) return
+        val sheet = exportSheet ?: return
+        val rows = exportRoots.map { folder ->
+            ExportFolderSheet.Choice(folder.label, folder.directory.absolutePath, clickable = true) {
+                openDirectory(folder.directory, folder.directory)
+            }
+        }
+        sheet.showChoices(
+            getString(R.string.save_diagnostic_report),
+            getString(R.string.export_pick_hint),
+            rows,
+            saveLabel = null,
+            onSave = null,
+            closeLabel = getString(R.string.close),
+        )
+    }
+
+    private fun openDirectory(directory: File, mountRoot: File) {
+        if (exportInProgress) return
+        val sheet = exportSheet ?: return
+        val generation = browseGeneration
+        val request = ++browseRequest
+        sheet.showLoading(directory.name, getString(R.string.export_loading))
+        Thread({
+            val readable = runCatching { directory.list() }.getOrNull() != null
+            val entries = if (readable) DiagnosticExportStore.children(directory) else emptyList()
+            runOnUiThread {
+                if (!browseAlive(generation, request)) return@runOnUiThread
+                showDirectory(directory, mountRoot, entries, readable)
+            }
+        }, "diplay-export-list").start()
+    }
+
+    private fun showDirectory(directory: File, mountRoot: File, entries: List<File>, readable: Boolean) {
+        val sheet = exportSheet ?: return
+        val rows = mutableListOf<ExportFolderSheet.Choice>()
+        rows += ExportFolderSheet.Choice(getString(R.string.export_up), null, clickable = true) {
+            when {
+                sameFile(directory, mountRoot) -> showMountList()
+                directory.parentFile == null || sameFile(directory.parentFile!!, mountRoot) -> openDirectory(mountRoot, mountRoot)
+                else -> openDirectory(directory.parentFile!!, mountRoot)
+            }
+        }
+        when {
+            !readable -> rows += ExportFolderSheet.Choice(getString(R.string.export_unreadable), null, clickable = false, onClick = null)
+            entries.isEmpty() -> rows += ExportFolderSheet.Choice(getString(R.string.export_empty), null, clickable = false, onClick = null)
+            else -> for (entry in entries) {
+                if (entry.isDirectory) {
+                    rows += ExportFolderSheet.Choice(entry.name + "/", null, clickable = true) {
+                        openDirectory(entry, mountRoot)
+                    }
+                } else {
+                    rows += ExportFolderSheet.Choice(entry.name, null, clickable = false, onClick = null)
+                }
+            }
+        }
+        sheet.showChoices(
+            directory.name.ifBlank { mountRoot.name },
+            File(mountRoot, "DiPlay").absolutePath,
+            rows,
+            saveLabel = getString(R.string.export_save_to_disk),
+            onSave = { exportHere(mountRoot) },
+            closeLabel = getString(R.string.close),
+        )
+    }
+
+    private fun exportHere(directory: File) {
+        if (exportInProgress) return
+        val sheet = exportSheet ?: return
         exportInProgress = true
         exportButton?.apply { isEnabled = false; text = getString(R.string.saving_report) }
+        sheet.setSaving(getString(R.string.saving_report))
         val appContext = applicationContext
         val fileName = reportFileName()
-        val mounted = mountedUsbPaths.toSet()
+        val generation = browseGeneration
         Thread({
             val result = runCatching {
                 val report = buildDiagnosticReport(appContext)
-                val outcome = if (selectedTarget != null) {
-                    DiagnosticExportStore.exportToSelectedTarget(appContext, selectedTarget, fileName, report)
-                } else {
-                    DiagnosticExportStore.export(appContext, fileName, report, mounted)
-                }
-                outcome to report
+                DiagnosticExportStore.save(appContext, directory, fileName, report) to report
             }
             runOnUiThread {
                 exportInProgress = false
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                exportButton?.apply { isEnabled = true; text = getString(R.string.save_diagnostic_report) }
+                if (!isFinishing && !isDestroyed) {
+                    exportButton?.apply { isEnabled = true; text = getString(R.string.save_diagnostic_report) }
+                }
+                if (generation != browseGeneration || isFinishing || isDestroyed || exportSheet == null) return@runOnUiThread
                 result.fold(
-                    onSuccess = { (outcome, report) -> showExportOutcome(outcome, report) },
+                    onSuccess = { (outcome, report) ->
+                        exportSheet?.showSaved(
+                            title = getString(R.string.diagnostic_report_saved),
+                            body = getString(R.string.export_saved_to, outcome.primaryPath),
+                            viewLabel = getString(R.string.view_diagnostic_report),
+                            onView = { showDiagnosticReport(report) },
+                            shareLabel = outcome.shareableUri?.let { getString(R.string.share) },
+                            onShare = outcome.shareableUri?.let { uri -> { shareReport(uri, report) } },
+                            doneLabel = getString(R.string.done),
+                        )
+                    },
                     onFailure = {
-                        // Storage was gone for every layer including the app's own. The one useful
-                        // action left is the one that failed, so the button offers it again.
-                        AlertDialog.Builder(this).setTitle(getString(R.string.could_not_save_the_report))
-                            .setMessage(getString(R.string.diagnostic_report_save_failed_body))
-                            .setPositiveButton(getString(R.string.save_diagnostic_report)) { _, _ -> exportDiagnostics(selectedTarget) }
-                            .setNegativeButton(getString(R.string.close), null).show()
+                        exportSheet?.showFailed(
+                            title = getString(R.string.could_not_save_the_report),
+                            body = getString(R.string.diagnostic_report_save_failed_body),
+                            retryLabel = getString(R.string.retry),
+                            onRetry = { exportHere(directory) },
+                            closeLabel = getString(R.string.close),
+                        )
                     },
                 )
             }
         }, "diplay-export").start()
     }
 
-    /**
-     * What happened, not what was attempted. A report on the stick and a report on the head unit are
-     * different titles and different sentences, and the probe's own line sits under both, in small
-     * print: it names the mount point and the kernel's reason, which is the only evidence a driver can
-     * carry away from a head unit with no adb and no log view.
-     */
-    private fun showExportOutcome(outcome: ExportOutcome, report: String) {
-        val toUsb = outcome.destination == ExportDestination.USB_ROOT ||
-            outcome.destination == ExportDestination.USB_PACKAGE_DIR
-        val body = getString(
-            if (toUsb) R.string.diagnostic_report_saved_to_usb else R.string.diagnostic_report_saved_to_device_no_usb,
-            outcome.primaryPath,
-        )
-        val builder = AlertDialog.Builder(this)
-            .setTitle(getString(if (toUsb) R.string.diagnostic_report_saved else R.string.no_writable_usb_detected))
-            .setMessage(TextUtils.concat(body, probeLine(outcome.probeSummary)))
-            .setPositiveButton(getString(R.string.view_diagnostic_report)) { _, _ -> showDiagnosticReport(report) }
-            .setNegativeButton(getString(R.string.done), null)
-        // No managed copy means no URI the provider may sign, so there is nothing a share sheet could
-        // open. A button that could only fail is worse than no button.
-        outcome.shareableUri?.let { shareUri ->
-            builder.setNeutralButton(getString(R.string.share)) { _, _ -> shareReport(shareUri, report) }
-        }
-        builder.show()
-    }
+    private fun browseAlive(generation: Int, request: Int): Boolean =
+        generation == browseGeneration && request == browseRequest && exportSheet != null && !isFinishing && !isDestroyed
 
-    /** The probe's evidence line: 12sp and muted, under the sentence about where the file went. */
-    private fun probeLine(summary: String): CharSequence {
-        if (summary.isBlank()) return ""
-        return SpannableString("\n\n$summary").apply {
-            setSpan(AbsoluteSizeSpan(12, true), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            setSpan(ForegroundColorSpan(MUTED), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        }
-    }
+    private fun sameFile(left: File, right: File) = left.absolutePath == right.absolutePath
 
     private fun shareReport(uri: Uri, report: String) {
         runCatching {

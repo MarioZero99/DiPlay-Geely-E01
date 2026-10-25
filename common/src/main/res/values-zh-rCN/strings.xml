@@ -225,6 +225,14 @@
     <string name="direct_video_surface_description">画面直接画到屏幕上，少一次贴图合成。Android 6 及以下默认打开。回到连接页后生效。如果画面全黑，把这个关掉。</string>
     <string name="enable_the_car_s_bluetooth_and_pair_your_iphone_first">请先打开车机蓝牙并配对 iPhone。</string>
     <string name="error">错误</string>
+    <string name="export_empty">（这个目录是空的）</string>
+    <string name="export_internal_storage">机身存储</string>
+    <string name="export_loading">正在读取…</string>
+    <string name="export_pick_hint">点一个位置，查看里面的文件</string>
+    <string name="export_save_to_disk">保存到这个盘</string>
+    <string name="export_saved_to">报告已保存到：\n%1$s</string>
+    <string name="export_unreadable">（读不了这个目录）</string>
+    <string name="export_up">上一级</string>
     <string name="restart_application">重启应用</string>
     <string name="exit_application">退出应用</string>
     <string name="close_app">关闭 DiPlay</string>
@@ -332,7 +340,7 @@
     <string name="report_android_location_to_the_iphone">向 iPhone 报告 Android 位置</string>
     <string name="report_location_to_iphone">向 iPhone 报告位置</string>
     <string name="report_saved_open_it_from_your_file_manager_to_share_it">报告已保存。在文件管理器中打开即可分享。</string>
-    <string name="reports_save_to_usb_then_downloads">U 盘可写时存入 U 盘，否则保存到车机的 Download/DiPlay。</string>
+    <string name="reports_save_to_usb_then_downloads">先选择位置并查看里面的文件，再保存到该位置的 DiPlay 目录。</string>
     <string name="requesting_iphone_usb_permission">正在请求 iPhone USB 权限</string>
     <string name="requesting_mfi_usb_permission">正在请求 MFi USB 权限</string>
     <string name="reset">重置</string>

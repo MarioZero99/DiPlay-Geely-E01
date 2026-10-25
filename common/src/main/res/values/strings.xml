@@ -231,6 +231,14 @@
     <string name="direct_video_surface_description">Draws the picture straight onto the screen and skips one texture composition. On by default on Android 6 and older. Applies when you return to the connection screen. Turn it off if the picture stays black.</string>
     <string name="enable_the_car_s_bluetooth_and_pair_your_iphone_first">Enable the car’s Bluetooth and pair your iPhone first.</string>
     <string name="error">Error</string>
+    <string name="export_empty">(This folder is empty)</string>
+    <string name="export_internal_storage">Phone storage</string>
+    <string name="export_loading">Reading…</string>
+    <string name="export_pick_hint">Choose a place and look at its files</string>
+    <string name="export_save_to_disk">Save to this drive</string>
+    <string name="export_saved_to">Saved to:\n%1$s</string>
+    <string name="export_unreadable">(Cannot read this folder)</string>
+    <string name="export_up">Up</string>
     <string name="restart_application">RESTART APPLICATION</string>
     <string name="exit_application">EXIT APPLICATION</string>
     <string name="close_app">Close DiPlay</string>
@@ -333,7 +341,7 @@
     <string name="report_android_location_to_the_iphone">Report Android location to the iPhone</string>
     <string name="report_location_to_iphone">Report location to iPhone</string>
     <string name="report_saved_open_it_from_your_file_manager_to_share_it">Report saved. Open it from your file manager to share it.</string>
-    <string name="reports_save_to_usb_then_downloads">Saves to the USB drive when one is writable; otherwise to Download/DiPlay on the head unit.\u0020</string>
+    <string name="reports_save_to_usb_then_downloads">Choose a place, look at its files, then save into that place\'s DiPlay folder.\u0020</string>
     <string name="requesting_iphone_usb_permission">Requesting iPhone USB permission</string>
     <string name="requesting_mfi_usb_permission">Requesting MFi USB permission</string>
     <string name="reset">Reset</string>
