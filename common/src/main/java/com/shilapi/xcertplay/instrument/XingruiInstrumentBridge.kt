@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.os.RemoteException
 import android.util.Log
 import com.ecarx.xui.adaptapi.diminteraction.IDimTransListener
+import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -19,24 +20,41 @@ internal class XingruiInstrumentBridge(context: Context) {
         Thread(r, "XingruiInstrument-Worker").apply { isDaemon = true }
     }
 
+    private val targetIntent = Intent().apply {
+        component = ComponentName(
+            "com.neusoft.shockwave.instrumentserver",
+            "com.ecarx.xui.adaptapi.diminteraction.MediaService"
+        )
+    }
+
+    val isSupported: Boolean = runCatching {
+        appContext.packageManager.resolveService(targetIntent, 0) != null
+    }.getOrDefault(false)
+
     @Volatile
     private var dimService: IDimTransListener? = null
+    @Volatile
+    private var boundBinder: IBinder? = null
     private val isBound = AtomicBoolean(false)
 
-    private val deathRecipient = IBinder.DeathRecipient {
-        Log.w(TAG, "IPKServer MediaService died, will rebind on next update or bind call")
-        dimService = null
-        isBound.set(false)
-        if (!executor.isShutdown) {
-            executor.execute {
-                safeBind()
-            }
+    // Bitmap 引用去重缓存，防止暂停/播放重复做写盘 I/O
+    private var lastArtworkRef: WeakReference<Bitmap>? = null
+    private var lastCoverUri: String? = null
+
+    private val deathRecipient = object : IBinder.DeathRecipient {
+        override fun binderDied() {
+            Log.w(TAG, "IPKServer MediaService died, clearing local stub")
+            boundBinder?.unlinkToDeath(this, 0)
+            boundBinder = null
+            dimService = null
+            isBound.set(false)
         }
     }
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             Log.i(TAG, "Connected to Xingrui IPK MediaService: $name")
+            boundBinder = service
             try {
                 service?.linkToDeath(deathRecipient, 0)
             } catch (e: RemoteException) {
@@ -47,25 +65,23 @@ internal class XingruiInstrumentBridge(context: Context) {
 
         override fun onServiceDisconnected(name: ComponentName?) {
             Log.w(TAG, "Disconnected from Xingrui IPK MediaService: $name")
+            boundBinder?.unlinkToDeath(deathRecipient, 0)
+            boundBinder = null
             dimService = null
             isBound.set(false)
         }
     }
 
     init {
-        safeBind()
+        if (isSupported) {
+            safeBind()
+        }
     }
 
     private fun safeBind() {
-        if (isBound.get()) return
+        if (!isSupported || isBound.get()) return
         try {
-            val intent = Intent().apply {
-                component = ComponentName(
-                    "com.neusoft.shockwave.instrumentserver",
-                    "com.ecarx.xui.adaptapi.diminteraction.MediaService"
-                )
-            }
-            val success = appContext.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+            val success = appContext.bindService(targetIntent, serviceConnection, Context.BIND_AUTO_CREATE)
             isBound.set(success)
             Log.i(TAG, "bindService to MediaService result=$success")
         } catch (t: Throwable) {
@@ -83,7 +99,7 @@ internal class XingruiInstrumentBridge(context: Context) {
         artwork: Bitmap?,
         isPlaying: Boolean
     ) {
-        if (executor.isShutdown) return
+        if (!isSupported || executor.isShutdown) return
         executor.execute {
             try {
                 if (dimService == null && !isBound.get()) {
@@ -100,7 +116,22 @@ internal class XingruiInstrumentBridge(context: Context) {
                 val safeArtist = if (!artist.isNullOrBlank()) artist else " "
                 val safeAlbum = if (!album.isNullOrBlank()) album else " "
 
-                val coverPath = coverManager.saveCover(artwork)
+                // 封面去重与空白图保障：绝不传空字符串防止触发原厂 IPKServer -102 清屏
+                val coverPath = if (artwork != null && !artwork.isRecycled) {
+                    val prevBmp = lastArtworkRef?.get()
+                    if (prevBmp === artwork && lastCoverUri != null) {
+                        lastCoverUri!!
+                    } else {
+                        val uri = coverManager.saveCover(artwork)
+                        lastArtworkRef = WeakReference(artwork)
+                        lastCoverUri = uri
+                        uri
+                    }
+                } else {
+                    lastArtworkRef = null
+                    lastCoverUri = null
+                    coverManager.getBlankCoverUri()
+                }
 
                 try {
                     // Source 6 = Online music (enables album art display in AlbumService)
@@ -120,7 +151,7 @@ internal class XingruiInstrumentBridge(context: Context) {
     }
 
     fun clearMedia() {
-        if (executor.isShutdown) return
+        if (!isSupported || executor.isShutdown) return
         executor.execute {
             try {
                 val service = dimService ?: return@execute
@@ -138,11 +169,19 @@ internal class XingruiInstrumentBridge(context: Context) {
 
     fun release() {
         try {
-            clearMedia()
+            // 同步清屏：在当前线程直接调用已有 service 引用，确保解绑前指令送达
+            dimService?.let { service ->
+                runCatching {
+                    service.updateMedia(0, " ", " ", " ", "", SOURCE_ONLINE_MUSIC)
+                    service.onAction(2, SOURCE_ONLINE_MUSIC)
+                }
+            }
+            boundBinder?.unlinkToDeath(deathRecipient, 0)
+            boundBinder = null
+            dimService = null
             if (isBound.compareAndSet(true, false)) {
                 appContext.unbindService(serviceConnection)
             }
-            dimService = null
             executor.shutdown()
         } catch (t: Throwable) {
             Log.w(TAG, "Error during release", t)
