@@ -36,4 +36,9 @@ interface IVehicleGovernor {
      * Returns true if running, false if terminated/absent, or null if unsupported.
      */
     suspend fun checkNatpAlive(): Boolean? = null
+
+    /**
+     * Returns the most recent cached alive state of natp if available without blocking.
+     */
+    fun cachedNatpAlive(): Boolean? = null
 }

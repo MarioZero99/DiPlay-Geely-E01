@@ -182,4 +182,35 @@ class CarPlayMediaKeysBroadcastTest {
         assertEquals("Empty/cleared NowPlaying must send playstate 1 (STOPPED) to clear cluster display", 1, stopIntent.getIntExtra("playstate", -1))
         assertEquals(0L, stopIntent.getLongExtra("position", -1L))
     }
+
+    @Test
+    fun trackChangeResetsLastKnownPositionAndPreventsPreviousSongPositionBleed() {
+        CarPlayMediaKeys.resetBroadcastState()
+        val shadow = org.robolectric.Shadows.shadowOf(context)
+        shadow.clearBroadcastIntents()
+
+        // 1. First song playing up to 120000ms
+        val song1 = CarPlayNowPlaying(
+            title = "First Song",
+            artist = "Artist",
+            elapsedMillis = 120000L,
+            durationMillis = 180000L,
+            playing = true,
+        )
+        CarPlayMediaKeys.broadcastMediaChange(context, song1, playing = true)
+
+        // 2. Second song arrives without elapsedMillis in initial metadata packet
+        val song2Initial = CarPlayNowPlaying(
+            title = "Second Song",
+            artist = "Artist",
+            elapsedMillis = null,
+            durationMillis = 240000L,
+            playing = true,
+        )
+        CarPlayMediaKeys.broadcastMediaChange(context, song2Initial, playing = true)
+
+        val metaIntent = shadow.broadcastIntents.last { it.action == "com.android.music.metachanged" }
+        assertEquals("Second Song", metaIntent.getStringExtra("track"))
+        assertEquals("Track change without elapsedMillis must reset position to 0 instead of bleeding previous song's 120000ms", 0L, metaIntent.getLongExtra("position", -1L))
+    }
 }

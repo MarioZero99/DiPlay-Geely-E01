@@ -55,6 +55,9 @@ class E01Mtk6735Governor(
 
     override val isSupported: Boolean = true
 
+    @Volatile
+    private var lastProbedNatpAlive: Boolean? = null
+
     private val _stateFlow = MutableStateFlow(false)
     override val stateFlow: StateFlow<Boolean> = _stateFlow.asStateFlow()
 
@@ -62,13 +65,19 @@ class E01Mtk6735Governor(
         probeNatpInternal()
     }
 
+    override fun cachedNatpAlive(): Boolean? = lastProbedNatpAlive
+
     private fun probeNatpInternal(): Boolean? {
         val result = E01PrivilegedBridge.execute(CMD_CHECK_NATP)
-        return when (result) {
+        val parsed = when (result) {
             is E01PrivilegedBridge.Result.Success -> parseNatpAlive(result.output)
             // Non-zero exit code (e.g. 127 command not found) means probe failed, NOT that process is dead!
             else -> null
         }
+        if (parsed != null) {
+            lastProbedNatpAlive = parsed
+        }
+        return parsed
     }
 
     override suspend fun applySuppression(reason: String): Boolean = queue.execute {

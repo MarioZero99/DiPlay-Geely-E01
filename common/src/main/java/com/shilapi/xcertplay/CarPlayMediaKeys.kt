@@ -151,9 +151,15 @@ internal object CarPlayMediaKeys {
             val album = if (isCleared) "" else nowPlaying?.album.orEmpty()
             val duration = if (isCleared) 0L else (nowPlaying?.durationMillis ?: 0L)
 
+            val isTrackChanged = !isCleared && (lastBroadcastTrack != null && (track != lastBroadcastTrack || artist != lastBroadcastArtist))
+
             val elapsed = forcedPosition ?: run {
                 val raw = nowPlaying?.elapsedMillis
-                if (raw != null && raw >= 0L && raw > lastKnownPosition) {
+                if (isTrackChanged) {
+                    val pos = if (raw != null && raw >= 0L) raw else 0L
+                    lastKnownPosition = pos
+                    pos
+                } else if (raw != null && raw >= 0L && raw > lastKnownPosition) {
                     lastKnownPosition = raw
                     raw
                 } else {
@@ -450,8 +456,14 @@ internal object CarPlayMediaKeys {
                     }
                     return@post
                 }
-                info.elapsedMillis?.let { if (it >= 0) lastKnownPosition = it }
                 val previous = lastPublishedNowPlaying
+                val isTrackChanged = previous != null && (previous.title != info.title || previous.artist != info.artist)
+                if (isTrackChanged) {
+                    // Reset position immediately when track changes, so late elapsed time won't bleed previous song's end position
+                    lastKnownPosition = info.elapsedMillis?.takeIf { it >= 0 } ?: 0L
+                } else {
+                    info.elapsedMillis?.let { if (it >= 0) lastKnownPosition = it }
+                }
                 if (!metadataChanged(previous, info)) {
                     // Filter out 2Hz elapsed time or status ticks to protect system_server heap
                     return@post

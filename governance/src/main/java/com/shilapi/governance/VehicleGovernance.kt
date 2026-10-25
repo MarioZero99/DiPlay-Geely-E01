@@ -50,16 +50,18 @@ object VehicleGovernance {
 
     /**
      * Synchronously probes whether the natp process is currently running with a brief timeout.
+     * Falls back to the latest cached alive state if probe times out to avoid blocking threads.
      */
-    fun checkNatpAliveSync(timeoutMs: Long = 1000L): Boolean? {
+    fun checkNatpAliveSync(timeoutMs: Long = 600L): Boolean? {
         if (!governor.isSupported) return null
+        val cached = governor.cachedNatpAlive()
         return runCatching {
             runBlocking {
                 withTimeoutOrNull(timeoutMs) {
                     governor.checkNatpAlive()
                 }
             }
-        }.getOrNull()
+        }.getOrNull() ?: cached
     }
 
     /**
