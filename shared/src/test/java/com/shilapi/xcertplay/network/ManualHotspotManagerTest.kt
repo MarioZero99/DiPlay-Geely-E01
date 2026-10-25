@@ -124,11 +124,11 @@ class ManualHotspotManagerTest {
                 }
             },
             localInterfaceLocator = { mockInterface },
-            settleThresholdMs = 50L,
+            settleThresholdMs = 600L,
         )
 
         val info = java.util.concurrent.Executors.newSingleThreadExecutor().submit<WirelessHotspotInfo> {
-            manager.start(1000L)
+            manager.start(2500L)
         }.get()
         assertEquals(36, info.channel)
         assertEquals(5180, info.frequencyMHz)
@@ -159,6 +159,49 @@ class ManualHotspotManagerTest {
         assertEquals(0, info.channel)
         assertNull(info.frequencyMHz)
         assertEquals("5 GHz", info.bandLabel)
+    }
+
+    @Test
+    fun incompatibleFrequencyFollowedByNullDoesNotSucceed() {
+        val readCount = AtomicInteger(0)
+        val manager = ManualHotspotManager(
+            context = context,
+            ssid = "Car_Hotspot_Test",
+            passphrase = "password1234",
+            band = ManualHotspotBand.GHZ_5,
+            channel = 0,
+            security = ManualHotspotSecurity.WPA2,
+            onDiagnostic = { diagnostics += it },
+            driverRadioReader = { _, _ ->
+                val count = readCount.incrementAndGet()
+                if (count == 1) {
+                    // First read returns incompatible 2.4 GHz frequency
+                    LegacyHotspotRadio.Reading(2412, null)
+                } else {
+                    // Subsequent reads return null (ioctl error)
+                    LegacyHotspotRadio.Reading(null, "driver query errno=95")
+                }
+            },
+            localInterfaceLocator = { mockInterface },
+            settleThresholdMs = 300L,
+        )
+
+        try {
+            java.util.concurrent.Executors.newSingleThreadExecutor().submit {
+                manager.start(800L)
+            }.get()
+            fail("Expected ExecutionException caused by IOException, but start() succeeded")
+        } catch (e: Exception) {
+            val cause = e.cause ?: e
+            assertTrue(
+                "Expected cause to be IOException but was ${cause.javaClass.name}",
+                cause is IOException,
+            )
+            assertTrue(
+                "Expected message to contain 'Manual hotspot is not running on 5 GHz', but was: ${cause.message}",
+                cause.message?.contains("Manual hotspot is not running on 5 GHz") == true,
+            )
+        }
     }
 
     @Test

@@ -98,8 +98,9 @@ class ManualHotspotManager internal constructor(
         val effectiveSettleMs = minOf(settleThresholdMs, (timeoutMillis / 2).coerceAtLeast(50L))
         val radioSettled = LegacyHotspotRadio.Settled(effectiveSettleMs)
         var firstInterfaceSeenNanos: Long? = null
+        var incompatibleSinceMs: Long? = null
+        var lastIncompatibleReason: String? = null
         var lastReason = "local hotspot interface was not found"
-        var lastMismatchException: IOException? = null
 
         while (true) {
             check(!closed) { "ManualHotspotManager is closed" }
@@ -130,36 +131,41 @@ class ManualHotspotManager internal constructor(
                     onDiagnostic("Manual hotspot driver radio query on ${localInterface.name}: ${driverReading.error}")
                 }
 
-                var bandMismatchReason: String? = null
+                var mismatchReason: String? = null
                 if (driverFrequency != null) {
                     when (expectedBand) {
                         ManualHotspotBand.GHZ_2_4 -> if (driverFrequency !in 2_400..2_500) {
-                            bandMismatchReason = "Manual hotspot is not running on 2.4 GHz (driver reported ${driverFrequency}MHz)"
+                            mismatchReason = "Manual hotspot is not running on 2.4 GHz (driver reported ${driverFrequency}MHz)"
                         }
                         ManualHotspotBand.GHZ_5 -> if (driverFrequency !in 5_150..5_895) {
-                            bandMismatchReason = "Manual hotspot is not running on 5 GHz (driver reported ${driverFrequency}MHz)"
+                            mismatchReason = "Manual hotspot is not running on 5 GHz (driver reported ${driverFrequency}MHz)"
                         }
                         ManualHotspotBand.AUTO -> Unit
                     }
+                    if (mismatchReason == null && expectedChannel > 0) {
+                        val driverChannel = wifiFrequencyMhzToChannel(driverFrequency) ?: 0
+                        if (driverChannel > 0 && driverChannel != expectedChannel) {
+                            mismatchReason = "Manual hotspot channel $driverChannel does not match configured channel $expectedChannel"
+                        }
+                    }
                 }
-
-                val driverChannel = driverFrequency?.let(::wifiFrequencyMhzToChannel) ?: 0
-                val channelMismatchReason = if (expectedChannel > 0 && driverChannel > 0 && driverChannel != expectedChannel) {
-                    "Manual hotspot channel $driverChannel does not match configured channel $expectedChannel"
-                } else {
-                    null
-                }
-
-                val mismatchReason = bandMismatchReason ?: channelMismatchReason
 
                 if (mismatchReason != null) {
-                    // Stale or transient frequency (e.g. MTK single radio settling from STA to AP mode).
-                    // Reset settled state and do not abort immediately; allow radio to settle.
+                    // Incompatible frequency observed.
                     radioSettled.observe(null, nowMs)
+                    lastIncompatibleReason = mismatchReason
                     lastReason = mismatchReason
-                    lastMismatchException = IOException(mismatchReason)
+                    if (incompatibleSinceMs == null) {
+                        incompatibleSinceMs = nowMs
+                    } else if (nowMs - incompatibleSinceMs >= effectiveSettleMs) {
+                        // The frequency has consistently remained incompatible for the settle period (~2 seconds).
+                        // Fail immediately rather than spinning for the entire 60-second hotspot timeout.
+                        throw IOException(mismatchReason)
+                    }
                 } else if (driverFrequency != null) {
-                    lastMismatchException = null
+                    // Compatible frequency observed! Clear any incompatible frequency state.
+                    incompatibleSinceMs = null
+                    lastIncompatibleReason = null
                     val settledFrequency = radioSettled.observe(driverFrequency, nowMs)
                     val remaining = remainingNanos(deadlineNanos)
                     if (settledFrequency != null || remaining <= INTERFACE_POLL_NANOS) {
@@ -199,61 +205,69 @@ class ManualHotspotManager internal constructor(
                         )
                     }
                 } else {
-                    // driverFrequency == null: driver query unavailable or failing.
-                    // Allow grace period for driver to become readable, then fall back to channel 0.
-                    val timeSinceIfaceNanos = nowNanos - firstInterfaceSeenNanos
-                    val gracePeriodNanos = TimeUnit.MILLISECONDS.toNanos(minOf(effectiveSettleMs, 1500L))
-                    val remaining = remainingNanos(deadlineNanos)
-                    if (timeSinceIfaceNanos >= gracePeriodNanos || remaining <= INTERFACE_POLL_NANOS) {
-                        val channel = observedManualHotspotChannel(
-                            driverFrequencyMHz = null,
-                            connectionFrequencyMHz = connectionFrequency,
-                            scanFrequencyMHz = scanFrequency,
-                        )
-                        val frequencyMHz = connectionFrequency ?: scanFrequency
-                        val security = apConfiguration?.security ?: expectedSecurity
-                        if (security != Iap2WirelessSecurity.NONE && passphrase.isEmpty()) {
-                            throw IOException("Manual hotspot is secured but no passphrase was provided")
+                    // driverFrequency == null.
+                    // If an incompatible frequency was previously observed, we must NOT treat a subsequent null
+                    // as a fallback to success on channel 0. Check if the incompatible state has reached the settle threshold.
+                    if (lastIncompatibleReason != null) {
+                        radioSettled.observe(null, nowMs)
+                        if (incompatibleSinceMs != null && nowMs - incompatibleSinceMs >= effectiveSettleMs) {
+                            throw IOException(lastIncompatibleReason)
                         }
-                        if (channel == 0) {
-                            DiagLog.w(
-                                TAG,
-                                "Could not read the active hotspot channel from Android public APIs or driver; " +
-                                    "reporting iAP2 channel 0 (auto) instead of configured channel " +
-                                    "$expectedChannel",
+                    } else {
+                        // Driver frequency has never been readable. Allow the settle period to pass before falling back to channel 0.
+                        val timeSinceIfaceMs = (nowNanos - firstInterfaceSeenNanos) / NANOS_PER_MILLISECOND
+                        val remaining = remainingNanos(deadlineNanos)
+                        if (timeSinceIfaceMs >= effectiveSettleMs || remaining <= INTERFACE_POLL_NANOS) {
+                            val channel = observedManualHotspotChannel(
+                                driverFrequencyMHz = null,
+                                connectionFrequencyMHz = connectionFrequency,
+                                scanFrequencyMHz = scanFrequency,
+                            )
+                            val frequencyMHz = connectionFrequency ?: scanFrequency
+                            val security = apConfiguration?.security ?: expectedSecurity
+                            if (security != Iap2WirelessSecurity.NONE && passphrase.isEmpty()) {
+                                throw IOException("Manual hotspot is secured but no passphrase was provided")
+                            }
+                            if (channel == 0) {
+                                DiagLog.w(
+                                    TAG,
+                                    "Could not read the active hotspot channel from Android public APIs or driver; " +
+                                        "reporting iAP2 channel 0 (auto) instead of configured channel " +
+                                        "$expectedChannel",
+                                )
+                            }
+                            onDiagnostic(
+                                "Manual hotspot configReadable=${apConfiguration != null} " +
+                                    "security=$security channelKnown=${channel > 0} " +
+                                    "hardwareAddressKnown=${localInterface.hardwareAddress != null} iface=${localInterface.name} " +
+                                    "family=${if (localInterface.hostAddress is Inet6Address) "IPv6" else "IPv4"}",
+                            )
+                            return WirelessHotspotInfo(
+                                ssid = expectedSsid,
+                                passphrase = passphrase,
+                                security = security,
+                                channel = channel,
+                                frequencyMHz = frequencyMHz,
+                                bssid = localInterface.hardwareAddress,
+                                interfaceName = localInterface.name,
+                                hostAddress = localInterface.hostAddress,
+                                hostAddresses = localInterface.addresses,
+                                bandLabel = when (expectedBand) {
+                                    ManualHotspotBand.GHZ_2_4 -> "2.4 GHz"
+                                    ManualHotspotBand.GHZ_5 -> "5 GHz"
+                                    ManualHotspotBand.AUTO ->
+                                        frequencyMHz?.let(::bandLabel) ?: observedBandLabel ?: "Auto"
+                                },
+                                backend = WirelessHotspotBackend.MANUAL_HOTSPOT,
                             )
                         }
-                        onDiagnostic(
-                            "Manual hotspot configReadable=${apConfiguration != null} " +
-                                "security=$security channelKnown=${channel > 0} " +
-                                "hardwareAddressKnown=${localInterface.hardwareAddress != null} iface=${localInterface.name} " +
-                                "family=${if (localInterface.hostAddress is Inet6Address) "IPv6" else "IPv4"}",
-                        )
-                        return WirelessHotspotInfo(
-                            ssid = expectedSsid,
-                            passphrase = passphrase,
-                            security = security,
-                            channel = channel,
-                            frequencyMHz = frequencyMHz,
-                            bssid = localInterface.hardwareAddress,
-                            interfaceName = localInterface.name,
-                            hostAddress = localInterface.hostAddress,
-                            hostAddresses = localInterface.addresses,
-                            bandLabel = when (expectedBand) {
-                                ManualHotspotBand.GHZ_2_4 -> "2.4 GHz"
-                                ManualHotspotBand.GHZ_5 -> "5 GHz"
-                                ManualHotspotBand.AUTO ->
-                                    frequencyMHz?.let(::bandLabel) ?: observedBandLabel ?: "Auto"
-                            },
-                            backend = WirelessHotspotBackend.MANUAL_HOTSPOT,
-                        )
                     }
                 }
             }
 
             val remainingNanos = remainingNanos(deadlineNanos)
             if (remainingNanos <= 0) {
-                lastMismatchException?.let { throw it }
+                lastIncompatibleReason?.let { throw IOException(it) }
                 throw IOException(
                     "Timed out after ${timeoutMillis}ms waiting for the manual hotspot: " +
                         lastReason,
