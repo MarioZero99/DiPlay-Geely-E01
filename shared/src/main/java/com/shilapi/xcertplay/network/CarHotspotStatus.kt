@@ -2,10 +2,8 @@ package com.shilapi.xcertplay.network
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.net.wifi.SoftApConfiguration
 import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
-import android.os.Build
 
 /** What the head unit's own hotspot is configured with, when the firmware will say. */
 data class CarHotspotAccessPoint(val ssid: String, val passphrase: String?)
@@ -43,22 +41,7 @@ object CarHotspotStatus {
     fun accessPoint(context: Context): CarHotspotAccessPoint? {
         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             ?: return null
-        return softApAccessPoint(wifi) ?: legacyApAccessPoint(wifi)
-    }
-
-    @SuppressLint("PrivateApi")
-    private fun softApAccessPoint(wifi: WifiManager): CarHotspotAccessPoint? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
-        return try {
-            val configuration = WifiManager::class.java
-                .getMethod("getSoftApConfiguration")
-                .invoke(wifi) as? SoftApConfiguration
-            val ssid = configuration?.ssid?.takeIf { it.isNotBlank() }
-            if (configuration == null || ssid == null) null
-            else CarHotspotAccessPoint(ssid, configuration.passphrase)
-        } catch (_: Throwable) {
-            null
-        }
+        return legacyApAccessPoint(wifi)
     }
 
     @SuppressLint("PrivateApi")

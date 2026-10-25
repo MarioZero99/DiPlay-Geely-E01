@@ -43,8 +43,8 @@ internal object TcpLiveness {
             diagnostic("TCP peer health tuning unavailable: socket keepalive failed: ${failure.javaClass.simpleName}")
             return
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            diagnostic("TCP peer health tuning unavailable: socket options need API 21")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            diagnostic("TCP peer health basic keepalive enabled; fine sockopt tuning requires API 26")
             return
         }
         val descriptor = socketDescriptor(socket)

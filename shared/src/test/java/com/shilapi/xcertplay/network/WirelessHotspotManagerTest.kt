@@ -47,10 +47,9 @@ class WirelessHotspotManagerTest {
         assertEquals(
             0,
             observedManualHotspotChannel(
-                apChannel = 0,
+                driverFrequencyMHz = null,
                 connectionFrequencyMHz = null,
                 scanFrequencyMHz = null,
-                apFrequencyMHz = null,
             ),
         )
     }
@@ -60,19 +59,33 @@ class WirelessHotspotManagerTest {
         assertEquals(
             36,
             observedManualHotspotChannel(
-                apChannel = 36,
+                driverFrequencyMHz = 5180,
                 connectionFrequencyMHz = null,
                 scanFrequencyMHz = null,
-                apFrequencyMHz = null,
             ),
         )
         assertEquals(
             44,
             observedManualHotspotChannel(
-                apChannel = 0,
+                driverFrequencyMHz = null,
                 connectionFrequencyMHz = 5220,
                 scanFrequencyMHz = null,
-                apFrequencyMHz = null,
+            ),
+        )
+        assertEquals(
+            149,
+            observedManualHotspotChannel(
+                driverFrequencyMHz = 5745,
+                connectionFrequencyMHz = null,
+                scanFrequencyMHz = null,
+            ),
+        )
+        assertEquals(
+            36,
+            observedManualHotspotChannel(
+                driverFrequencyMHz = 5180,
+                connectionFrequencyMHz = 5220, // Driver reading takes priority over STA connection
+                scanFrequencyMHz = null,
             ),
         )
     }

@@ -2236,7 +2236,7 @@ class DiPlayActivity : ComponentActivity() {
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
         @Suppress("DEPRECATION")
         val ssid = wifi?.let { runCatching { it.connectionInfo?.ssid }.getOrNull() }?.removeSurrounding("\"")
-        val joined = ssid?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
+        val joined = ssid?.takeIf { it.isNotEmpty() && it != "<unknown ssid>" }
         return NetworkStatus(
             joinedWifiName = joined,
             hotspotOn = com.shilapi.xcertplay.network.CarHotspotStatus.isEnabled(this),

@@ -84,7 +84,8 @@ open class UpdateDownloader(private val timeoutMs: Int = DEFAULT_TIMEOUT_MS) {
             if (status != HttpURLConnection.HTTP_OK) {
                 return DownloadResult.Failure("http $status", DownloadResult.Failure.Kind.NETWORK)
             }
-            val total = connection.contentLengthLong.takeIf { it > 0 } ?: -1L
+            val total = connection.getHeaderField("content-length")?.toLongOrNull()?.takeIf { it > 0 }
+                ?: connection.contentLength.toLong().takeIf { it > 0 } ?: -1L
             val digest = MessageDigest.getInstance("SHA-256")
             var written = 0L
             val buffer = ByteArray(UpdateStorageCleaner.BUFFER_BYTES)

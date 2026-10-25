@@ -103,7 +103,7 @@ internal fun wifiChannelToFrequencyMhz(channel: Int, band: Int? = null): Int? = 
     else -> null
 }
 
-/** Maps Android's [android.net.wifi.SoftApConfiguration] band constants to a user-facing label. */
+/** Maps internal band representation (1=2.4GHz, 2=5GHz, etc.) to a user-facing label. */
 internal fun wifiBandLabel(band: Int?): String? = when (band) {
     1 -> "2.4 GHz"
     2 -> "5 GHz"
@@ -112,27 +112,28 @@ internal fun wifiBandLabel(band: Int?): String? = when (band) {
     else -> null
 }
 
-/** WifiConfiguration uses 0/1/-1; SoftApConfiguration uses a 1/2/4 bit mask. */
-internal fun legacyHotspotBandToSoftApBand(band: Int?): Int? = when (band) {
+/** Maps legacy WifiConfiguration apBand (0=2.4GHz, 1=5GHz, -1=auto) to band (1=2.4GHz, 2=5GHz, 3=auto). */
+internal fun legacyHotspotBandToBand(band: Int?): Int? = when (band) {
     0 -> 1
     1 -> 2
     -1 -> 3
     else -> null
 }
 
+/** Backward compatibility alias. */
+internal fun legacyHotspotBandToSoftApBand(band: Int?): Int? = legacyHotspotBandToBand(band)
+
 /**
- * Returns only a channel observed from Android. An unknown channel must stay unknown instead of
- * echoing the user's desired channel back to the iPhone in 0x5703.
+ * Resolves the active hotspot channel. On E01 (Android 5.1), the driver's live radio frequency
+ * via ioctl is the authoritative hardware truth, followed by connection/scan fallbacks.
  */
 internal fun observedManualHotspotChannel(
-    apChannel: Int,
-    connectionFrequencyMHz: Int?,
-    scanFrequencyMHz: Int?,
-    apFrequencyMHz: Int?,
+    driverFrequencyMHz: Int?,
+    connectionFrequencyMHz: Int? = null,
+    scanFrequencyMHz: Int? = null,
 ): Int {
-    if (apChannel > 0) return apChannel
+    driverFrequencyMHz?.let(::wifiFrequencyMhzToChannel)?.let { return it }
     connectionFrequencyMHz?.let(::wifiFrequencyMhzToChannel)?.let { return it }
     scanFrequencyMHz?.let(::wifiFrequencyMhzToChannel)?.let { return it }
-    apFrequencyMHz?.let(::wifiFrequencyMhzToChannel)?.let { return it }
     return 0
 }

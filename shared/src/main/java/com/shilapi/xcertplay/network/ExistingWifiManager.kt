@@ -370,7 +370,7 @@ class ExistingWifiManager(
 
     private fun readableSsid(info: WifiInfo?): String? = info?.ssid
         ?.removeSurrounding("\"")
-        ?.takeIf { it.isNotEmpty() && it != WifiManager.UNKNOWN_SSID }
+        ?.takeIf { it.isNotEmpty() && it != UNKNOWN_SSID_LITERAL }
 
     @Suppress("DEPRECATION")
     private fun savedCredentials(ssid: String, info: WifiInfo?): ExistingWifiCredentials? {
@@ -650,13 +650,15 @@ internal fun existingWifiSecurity(keyManagement: BitSet?): Iap2WirelessSecurity 
     if (single && keyManagement.get(KEY_MGMT_OWE)) return Iap2WirelessSecurity.NONE
     if (!keyManagement.get(KEY_MGMT_SAE)) return Iap2WirelessSecurity.WPA_WPA2
     val psk = keyManagement.get(WifiConfiguration.KeyMgmt.WPA_PSK) ||
-        keyManagement.get(WifiConfiguration.KeyMgmt.WPA2_PSK)
+        keyManagement.get(KEY_MGMT_WPA2_PSK)
     return if (psk) Iap2WirelessSecurity.WPA3_TRANSITION else Iap2WirelessSecurity.WPA3_ONLY
 }
 
-// The API 29 values of WifiConfiguration.KeyMgmt.SAE and .OWE, named as literals so API 19 still loads.
+// The values of WifiConfiguration.KeyMgmt.WPA2_PSK, SAE and OWE, named as literals so API 19/22 still loads.
+private const val KEY_MGMT_WPA2_PSK = 4
 private const val KEY_MGMT_SAE = 8
 private const val KEY_MGMT_OWE = 9
+private const val UNKNOWN_SSID_LITERAL = "<unknown ssid>"
 
 /** WifiConfiguration quotes what it stores; the wire format does not. */
 private fun unquoted(value: String?): String? = value?.removeSurrounding("\"")

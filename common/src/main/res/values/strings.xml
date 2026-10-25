@@ -14,7 +14,7 @@
     <string name="cluster_media_metadata_title">Cluster media metadata (experimental)</string>
     <string name="cluster_media_metadata_description">Synchronizes song title, artist and artwork to the instrument cluster media card. Updates on track changes without interrupting playback or main display.</string>
     <string name="suppress_native_voice_title">Suppress background voice (natp + xiaoka)</string>
-    <string name="suppress_native_voice_desc">Reclaims 320MB+ RAM and 40% CPU. Automatically restores on exit or reboot.</string>
+    <string name="suppress_native_voice_desc" formatted="false">Reclaims 320MB+ RAM and 40% CPU. Automatically restores on exit or reboot.</string>
     <string name="suppress_native_voice_confirm_body">Enabling will temporarily disable the car’s native voice assistant. The microphone will be exclusively used by CarPlay. Native voice will be restored when exiting the app. Proceed?</string>
     <string name="hotspot_hint_manual">Built-in car hotspot · Keep the car hotspot, Bluetooth and your iPhone’s Wi-Fi on.</string>
     <string name="hotspot_hint_local">Open Connection setup to save your built-in car hotspot details.</string>
