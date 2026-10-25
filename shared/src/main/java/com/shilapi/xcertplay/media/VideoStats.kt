@@ -5,6 +5,13 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /** Five-second video counters that separate network/iPhone gaps from decoder throughput. */
+data class VideoTelemetrySnapshot(
+    val rxFps: Float,
+    val shownFps: Float,
+    val touchLatencyMs: Long,
+    val recoveries: Int,
+)
+
 internal class VideoStats(
     private val label: String = "",
     private val nanoTime: () -> Long = System::nanoTime,
@@ -25,6 +32,14 @@ internal class VideoStats(
     private var renderLatencySumNs = 0L
     private var maxRenderLatencyNs = 0L
 
+    private val cumulativeReceived = AtomicLong(0L)
+    private val cumulativeRendered = AtomicLong(0L)
+    @Volatile private var telemetryTimeNs = nanoTime()
+    @Volatile private var telemetryReceived = 0L
+    @Volatile private var telemetryRendered = 0L
+    @Volatile private var lastTelemetryShownFps = 0.0f
+    @Volatile private var lastTelemetryRxFps = 0.0f
+
     fun onReceived(size: Int) {
         val now = nanoTime()
         val prevArrival = lastArrivalNs.getAndSet(now)
@@ -42,6 +57,7 @@ internal class VideoStats(
             }
         }
         received.incrementAndGet()
+        cumulativeReceived.incrementAndGet()
         bytes.addAndGet(size.toLong())
     }
 
@@ -52,6 +68,7 @@ internal class VideoStats(
      */
     fun onRendered(nowNs: Long) {
         rendered.incrementAndGet()
+        cumulativeRendered.incrementAndGet()
         // Only the main screen carries touches; a second stream must not consume their samples.
         if (label.isNotEmpty()) return
         val latency = TouchLatencyProbe.onRendered(nowNs)
@@ -111,6 +128,35 @@ internal class VideoStats(
         DiagLog.i(TAG, line)
         windowStartNs = now
         return line
+    }
+
+    /**
+     * 当前投屏瞬时遥测快照，只读差值，严禁重置计数器以保护 5 秒官方诊断日志。
+     */
+    fun readCurrentTelemetry(): VideoTelemetrySnapshot {
+        val now = nanoTime()
+        val curRendered = cumulativeRendered.get()
+        val curReceived = cumulativeReceived.get()
+        val elapsedNs = now - telemetryTimeNs
+        if (elapsedNs >= 300_000_000L) {
+            val seconds = elapsedNs / 1e9
+            val diffRendered = curRendered - telemetryRendered
+            val diffReceived = curReceived - telemetryReceived
+            lastTelemetryShownFps = (diffRendered / seconds).toFloat()
+            lastTelemetryRxFps = (diffReceived / seconds).toFloat()
+            telemetryRendered = curRendered
+            telemetryReceived = curReceived
+            telemetryTimeNs = now
+        }
+        val touchAvg = synchronized(renderLock) {
+            if (renderSamples > 0) renderLatencySumNs / renderSamples / 1_000_000 else -1L
+        }
+        return VideoTelemetrySnapshot(
+            rxFps = lastTelemetryRxFps,
+            shownFps = lastTelemetryShownFps,
+            touchLatencyMs = touchAvg,
+            recoveries = recoveries.get(),
+        )
     }
 
 

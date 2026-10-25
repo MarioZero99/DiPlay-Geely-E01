@@ -246,6 +246,9 @@ class AndroidMediaSink(
                 "audioType=$audioType",
         )
     }
+
+    fun currentTelemetry(streamType: Int = 110): VideoTelemetrySnapshot? =
+        videoDecoders[streamType]?.currentTelemetry()
 }
 
 /** Serial MediaCodec video decoder: one worker owns configure and frame feeding. */
@@ -290,6 +293,8 @@ private class VideoDecoder(
     fun setSurface(surface: Surface?) {
         queue.offer(VideoJob.SurfaceChanged(surface))
     }
+
+    fun currentTelemetry(): VideoTelemetrySnapshot = stats.readCurrentTelemetry()
 
     override fun close() {
         running = false
