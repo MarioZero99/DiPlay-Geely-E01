@@ -126,19 +126,34 @@ class ManualHotspotManager internal constructor(
                 val trustedDriverFrequency = when (expectedBand) {
                     ManualHotspotBand.GHZ_5 -> driverFrequency?.takeIf { it in 5_150..5_895 }
                     ManualHotspotBand.GHZ_2_4 -> driverFrequency?.takeIf { it in 2_400..2_500 }
-                    ManualHotspotBand.AUTO -> driverFrequency
+                    ManualHotspotBand.AUTO -> driverFrequency?.takeIf { it in 2_400..2_500 || it in 5_150..5_895 }
                 }
 
-                val channel = when {
-                    scanFrequency != null -> wifiFrequencyMhzToChannel(scanFrequency) ?: 0
-                    trustedDriverFrequency != null -> {
-                        val ch = wifiFrequencyMhzToChannel(trustedDriverFrequency) ?: 0
-                        if (expectedChannel > 0 && ch != expectedChannel) 0 else ch
-                    }
-                    else -> 0
+                // Scan results from WifiManager cache must also strictly match expectedBand.
+                // Old scan results in system cache (e.g. 2.4 GHz from previous AP session) must never be used on 5 GHz.
+                val trustedScanFrequency = when (expectedBand) {
+                    ManualHotspotBand.GHZ_5 -> scanFrequency?.takeIf { it in 5_150..5_895 }
+                    ManualHotspotBand.GHZ_2_4 -> scanFrequency?.takeIf { it in 2_400..2_500 }
+                    ManualHotspotBand.AUTO -> scanFrequency?.takeIf { it in 2_400..2_500 || it in 5_150..5_895 }
                 }
 
-                val frequencyMHz = scanFrequency ?: trustedDriverFrequency
+                // Driver ioctl reading on ap0 is the live hardware truth and takes priority over scan cache.
+                // If driver explicitly returned a reading that failed the band check (e.g. 2412 MHz when 5 GHz is expected),
+                // the radio is in a transitional or mismatched state; stale scan cache must NOT override it.
+                // Scan cache is only evaluated as a fallback when driver query is completely unavailable (driverFrequency == null).
+                val resolvedFrequency = when {
+                    driverFrequency != null -> trustedDriverFrequency
+                    else -> trustedScanFrequency
+                }
+
+                val channel = if (resolvedFrequency != null) {
+                    val ch = wifiFrequencyMhzToChannel(resolvedFrequency) ?: 0
+                    if (expectedChannel > 0 && ch != expectedChannel) 0 else ch
+                } else {
+                    0
+                }
+
+                val frequencyMHz = if (channel > 0) resolvedFrequency else null
                 val security = apConfiguration?.security ?: expectedSecurity
                 if (security != Iap2WirelessSecurity.NONE && passphrase.isEmpty()) {
                     throw IOException("Manual hotspot is secured but no passphrase was provided")

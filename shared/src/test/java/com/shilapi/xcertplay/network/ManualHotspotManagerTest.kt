@@ -176,6 +176,107 @@ class ManualHotspotManagerTest {
     }
 
     @Test
+    fun staleScanResultFromOld24GHzDoesNotOverrideDriverFrequencyOn5GHz() {
+        val manager = ManualHotspotManager(
+            context = context,
+            ssid = "Car_Hotspot_Test",
+            passphrase = "password1234",
+            band = ManualHotspotBand.GHZ_5,
+            channel = 0,
+            security = ManualHotspotSecurity.WPA2,
+            onDiagnostic = { diagnostics += it },
+            driverRadioReader = { _, _ ->
+                // Driver reports live AP running on 5 GHz (channel 36)
+                LegacyHotspotRadio.Reading(5180, null)
+            },
+            localInterfaceLocator = { mockInterface },
+        )
+
+        // System cache has stale 2.4 GHz scan result from earlier AP session
+        val staleScanResult = android.net.wifi.ScanResult().apply {
+            SSID = "Car_Hotspot_Test"
+            BSSID = "02:00:00:00:00:01"
+            frequency = 2412
+        }
+        shadowOf(wifi).setScanResults(listOf(staleScanResult))
+
+        val info = java.util.concurrent.Executors.newSingleThreadExecutor().submit<WirelessHotspotInfo> {
+            manager.start(500L)
+        }.get()
+        // Driver frequency (5180 MHz / ch 36) must take priority over stale 2.4 GHz scan cache
+        assertEquals(36, info.channel)
+        assertEquals(5180, info.frequencyMHz)
+        assertEquals("5 GHz", info.bandLabel)
+    }
+
+    @Test
+    fun staleScanResultOn24GHzDoesNotOverrideUntrustedDriverReadingOn5GHz() {
+        val manager = ManualHotspotManager(
+            context = context,
+            ssid = "Car_Hotspot_Test",
+            passphrase = "password1234",
+            band = ManualHotspotBand.GHZ_5,
+            channel = 0,
+            security = ManualHotspotSecurity.WPA2,
+            onDiagnostic = { diagnostics += it },
+            driverRadioReader = { _, _ ->
+                // Driver reports 2412 MHz (mismatch / stale single-radio residue on E01)
+                LegacyHotspotRadio.Reading(2412, null)
+            },
+            localInterfaceLocator = { mockInterface },
+        )
+
+        // System cache also has 2412 MHz scan result
+        val staleScanResult = android.net.wifi.ScanResult().apply {
+            SSID = "Car_Hotspot_Test"
+            BSSID = "02:00:00:00:00:01"
+            frequency = 2412
+        }
+        shadowOf(wifi).setScanResults(listOf(staleScanResult))
+
+        val info = java.util.concurrent.Executors.newSingleThreadExecutor().submit<WirelessHotspotInfo> {
+            manager.start(500L)
+        }.get()
+        // Must NOT report channel 1 to iPhone; must report channel 0 so iPhone scans reliably
+        assertEquals(0, info.channel)
+        assertNull(info.frequencyMHz)
+        assertEquals("5 GHz", info.bandLabel)
+    }
+
+    @Test
+    fun staleScanResultOn24GHzDoesNotProvideChannelWhenDriverUnavailableOn5GHz() {
+        val manager = ManualHotspotManager(
+            context = context,
+            ssid = "Car_Hotspot_Test",
+            passphrase = "password1234",
+            band = ManualHotspotBand.GHZ_5,
+            channel = 0,
+            security = ManualHotspotSecurity.WPA2,
+            onDiagnostic = { diagnostics += it },
+            driverRadioReader = { _, _ ->
+                LegacyHotspotRadio.Reading(null, "driver query errno=95")
+            },
+            localInterfaceLocator = { mockInterface },
+        )
+
+        // System cache has stale 2.4 GHz scan result, but user selected 5 GHz
+        val staleScanResult = android.net.wifi.ScanResult().apply {
+            SSID = "Car_Hotspot_Test"
+            BSSID = "02:00:00:00:00:01"
+            frequency = 2412
+        }
+        shadowOf(wifi).setScanResults(listOf(staleScanResult))
+
+        val info = java.util.concurrent.Executors.newSingleThreadExecutor().submit<WirelessHotspotInfo> {
+            manager.start(500L)
+        }.get()
+        // Must NOT report channel 1 when 5 GHz is expected; must fall back to channel 0
+        assertEquals(0, info.channel)
+        assertNull(info.frequencyMHz)
+        assertEquals("5 GHz", info.bandLabel)
+    }
+
+    @Test
     fun driverQueryFailureFallsBackToChannelZeroWithoutCrashing() {
         val channel = observedManualHotspotChannel(
             driverFrequencyMHz = null,
