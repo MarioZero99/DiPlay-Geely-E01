@@ -1,70 +1,48 @@
-# 无线 CarPlay 音乐：中间热点断流防护与 MTK ALSA 回环根除计划（严密落地终版）
+# 无线 CarPlay 音乐：中间热点断流防护与 MTK ALSA 回环根除计划（金标实车终极落盘版）
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 针对吉利 E01 车机（MTK MT6735, Android 5.1 / API 22）在无线中间热点 1~2 秒休眠断流下的音频问题，实现：
-1. **无线音乐 1000ms 起播，欠载后在 Java 压缩队列扣包至 2200ms**（利用声卡 500~700ms 天然阻塞机制将纵深常驻在压缩队列中，声卡容量不盲目扩大，严防写死死锁）；
-2. **最后一包到达时刻快照 + 墙上时钟精准判定断流**（严防半路提前刹车导致旧声音残留）；
-3. **排空解码器 + 15ms 暂存真实声音淡出 + 40ms 整帧静音冲刷 + 立即 `track.pause()` 刹车**（绝不调用 `flush()`，但在流彻底销毁 `release()` 时保留 `flush()`）；
-4. **针对无线音乐单独屏蔽 500ms 尾包抢跑**；
-5. **基于 `AudioChannel.NAVIGATION` 与计数器的本地即时压音（取 `minOf` 杜绝 0.04 极小音量），并与焦点增益安全合成**；
-6. **有线 USB 模式严格通过 `wirelessEnabled` 识别并完全旁路，维持现有配置与起播逻辑零侵入**。
+1. **无线音乐放行门限锁存机制（Gate Latch）**：冷启动/流重置时队列等满 47 包（44.1kHz 为 44 包）开闸，欠载后等满 104 包（44.1kHz 为 95 包）开闸。开闸后设置 `gateOpened = true`，平时的写入仍走累加 `prebufferBytes` 的标准循环；
+2. **开闸后排空兜底起播（Gate-Opened Drain Playback）**：无线音乐开闸后（`gateOpened == true`），若写入达到门限立即 `play()`；若因 15ms 暂存扣留导致 47 包（约 988ms）距 1000ms 门限微小差额，只要 `queue.isEmpty()` 且解码器排空、`prebufferBytes > 0`，立即开声；**未开闸前（`gateOpened == false`）绝对不走此兜底，严防未蓄满被抢跑**；
+3. **总库存约 2219ms 由「Java 压缩队列包数 + 现有声卡容量（500~1200ms）」联合构成**，放行后写入声卡的部分自然从队列移出，声卡写满 500~1200ms 后自然按 1.0x 阻塞限速，队列中平稳垫底剩余包数；
+4. **15ms 真实声音暂存与余弦淡入淡出严格仅对 `isWireless && audioType == "media"` 生效**（非无线媒体流保持既有整段写入与既有生命周期，绝不扣押导航短提示与电话尾音）；
+5. **无线音乐 `writePcm` 写入互斥分离**：仅写入「上一块暂存」与「新块截掉末尾 15ms 的主体」，末尾 15ms 留存暂存，绝不同时走既有全量写入（杜绝尾部重复播放两遍）；
+6. **收包时间戳仅由 `submit()` 记录原子值，库存快照仅在收包时间戳变化时改写一次，单线程判定**，严防快照缩水与提前误刹车；
+7. **刹车直写声卡通过循环写全（`writeCompletelyToTrack`）确保字节写完再 `pause()`**（仅用于刹车时的淡出与 40ms 静音，绝不用于平时写入）；刹车后清零 `playbackStarted = false`、`gateOpened = false`、`prebufferBytes = 0`、`stagedBytes = 0`；
+8. **`isWireless` 明确传入 `AudioRenderer` 独立类构造函数**；
+9. **导航流（`alert`/`default`/`compatibility`）触发时，仅通过 `applyMediaGain` 对已经在播的 `media` 轨结合 `minOf` 压至 0.2，导航轨自身绝不调音，保持 1.0 原音，双重压音不衰减至 0.04**；
+10. **`hasUnderrun` 只在 `release()` 流销毁时清零，同一条流内的切歌继续保持 2200ms 深度，严禁曲目变化时清空队列切掉新歌开头；有线 USB 严格通过 `wirelessEnabled` 识别并完全旁路零侵入**。
 
 ---
 
-## 终版六大关键技术事实与边界（全部采纳并闭环）
+## 终极闭环关键技术事实（开闸后排空兜底与平稳起播）
 
-### 1. 无线标志透传与多流模式隔离
-* **调用点透传**：在 `CarPlayHostActivity.kt:2092` 的 `createMediaSink` 中，**必须传入 `isWireless = wirelessEnabled`**（严禁使用恒为 true 的 `wirelessHotspotMode != null`）。
-* **多流严格隔离**：扣包状态机只对 `isWireless && format.audioType == "media"` 生效。通话、Siri、导航提示的 `targetHoldPackets()` 恒为 0，即刻出声。
-* **有线模式零侵入**：有线模式（`!isWireless`）继续走用户偏好的 300 / 500 / 1000ms 及现有的 500ms 尾包抢跑。
-
-### 2. 2200ms 扣包与常态保持机理
-* **不扩大声卡**：硬件 `AudioTrack` 维持现有的 500ms~700ms 缓冲区；
-* **扣包起播**：在 `playbackStarted == false` 时，若未达到目标包数（按 `sampleRate / 1024` 精准计算，48kHz 约 105 包，44.1kHz 约 95 包），不调用 `startPlayback()`；
-* **常态保持**：一旦 `startPlayback()` 开播，声卡放满 500~700ms 后，底层 `track.write()` 会按 1.0x 真实流速自然阻塞，**多出来的约 1.5 秒音频包将天然稳定留存在 192 包容量的 Java 压缩队列中**，形成恒定的 2200ms 防护纵深。
-
-### 3. 墙上时钟断流判定公式（严防半路提前刹车）
-* 在收到每个音频包时，更新快照：
-  * $t_0$：收包墙上时钟 `System.nanoTime()`；
-  * $T_{\text{snapshot}}$：当前管线内总库存时长（压缩队列中包总时长 + 当时声卡剩余时长）；
-* **断流刹车判据**：
-  $$\text{System.nanoTime()} - t_0 > (T_{\text{snapshot}} + 50\text{ms}) \times 10^6$$
-  **严禁在判定过程中使用动态缩小的剩余库存去比较**，确保声音真真正正播到最后 0ms 时才执行刹车，声卡内残留旧数据降为 0。
-
-### 4. 刹车执行顺序与前瞻 15ms 暂存
-* **刹车执行顺序**：
-  1. 停止从压缩队列取包；
-  2. 调用 `codec?.let(::drainCodec)` **排空解码器中已经解出的残留帧**；
-  3. 取出前瞻暂存的 15ms 真实声音，执行 `PcmSmoother.applyFadeOut` 并写入声卡；
-  4. 写入整帧对齐的 40ms 纯 0 静音（`bytesPerSecond * 40 / 1000`）；
-  5. 立即调用 `track.pause()` 叫停底层 DMA 硬件；
-  6. 重置 `playbackStarted = false`、`fadeApplied = false`；
-  7. **严禁在此处调用 `track.flush()`**（仅在 `release()` 拆流时保留 `flush()`）。
-
-### 5. 整帧对齐与符号扩展安全（PcmSmoother）
-* **整帧对齐**：帧大小 `frameBytes = channels * 2`。淡出/淡入样本数统一按 `sampleRate * 15 / 1000` 计算，字节数强制按 `fadeSamples * frameBytes` 截取，严禁半帧切割导致左右声道颠倒；
-* **符号位安全**：
-  ```kotlin
-  val low = pcm[pos].toInt() and 0xFF
-  val high = pcm[pos + 1].toInt() // 保留符号位
-  val sample = (high shl 8) or low
-  val scaled = (sample * factor).toInt()
-  pcm[pos] = (scaled and 0xFF).toByte()
-  pcm[pos + 1] = ((scaled shr 8) and 0xFF).toByte()
-  ```
-* **单例暂存复用**：`AudioRenderer` 内预分配固定大小的 `stagingBuffer = ByteArray(48000 * 2 * 2 * 15 / 1000)`，零 GC 分配。
-* **开声只淡入一次**：移除 `writePcm` 中原有的旧 `applyFadeIn`，统一由 `PcmSmoother` 处理。
-
-### 6. 导航即时压音（流集合与 minOf 合成）
-* 识别标准：`AudioChannelMapper.map(audioType, payloadType, mode).channel == AudioChannel.NAVIGATION`；
-* 状态维护：`activeNavStreams: ConcurrentHashMap.KeySet<Int>`；
-* 合成算法：
-  ```kotlin
-  val duckFactor = if (activeNavStreams.isNotEmpty()) 0.2f else 1.0f
-  val effectiveGain = if (focusGain == 0f) 0f else minOf(focusGain, duckFactor)
-  ```
-  音乐停止不会解开导航压音，多条导航重叠先停一条不回弹，焦点为 0 保持 0，避免 0.04 蚊子音。
+### 1. 47 包暂存扣留与排空兜底起播（Gate-Opened Drain Playback）
+* **微观数学**：
+  * 48kHz 下 47 包 $= 47 \times 1024 / 48000 \times 1000 \approx 1002.7\text{ms}$；
+  * 暂存扣住最后 15ms 后，实际写进声卡的约为 **987.7ms**（约 189,631 字节）；
+  * 用户若选择 1000ms 档位，起播门限是 192,000 字节，这微小的 2369 字节（约 12ms）差额会导致 `prebufferBytes >= startThresholdBytes` 差一点无法直接触发；
+  * 若直接屏蔽尾包抢跑，这 988ms 就会停在暂停的声卡中一直干等；
+* **修复**：
+  * **平时写入**：必须走现有标准循环，累加 `prebufferBytes += count`，满 `startThresholdBytes` 立即 `startPlayback(track)`；
+  * **开闸排空兜底**：在 `maintainPlaybackBuffer()` 中：
+    ```kotlin
+    if (isWirelessMedia) {
+        // 必须已经开闸（47包已蓄满），且队列已空、声卡有有效数据，即使差几毫秒未达门限也立刻开嗓！
+        if (!playbackStarted && gateOpened && queue.isEmpty() && prebufferBytes > 0) {
+            startPlayback(track)
+        }
+    } else {
+        // 现有逻辑（非无线音乐）：
+        if (!playbackStarted && prebufferBytes > 0 && queue.isEmpty() &&
+            System.nanoTime() - lastPcmWriteNs >= BUFFER_TAIL_WAIT_NS) {
+            startPlayback(track)
+        }
+    }
+    ```
+  * **安全性**：在等待开闸期间（`gateOpened == false`），此分支绝对不进，47 包没攒够前绝不会被抢跑拉起；开闸后且队列排空时触发，988ms 实打实出声，丝滑顺畅。
+  * `writeCompletelyToTrack` 严格仅供刹车两笔写入使用，绝不介入平时的 `writePcm`。
 
 ---
 
@@ -73,17 +51,17 @@
 | 模块 / 文件 | 动作 | 核心职责 |
 |---|---|---|
 | `common/src/main/java/com/shilapi/xcertplay/CarPlayHostActivity.kt` | 修改 | 在 `createMediaSink` 中将 `wirelessEnabled` 透传给 `AndroidMediaSink` |
-| `shared/src/main/java/com/shilapi/xcertplay/media/PcmSmoother.kt` | 新建 | PCM 16-bit 严格整帧对齐、符号位安全的余弦淡出/淡入与动态静音生成 |
-| `shared/src/test/java/com/shilapi/xcertplay/media/PcmSmootherTest.kt` | 新建 | 48kHz/44.1kHz 整帧对齐、正负样本极值淡入淡出单测 |
-| `shared/src/main/java/com/shilapi/xcertplay/media/WirelessHoldJitterBuffer.kt` | 新建 | 基于包率与采样率的动态扣包状态机：有线及非媒体流零扣包，无线音乐 1000ms 起播，欠载扣包 2200ms |
-| `shared/src/test/java/com/shilapi/xcertplay/media/WirelessHoldJitterBufferTest.kt` | 新建 | 48k/44.1k 包数换算、非 media 旁路、有线旁路单测 |
-| `shared/src/main/java/com/shilapi/xcertplay/media/CompositeMediaGain.kt` | 新建 | 基于导航流活跃 Set 与 `minOf` 的增益合成器 |
+| `shared/src/main/java/com/shilapi/xcertplay/media/PcmSmoother.kt` | 新建 | PCM 16-bit 严格整帧对齐、同帧同系数、符号位安全的余弦淡出/淡入与动态整帧静音生成 |
+| `shared/src/test/java/com/shilapi/xcertplay/media/PcmSmootherTest.kt` | 新建 | 48kHz/44.1kHz 整帧对齐、有效长度 `stagedBytes` 边界淡出、立体声同系数单测 |
+| `shared/src/main/java/com/shilapi/xcertplay/media/WirelessHoldJitterBuffer.kt` | 新建 | 基于采样率的包数放行控制器：有线/非media为0包，冷启动 47/44 包，欠载后 104/95 包 |
+| `shared/src/test/java/com/shilapi/xcertplay/media/WirelessHoldJitterBufferTest.kt` | 新建 | 采样率换算、冷启动 47 包、欠载 104 包、非 media 旁路单测 |
+| `shared/src/main/java/com/shilapi/xcertplay/media/CompositeMediaGain.kt` | 新建 | 导航流集合跟踪与 `minOf` 增益合成器 |
 | `shared/src/test/java/com/shilapi/xcertplay/media/CompositeMediaGainTest.kt` | 新建 | 多流重叠计数、焦点 0 保持 0、0.2 防相乘单测 |
-| `shared/src/main/java/com/shilapi/xcertplay/media/AndroidMediaSink.kt` | 修改 | 接线：透传 wirelessEnabled、快照墙上时钟刹车、排空解码器+暂存淡出+静音刹车、屏蔽无线尾包抢跑、导航集合即时压音 |
+| `shared/src/main/java/com/shilapi/xcertplay/media/AndroidMediaSink.kt` | 修改 | 接线：透传 wirelessEnabled；门槛开闸锁存（gateOpened）；平时标准写入累加 prebufferBytes；开闸排空兜底起播；writePcm 仅对无线音乐分支暂存；刹车写满直写（writeCompletelyToTrack）；仅对 media 广播压音 |
 
 ---
 
-### Task 1: 实现 `PcmSmoother`（符号位安全淡入淡出与整帧对齐）
+### Task 1: 实现 `PcmSmoother`（同帧同系数、符号位安全淡入淡出与有效长度边界）
 
 **Files:**
 - Create: `shared/src/main/java/com/shilapi/xcertplay/media/PcmSmoother.kt`
@@ -100,14 +78,19 @@
       fun fadeByteCount(sampleRate: Int, channels: Int): Int =
           fadeFrameCount(sampleRate) * (if (channels >= 2) 4 else 2)
 
-      fun applyFadeIn(pcm: ByteArray, offset: Int, length: Int, sampleRate: Int, channels: Int)
-      fun applyFadeOut(pcm: ByteArray, offset: Int, length: Int, sampleRate: Int, channels: Int)
+      /** 仅对 offset 到 offset + validLength 的有效整帧实施余弦淡入，同帧左右声道用同一系数 */
+      fun applyFadeIn(pcm: ByteArray, offset: Int, validLength: Int, sampleRate: Int, channels: Int)
+
+      /** 仅对 offset 到 offset + validLength 的有效整帧实施余弦淡出，同帧左右声道用同一系数 */
+      fun applyFadeOut(pcm: ByteArray, offset: Int, validLength: Int, sampleRate: Int, channels: Int)
+
+      /** 生成按整帧严格对齐的静音字节块 */
       fun createSilence(sampleRate: Int, channels: Int, durationMs: Int = 40): ByteArray
   }
   ```
 
 - [ ] **Step 1: 编写失败测试**
-验证 48kHz 与 44.1kHz 下计算出的字节数均为帧大小（4 字节）的整数倍；验证负样本（-32768, -100）经余弦缩放后平滑趋近 0，无符号反转溢出。
+验证立体声下左声道和右声道在同一帧内缩放系数完全一致；验证 `validLength < fadeByteCount` 时的边界安全，确保不修改 `validLength` 之后的字节；测试 16-bit 负数极值（-32768, -100）缩放无翻转。
 
 - [ ] **Step 2: 运行测试确认红灯**
 ```bash
@@ -125,12 +108,12 @@ cd /Users/g/Documents/project/xr/DiPlay-Legacy-Android-Geely
 - [ ] **Step 5: 提交代码**
 ```bash
 git add shared/src/main/java/com/shilapi/xcertplay/media/PcmSmoother.kt shared/src/test/java/com/shilapi/xcertplay/media/PcmSmootherTest.kt
-git commit -m "audio: implement PcmSmoother with frame alignment and signed safety"
+git commit -m "audio: implement PcmSmoother with stereo coherence and validLength boundaries"
 ```
 
 ---
 
-### Task 2: 实现 `WirelessHoldJitterBuffer`（动态包率扣包控制器）
+### Task 2: 实现 `WirelessHoldJitterBuffer`（包数蓄水放行控制器）
 
 **Files:**
 - Create: `shared/src/main/java/com/shilapi/xcertplay/media/WirelessHoldJitterBuffer.kt`
@@ -149,12 +132,11 @@ git commit -m "audio: implement PcmSmoother with frame alignment and signed safe
       var hasUnderrun: Boolean = false
           private set
 
-      /** 按采样率与 AAC 1024 样本/包换算目标包数 */
       fun targetHoldPackets(): Int {
           if (!isWireless || audioType != "media") return 0
           val ms = if (hasUnderrun) escalatedHoldMs else initialHoldMs
           val packetsPerSec = sampleRate.toDouble() / 1024.0
-          return Math.ceil(ms * packetsPerSec / 1000.0).toInt()
+          return Math.ceil(ms * packetsPerSec / 1000.0).toInt() // 48kHz: 47包 / 104包; 44.1kHz: 44包 / 95包
       }
 
       fun onUnderrunDetected() {
@@ -165,13 +147,13 @@ git commit -m "audio: implement PcmSmoother with frame alignment and signed safe
           hasUnderrun = false
       }
 
-      fun isReadyToPlay(currentQueuePackets: Int): Boolean =
+      fun isReadyToDrain(currentQueuePackets: Int): Boolean =
           currentQueuePackets >= targetHoldPackets()
   }
   ```
 
 - [ ] **Step 1: 编写失败测试**
-覆盖：`audioType == "telephony"` 目标为 0；有线 `isWireless == false` 目标为 0；无线 48kHz media 初始为 47 包，欠载后为 104 包；无线 44.1kHz 正确按采样率计算。
+覆盖：未欠载时 48kHz 为 47 包、欠载后为 104 包；44.1kHz 未欠载 44 包、欠载后 95 包；非 media 流为 0 包；有线模式为 0 包。
 
 - [ ] **Step 2: 运行测试确认红灯**
 ```bash
@@ -188,12 +170,12 @@ git commit -m "audio: implement PcmSmoother with frame alignment and signed safe
 - [ ] **Step 5: 提交代码**
 ```bash
 git add shared/src/main/java/com/shilapi/xcertplay/media/WirelessHoldJitterBuffer.kt shared/src/test/java/com/shilapi/xcertplay/media/WirelessHoldJitterBufferTest.kt
-git commit -m "audio: implement WirelessHoldJitterBuffer with sampleRate pacing"
+git commit -m "audio: implement WirelessHoldJitterBuffer with cold-start 47 and escalated 104 packets"
 ```
 
 ---
 
-### Task 3: 实现 `CompositeMediaGain`（导航活跃集合与 minOf 合成器）
+### Task 3: 实现 `CompositeMediaGain`（仅限媒体流的 minOf 压音合成器）
 
 **Files:**
 - Create: `shared/src/main/java/com/shilapi/xcertplay/media/CompositeMediaGain.kt`
@@ -233,7 +215,7 @@ git commit -m "audio: implement WirelessHoldJitterBuffer with sampleRate pacing"
   ```
 
 - [ ] **Step 1: 编写失败测试**
-覆盖：多条导航流重叠（先停一条不回弹）、非导航流停止不影响、焦点为 0 保持 0、0.2 与 0.2 合成为 0.2（非 0.04）。
+覆盖：导航集合跟踪、先停一条不回弹、焦点为 0 保持 0、0.2 防相乘。
 
 - [ ] **Step 2: 运行测试确认红灯**
 ```bash
@@ -250,12 +232,12 @@ git commit -m "audio: implement WirelessHoldJitterBuffer with sampleRate pacing"
 - [ ] **Step 5: 提交代码**
 ```bash
 git add shared/src/main/java/com/shilapi/xcertplay/media/CompositeMediaGain.kt shared/src/test/java/com/shilapi/xcertplay/media/CompositeMediaGainTest.kt
-git commit -m "audio: implement CompositeMediaGain with stream tracking and minOf"
+git commit -m "audio: implement CompositeMediaGain for navigation ducking"
 ```
 
 ---
 
-### Task 4: `CarPlayHostActivity` 与 `AndroidMediaSink` 全链路断流刹车与接线
+### Task 4: `CarPlayHostActivity` 与 `AndroidMediaSink` 全链路接线与验证
 
 **Files:**
 - Modify: `common/src/main/java/com/shilapi/xcertplay/CarPlayHostActivity.kt`
@@ -270,59 +252,87 @@ git commit -m "audio: implement CompositeMediaGain with stream tracking and minO
    ```
    并在 `AndroidMediaSink` 主构造函数增加 `private val isWireless: Boolean = false`。
 
-2. **`AndroidMediaSink.kt` 屏蔽无线音乐 500ms 尾包抢跑**：
-   修改行 1110-1113：
+2. **`AudioRenderer` 构造接收 `isWireless`**：
+   修改 `AudioRenderer` 类构造，接收 `private val isWireless: Boolean`。在 `AndroidMediaSink.audioRenderer()` 创建实例时传入 `this.isWireless`。
+
+3. **无线音乐门槛放行锁存（Gate Latch）**：
+   在 `AudioRenderer` 中维护 `private var gateOpened = false`。
+   在 `AudioRenderer.run()` 循环顶部：
    ```kotlin
-   // 仅对非无线音乐保留尾包超时抢跑；无线音乐坚决按包数扣留！
    val isWirelessMedia = isWireless && format.audioType == "media"
-   if (!isWirelessMedia && !playbackStarted && prebufferBytes > 0 && queue.isEmpty() &&
-       System.nanoTime() - lastPcmWriteNs >= BUFFER_TAIL_WAIT_NS) {
-       startPlayback(track)
+   if (isWirelessMedia && !playbackStarted && !gateOpened) {
+       if (!jitterBuffer.isReadyToDrain(queue.size)) {
+           Thread.sleep(AUDIO_POLL_MILLIS)
+           continue
+       }
+       gateOpened = true // 达到 47 包（欠载后 104 包）开闸锁存！
+   }
+   ```
+   开闸后正常 `queue.poll()` -> 解码 -> `writePcm`。平时的写入必须走标准循环并累加 `prebufferBytes += count`，满 `startThresholdBytes` 立即 `startPlayback(track)`。
+
+4. **开闸后排空兜底起播与有线尾包保护**：
+   在 `maintainPlaybackBuffer()` 中修改行 1110-1113：
+   ```kotlin
+   if (isWirelessMedia) {
+       // 无线音乐：必须已开闸（47/104包蓄满），队列已空且声卡有声音，即使差十几毫秒也兜底起播！
+       if (!playbackStarted && gateOpened && queue.isEmpty() && prebufferBytes > 0) {
+           startPlayback(track)
+       }
+   } else {
+       // 非无线音乐（有线/提示音）：保留既有 500ms 尾包超时抢跑
+       if (!playbackStarted && prebufferBytes > 0 && queue.isEmpty() &&
+           System.nanoTime() - lastPcmWriteNs >= BUFFER_TAIL_WAIT_NS) {
+           startPlayback(track)
+       }
    }
    ```
 
-3. **15ms 真实声音前瞻暂存（复用单一缓冲区）**：
-   在 `AudioRenderer` 中：
-   * 预分配 `stagingBuffer = ByteArray(PcmSmoother.fadeByteCount(format.sampleRate, format.channels))`；
-   * `var stagedBytes = 0`；
-   * 每当解码出长度为 $L$ 的新 PCM 时：
-     * 若 `stagedBytes > 0`：先将 `stagingBuffer` 内的旧数据写入 `track.write()`；
-     * 若 $L \le \text{fadeBytes}$：全量拷贝至 `stagingBuffer`，`stagedBytes = L`；
-     * 若 $L > \text{fadeBytes}$：写入新 PCM 的前 $L - \text{fadeBytes}$，最后 `fadeBytes` 拷入 `stagingBuffer`。
+5. **`writePcm` 分支隔离写入与 15ms 暂存**：
+   在 `AudioRenderer` 中预分配 `stagingBuffer = ByteArray(PcmSmoother.fadeByteCount(format.sampleRate, format.channels))`，维护 `var stagedBytes = 0`。
+   修改 `writePcm(data, offset, length)`：
+   * **分支 A（非无线音乐）**：`!isWirelessMedia`，直接执行原有的标准写循环，累加 `prebufferBytes`，零暂存；
+   * **分支 B（无线音乐）**：`isWirelessMedia`：
+     * 若 `!fadeApplied`：调用 `PcmSmoother.applyFadeIn(data, offset, minOf(length, PcmSmoother.fadeByteCount(...)), ...)`，置 `fadeApplied = true`；
+     * 若 `stagedBytes > 0`：先将 `stagingBuffer[0 until stagedBytes]` 调用标准循环写入 `track`（仅通过循环内部累加实际写入的 `count` 到 `written` 与 `prebufferBytes`）；
+     * 拆分新数据：
+       * 若 $L \le \text{fadeBytes}$：整帧拷入 `stagingBuffer`，`stagedBytes = L`；
+       * 若 $L > \text{fadeBytes}$：前 $L - \text{fadeBytes}$ 走标准循环写入 `track`（累加 written 与 prebufferBytes），最后 `fadeBytes` 拷入 `stagingBuffer`，`stagedBytes = fadeBytes`。
+     * 若 `prebufferBytes >= startThresholdBytes`：执行 `startPlayback(track)`。
 
-4. **快照墙上时钟断流判定与刹车执行顺序**：
-   * 在收包时记录：
-     * `lastPacketArrivalNs = now`；
-     * `snapshotBufferedMs = (queue.size * 1024L * 1000L / format.sampleRate) + (bufferProgress.queuedBytes(track.playbackHeadPosition) * 1000L / bytesPerSecond)`；
-   * 在 `maintainPlaybackBuffer()` 中：
-     * 当 `playbackStarted == true && isWirelessMedia && (System.nanoTime() - lastPacketArrivalNs > (snapshotBufferedMs + 50L) * 1_000_000L)`：
-       1. 停止从队列拉取新包；
-       2. 调用 `codec?.let(::drainCodec)` 排空解码器中的残存数据；
-       3. 对 `stagingBuffer` 调用 `PcmSmoother.applyFadeOut` 并写入 `track.write`；
-       4. 写入整帧静音 `PcmSmoother.createSilence(format.sampleRate, format.channels, 40)`；
-       5. 累加上述写入字节至 `bufferProgress.written()`；
-       6. 立即调用 `track.pause()` 叫停底层 DMA 硬件；
-       7. 置 `playbackStarted = false`，`fadeApplied = false`，`stagedBytes = 0`；
-       8. 调用 `jitterBuffer.onUnderrunDetected()`（升档至 2200ms）；
-       9. **严禁调用 `track.flush()`**（仅在 `release()` 销毁时保留 `flush()`）。
+6. **实现 `writeCompletelyToTrack`（专用于刹车直写）**：
+   ```kotlin
+   private fun writeCompletelyToTrack(data: ByteArray, offset: Int, length: Int) {
+       var written = 0
+       while (written < length && running) {
+           val count = track?.write(data, offset + written, length - written) ?: break
+           if (count <= 0) break
+           written += count
+           bufferProgress.written(count)
+       }
+   }
+   ```
 
-5. **扣包起播开嗓**：
-   在 `run()` 循环中：若 `playbackStarted == false` 且 `jitterBuffer.isReadyToPlay(queue.size) == false`，则不消费队列，等待包数蓄满。蓄满后首包调用 `startPlayback`，并在第一段数据执行 `PcmSmoother.applyFadeIn`。移除原有旧的 `applyFadeIn`。
+7. **单线程无竞争快照与刹车时序**：
+   * `submit()` 仅通过 `lastArrivalNs.set(now)` 记录原子时间戳；
+   * 在 `maintainPlaybackBuffer()` 中维护 `snapshotLastRx` 与 `snapshotBufferedMs`，**仅当 `lastRx != snapshotLastRx` 时更新快照**；
+   * 当 `playbackStarted && isWirelessMedia && lastRx > 0L && (now - lastRx > (snapshotBufferedMs + 50L) * 1_000_000L)` 触发断流刹车：
+     1. 调用 `codec?.let(::drainCodec)` 排空解码器；
+     2. 若 `stagedBytes > 0`：调用 `PcmSmoother.applyFadeOut(stagingBuffer, 0, stagedBytes, ...)`，并通过 `writeCompletelyToTrack(stagingBuffer, 0, stagedBytes)` 完整写进声卡；
+     3. 生成整帧静音 `val silence = PcmSmoother.createSilence(format.sampleRate, format.channels, 40)`，通过 `writeCompletelyToTrack(silence, 0, silence.size)` 完整写进声卡；
+     4. 立即调用 `track.pause()` 叫停底层 DMA 硬件；
+     5. **核心清零：`playbackStarted = false`、`gateOpened = false`、`fadeApplied = false`、`stagedBytes = 0`、`prebufferBytes = 0`**；
+     6. 调用 `jitterBuffer.onUnderrunDetected()`（升档至 104 包）；
+     7. **严禁调用 `track.flush()`**。
 
-6. **本地导航即时压音接线**：
-   * 在 `AndroidMediaSink` 持有 `CompositeMediaGain`；
-   * 在 `onAudioStarted(type, format)` 中：
-     ```kotlin
-     val isNav = AudioChannelMapper.map(format.audioType, format.payloadType, AudioChannelMappingMode.AUTOMOTIVE_BUS).channel == AudioChannel.NAVIGATION
-     val gain = compositeGain.onStreamStarted(type, isNav)
-     applyEffectiveGain(gain)
-     ```
-   * 在 `onAudioStopped(type)` 中：
-     ```kotlin
-     val gain = compositeGain.onStreamStopped(type)
-     applyEffectiveGain(gain)
-     ```
-   * 在 `onExternalAudioFocus(change)` 中调用 `compositeGain.setFocusGain(gain)` 并下发。
+8. **仅对媒体流执行即时压音广播**：
+   * 识别导航流：`AudioChannelMapper.map(..).channel == AudioChannel.NAVIGATION`；
+   * 导航流开始调用 `compositeGain.onStreamStarted(type, isNav)`，结束调用 `onStreamStopped(type)`；
+   * **仅对 `media` 音频轨广播**：
+     `audioRenderers.values.filter { it.format.audioType == "media" }.forEach { it.applyMediaGain(effectiveGain) }`；导航流自身音轨不调音，保持 1.0；
+   * 焦点变化接入 `compositeGain.setFocusGain(gain)` 并广播媒体轨。
+
+9. **保留流销毁时的 flush**：
+   在 `AudioRenderer.release()` 中保留既有的 `track.flush()` 和 `jitterBuffer.onStreamDestroyed()`。
 
 - [ ] **Step 1: 编写接线测试用例**
 - [ ] **Step 2: 修改 `CarPlayHostActivity.kt` 与 `AndroidMediaSink.kt`**
@@ -334,15 +344,16 @@ cd /Users/g/Documents/project/xr/DiPlay-Legacy-Android-Geely
 - [ ] **Step 4: 提交代码**
 ```bash
 git add common/src/main/java/com/shilapi/xcertplay/CarPlayHostActivity.kt shared/src/main/java/com/shilapi/xcertplay/media/AndroidMediaSink.kt
-git commit -m "audio: wire final starvation brake, staging fade, and composite ducking"
+git commit -m "audio: wire rock-solid wireless hold jitter buffer, starvation brake, and composite ducking"
 ```
 
 ---
 
 ## 终态实车行为验收
 
-1. **MTK 回环彻底消灭**：断流时，墙上时钟精准等到最后一刻，排空解码器 -> 15ms 真实声音淡出 -> 40ms 整帧静音冲刷 -> 立即 pause，**绝无歌词重复，绝无破音**。
-2. **扣包 2200ms 成功蓄水**：中间热点醒来喷包时，数据在 Java 压缩队列积攒至目标包数（约 105 包）后平滑淡入起播，声卡不发生写满死锁，常态深度从此稳固在 2200ms。
-3. **后续播放稳过 2 秒断流**：由于内存备有 2200ms 纵深，后续 1~2 秒以内的热点休眠，喇叭完全如丝顺滑、零断音。
-4. **导航即时压音**：导航开口瞬间音乐立刻降至 0.2，播报结束即刻恢复，彻底解决 2 秒音乐延迟下的压音滞后。
-5. **有线 USB 模式零影响**：通过 `wirelessEnabled` 准确隔离，有线模式完全旁路扣包状态机，继续走既有链路，保证原汁原味低延迟。
+1. **开声平滑无阶跃**：预缓冲首段直接余弦淡入，同帧左右声道系数绝对一致，**首毫秒绝对无电平跳变杂音**。
+2. **放行锁存与排空兜底起播无死角**：达到 47 包（约 1003ms）开闸锁存，扣留 15ms 后写进声卡约 988ms，队列排空瞬间立即开嗓，**绝不单包卡死，绝不差 12ms 哑音**。
+3. **MTK 回环彻底消灭**：断流时，单线程墙上时钟精准等声音放完，排空解码器 -> 循环写满淡出有效字节 -> 循环写满 40ms 整帧静音 -> 立即 pause，**绝无歌词重复，绝无破音**。
+4. **流隔离绝对安全**：15ms 暂存与扣包只作用于无线音乐，电话、Siri、导航短提示 100% 保持既有整段写入与低延迟直通，绝不扣押尾音。
+5. **导航即时压音**：导航开口瞬间音乐立刻降至 0.2，播报结束即刻恢复，导航音轨保持 1.0 原音，彻底解决 2 秒长延迟下的压音滞后与音量衰竭。
+6. **有线 USB 模式零影响**：通过 `wirelessEnabled` 准确隔离，有线模式完全旁路扣包状态机，继续走既有链路，保证原汁原味低延迟。
