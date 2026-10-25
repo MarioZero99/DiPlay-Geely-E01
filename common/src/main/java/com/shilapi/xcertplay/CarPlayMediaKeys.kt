@@ -463,6 +463,7 @@ internal object CarPlayMediaKeys {
             controller?.artworkListener = null
             lastPublishedNowPlaying = null
             updateArtwork(null)
+            context?.let { ctx -> broadcastMediaChange(ctx, null, false) }
             session?.apply {
                 runCatching { setMetadata(null) }
                 isActive = false

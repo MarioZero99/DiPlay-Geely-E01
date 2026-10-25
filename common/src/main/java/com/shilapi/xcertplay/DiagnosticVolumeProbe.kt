@@ -134,7 +134,7 @@ internal object DiagnosticVolumeProbe {
         val mountTarget = File("/mnt/udisk")
         for (devName in candidateDevs) {
             val devPath = "/dev/block/$devName"
-            val mountCmd = "mkdir -p /mnt/udisk && (mount -t vfat $devPath /mnt/udisk || mount -t exfat $devPath /mnt/udisk || mount -t ntfs $devPath /mnt/udisk || mount $devPath /mnt/udisk)"
+            val mountCmd = "mkdir -p /mnt/udisk && (mount -t vfat $devPath /mnt/udisk || mount $devPath /mnt/udisk)"
             val ok = com.shilapi.xcertplay.system.RootShellBridge.execute(mountCmd)
             if (ok) {
                 DiagLog.i("DiagnosticExport", "Successfully mounted physical USB device $devPath to /mnt/udisk")
