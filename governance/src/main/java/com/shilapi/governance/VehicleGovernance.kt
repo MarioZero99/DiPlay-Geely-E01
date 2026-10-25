@@ -29,21 +29,49 @@ object VehicleGovernance {
     @Volatile
     private var persistence: GovernancePersistence? = null
 
+    /**
+     * Optional listener to bridge governance log events to the app's diagnostic logger.
+     */
+    var diagnosticLogger: ((tag: String, message: String) -> Unit)? = null
+
+    fun log(tag: String, message: String) {
+        android.util.Log.i(tag, message)
+        diagnosticLogger?.invoke(tag, message)
+    }
+
     val isSupported: Boolean get() = governor.isSupported
     val isSuppressedFlow: StateFlow<Boolean> get() = governor.stateFlow
+
+    /**
+     * Probes whether the natp process is currently running.
+     */
+    suspend fun checkNatpAlive(): Boolean? = governor.checkNatpAlive()
+
+    /**
+     * Synchronously probes whether the natp process is currently running with a brief timeout.
+     */
+    fun checkNatpAliveSync(timeoutMs: Long = 1000L): Boolean? {
+        if (!governor.isSupported) return null
+        return runCatching {
+            runBlocking {
+                withTimeoutOrNull(timeoutMs) {
+                    governor.checkNatpAlive()
+                }
+            }
+        }.getOrNull()
+    }
 
     /**
      * Initializes the governance module at application startup.
      *
      * @param application Host application context.
      * @param isExperimentalAllowed Whether experimental features are enabled for this build.
-     *                              If false, the governor is permanently forced to [NoOpGovernor]
-     *                              and a background self-heal check is triggered.
+     *                              Defaults to true as governance is graduated to standard release.
      * @param customGovernor Optional custom governor implementation (primarily for unit testing).
      */
     fun install(
         application: Application,
-        isExperimentalAllowed: Boolean,
+        isExperimentalAllowed: Boolean = true,
         customGovernor: IVehicleGovernor? = null,
     ) {
         val store = GovernancePersistence(application)

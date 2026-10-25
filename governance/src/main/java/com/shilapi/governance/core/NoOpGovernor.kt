@@ -14,4 +14,5 @@ object NoOpGovernor : IVehicleGovernor {
     override suspend fun applySuppression(reason: String): Boolean = false
     override suspend fun applyRestoration(reason: String): Boolean = true
     override suspend fun ensureSelfHealed(reason: String): Boolean = true
+    override suspend fun checkNatpAlive(): Boolean? = null
 }

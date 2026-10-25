@@ -30,4 +30,10 @@ interface IVehicleGovernor {
      * Ensures native voice services are in factory normal state.
      */
     suspend fun ensureSelfHealed(reason: String): Boolean
+
+    /**
+     * Probes whether the background voice process (natp) is currently alive.
+     * Returns true if running, false if terminated/absent, or null if unsupported.
+     */
+    suspend fun checkNatpAlive(): Boolean? = null
 }

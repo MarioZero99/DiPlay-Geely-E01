@@ -268,7 +268,8 @@ class DiPlayActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         DiagCrashHandler.install(this)
-        VehicleGovernance.install(application, isExperimentalAllowed = ExperimentalFeatures.enabled)
+        VehicleGovernance.diagnosticLogger = { tag, msg -> DiagLog.i(tag, msg) }
+        VehicleGovernance.install(application, isExperimentalAllowed = true)
         languagePreferenceAtCreate = AppLocale.preference(this)
         WindowCompat.setDecorFitsSystemWindows(window, true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -987,6 +988,7 @@ class DiPlayActivity : ComponentActivity() {
                 AirPlayPersistence.saveDebugLogsEnabled(this, it)
             }
         }
+        voiceGovernanceCard(columns)
         columns.card(R.string.permissions_and_connection_help, R.drawable.ic_dp_permissions) { card ->
             card.addView(label(getString(R.string.nearby_devices_connects_your_iphone_microphone_enables_sir), 16, MUTED))
             card.addView(button(getString(R.string.app_permissions), false) { openSystem(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }, matchButton(16, 60))
@@ -1020,8 +1022,6 @@ class DiPlayActivity : ComponentActivity() {
     private fun experimentalCards(columns: CardColumns) {
         updateCard(columns)
         hopMaintenanceCards(columns)
-        voiceGovernanceCard(columns)
-        clusterMediaMetadataCard(columns)
         columns.card(R.string.experimental_report_upload, R.drawable.ic_dp_diagnostics) { card ->
             card.addView(label(getString(R.string.experimental_report_upload_hint), 16, MUTED))
             if (SupabaseLogUpload.enabled(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_KEY)) {
@@ -1035,7 +1035,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun voiceGovernanceCard(columns: CardColumns) {
-        if (!VehicleGovernance.isSupported || !ExperimentalFeatures.enabled) return
+        if (!VehicleGovernance.isSupported) return
         columns.card(R.string.experimental_voice_governance_title, R.drawable.ic_dp_permissions) { card ->
             val isSuppressed = VehicleGovernance.isSuppressedFlow.value
             toggle(
@@ -1101,6 +1101,7 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun displayCards(columns: CardColumns) {
         displayPerformanceCard(columns)
+        clusterMediaMetadataCard(columns)
         audioRoutingCard(columns)
     }
 
@@ -3244,6 +3245,16 @@ class DiPlayActivity : ComponentActivity() {
         appendLine("Saved resolution preference (may differ from active session): ${AirPlayPersistence.loadDisplayScaleTenths(appContext) * 10}%")
         appendLine("Session: ${if (CarPlayBackgroundSession.active) "active" else if (CarPlayBackgroundSession.hasSession()) "connecting" else "stopped"}")
         appendLine("Head-unit board: ${Build.BOARD}; hardware: ${Build.HARDWARE}; build: ${Build.DISPLAY}")
+        if (VehicleGovernance.isSupported) {
+            val suppressed = VehicleGovernance.isSuppressedFlow.value
+            val alive = VehicleGovernance.checkNatpAliveSync()
+            val stateText = when (alive) {
+                true -> "alive"
+                false -> "dead"
+                null -> "unknown"
+            }
+            appendLine("Voice governance: ${if (suppressed) "suppressed" else "normal"} (natp process: $stateText)")
+        }
         appendLine(DiagnosticCounters.summary())
         // Directly under the loss counters, and in the header rather than in a log section: the byte
         // budget always keeps the header, and a reader looking for "why is it slow" should not have

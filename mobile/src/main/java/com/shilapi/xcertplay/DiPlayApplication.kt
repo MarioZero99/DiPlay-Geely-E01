@@ -6,7 +6,8 @@ import com.shilapi.governance.VehicleGovernance
 class DiPlayApplication : MultiDexApplication() {
     override fun onCreate() {
         super.onCreate()
-        VehicleGovernance.install(this, isExperimentalAllowed = ExperimentalFeatures.enabled)
+        VehicleGovernance.diagnosticLogger = { tag, msg -> DiagLog.i(tag, msg) }
+        VehicleGovernance.install(this, isExperimentalAllowed = true)
         DiPlayBootstrap.prewarm(this)
     }
 }

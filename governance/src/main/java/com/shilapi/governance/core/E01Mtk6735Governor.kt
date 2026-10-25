@@ -32,6 +32,12 @@ class E01Mtk6735Governor(
         // 26 bytes raw, 72 bytes wrapped <= 220 bytes budget
         const val CMD_SELF_HEAL =
             "pm enable com.ecarx.xiaoka"
+
+        // 10 bytes raw, 56 bytes wrapped <= 220 bytes budget
+        const val CMD_CHECK_NATP =
+            "pidof natp"
+
+        fun parseNatpAlive(output: String): Boolean = output.trim().isNotEmpty()
     }
 
     override val isSupported: Boolean = true
@@ -39,37 +45,56 @@ class E01Mtk6735Governor(
     private val _stateFlow = MutableStateFlow(false)
     override val stateFlow: StateFlow<Boolean> = _stateFlow.asStateFlow()
 
+    override suspend fun checkNatpAlive(): Boolean? = queue.execute {
+        probeNatpInternal()
+    }
+
+    private fun probeNatpInternal(): Boolean? {
+        val result = E01PrivilegedBridge.execute(CMD_CHECK_NATP)
+        return when (result) {
+            is E01PrivilegedBridge.Result.Success -> parseNatpAlive(result.output)
+            is E01PrivilegedBridge.Result.CommandFailed -> false
+            else -> null
+        }
+    }
+
     override suspend fun applySuppression(reason: String): Boolean = queue.execute {
-        Log.i(TAG, "Executing suppression [$reason]")
+        com.shilapi.governance.VehicleGovernance.log(TAG, "Executing suppression [$reason]")
         val result = E01PrivilegedBridge.execute(CMD_SUPPRESS)
         val success = result is E01PrivilegedBridge.Result.Success
         if (success) {
             _stateFlow.value = true
         } else {
-            Log.w(TAG, "Suppression failed [$reason]: $result")
+            com.shilapi.governance.VehicleGovernance.log(TAG, "Suppression failed [$reason]: $result")
         }
+        val alive = probeNatpInternal()
+        com.shilapi.governance.VehicleGovernance.log(TAG, "Suppression completed [$reason] success=$success, natp alive=$alive")
         success
     }
 
     override suspend fun applyRestoration(reason: String): Boolean = queue.execute {
-        Log.i(TAG, "Executing restoration [$reason]")
+        com.shilapi.governance.VehicleGovernance.log(TAG, "Executing restoration [$reason]")
         val result = E01PrivilegedBridge.execute(CMD_RESTORE)
         val success = result is E01PrivilegedBridge.Result.Success
         if (success) {
             _stateFlow.value = false
         } else {
-            Log.w(TAG, "Restoration failed [$reason]: $result")
+            com.shilapi.governance.VehicleGovernance.log(TAG, "Restoration failed [$reason]: $result")
         }
+        val alive = probeNatpInternal()
+        com.shilapi.governance.VehicleGovernance.log(TAG, "Restoration completed [$reason] success=$success, natp alive=$alive")
         success
     }
 
     override suspend fun ensureSelfHealed(reason: String): Boolean = queue.execute {
-        Log.i(TAG, "Executing self-healing check [$reason]")
+        com.shilapi.governance.VehicleGovernance.log(TAG, "Executing self-healing check [$reason]")
         val result = E01PrivilegedBridge.execute(CMD_SELF_HEAL)
         val success = result is E01PrivilegedBridge.Result.Success
         if (success) {
             _stateFlow.value = false
         }
+        val alive = probeNatpInternal()
+        com.shilapi.governance.VehicleGovernance.log(TAG, "Self-healing completed [$reason] success=$success, natp alive=$alive")
         success
     }
 }
