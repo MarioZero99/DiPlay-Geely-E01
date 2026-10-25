@@ -1,11 +1,10 @@
 package com.shilapi.xcertplay
 
 import android.app.Application
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
+import android.graphics.Bitmap
 import android.media.MediaMetadata
+import com.shilapi.xcertplay.instrument.CoverSlotManager
+import com.shilapi.xcertplay.instrument.XingruiInstrumentBridge
 import com.shilapi.xcertplay.media.CarPlayNowPlaying
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -15,6 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29], manifest = Config.NONE)
@@ -44,173 +44,82 @@ class CarPlayMediaKeysBroadcastTest {
     }
 
     @Test
-    fun broadcastMediaChangeSendsAndroidMusicMetachangedIntent() {
-        CarPlayMediaKeys.resetBroadcastState()
+    fun legacyAospBroadcastsAreNotSent() {
+        val shadow = org.robolectric.Shadows.shadowOf(context)
+        shadow.clearBroadcastIntents()
+
         val nowPlaying = CarPlayNowPlaying(
             title = "Song Title",
             artist = "Song Artist",
             album = "Song Album",
             durationMillis = 180000L,
-            elapsedMillis = 5000L,
             playing = true,
         )
 
+        @Suppress("DEPRECATION")
         CarPlayMediaKeys.broadcastMediaChange(context, nowPlaying, playing = true)
 
-        val broadcastIntents = org.robolectric.Shadows.shadowOf(context).broadcastIntents
-        val metaIntent = broadcastIntents.firstOrNull { it.action == "com.android.music.metachanged" }
-        assertNotNull(metaIntent)
-        assertEquals("Song Title", metaIntent?.getStringExtra("track"))
-        assertEquals("Song Artist", metaIntent?.getStringExtra("artist"))
-        assertEquals("Song Album", metaIntent?.getStringExtra("album"))
-        assertEquals(true, metaIntent?.getBooleanExtra("playing", false))
-        assertEquals(180000L, metaIntent?.getLongExtra("duration", 0L))
-        assertEquals(5000L, metaIntent?.getLongExtra("position", 0L))
+        // Verify that dead com.android.music.metachanged is NOT broadcast to the system
+        val metaIntent = shadow.broadcastIntents.firstOrNull { it.action == "com.android.music.metachanged" }
+        assertEquals("Legacy AOSP metachanged broadcast must not be sent", null, metaIntent)
 
-        val stateIntent = broadcastIntents.firstOrNull { it.action == "com.android.music.playstatechanged" }
-        assertNotNull(stateIntent)
-        assertEquals(true, stateIntent?.getBooleanExtra("playing", false))
+        val stateIntent = shadow.broadcastIntents.firstOrNull { it.action == "com.android.music.playstatechanged" }
+        assertEquals("Legacy AOSP playstatechanged broadcast must not be sent", null, stateIntent)
     }
 
     @Test
-    fun broadcastMediaChangeDeduplicatesRepeatedEvents() {
-        CarPlayMediaKeys.resetBroadcastState()
-        val shadow = org.robolectric.Shadows.shadowOf(context)
-        shadow.clearBroadcastIntents()
+    fun coverSlotManagerPingPongRotationMaintainsExactTwoFiles() {
+        val manager = CoverSlotManager(context)
+        val bmp1 = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+        val bmp2 = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
 
-        val song1 = CarPlayNowPlaying(
-            title = "Song 1",
-            artist = "Artist 1",
-            album = "Album 1",
-            playing = true,
-        )
+        // Save first cover
+        val uri1 = manager.saveCover(bmp1)
+        assertTrue("URI must start with file:///sdcard/", uri1.startsWith("file:///sdcard/"))
+        assertTrue("URI must contain cover_1.jpg or cover_0.jpg", uri1.contains("cover_1.jpg") || uri1.contains("cover_0.jpg"))
 
-        // First publication: 1 meta + 1 state
-        CarPlayMediaKeys.broadcastMediaChange(context, song1, playing = true)
-        assertEquals(2, shadow.broadcastIntents.size)
+        // Save second cover (rotates slot)
+        val uri2 = manager.saveCover(bmp2)
+        assertTrue("URI must start with file:///sdcard/", uri2.startsWith("file:///sdcard/"))
+        assertTrue("Subsequent saves must alternate slot", uri1 != uri2)
 
-        // Second publication with identical metadata (e.g. artwork decoded later): 0 new intents
-        CarPlayMediaKeys.broadcastMediaChange(context, song1, playing = true)
-        assertEquals(2, shadow.broadcastIntents.size)
+        // Save third cover (rotates back to first slot)
+        val uri3 = manager.saveCover(bmp1)
+        assertEquals("Third save must reuse the first slot", uri1, uri3)
 
-        // Playback paused: only 1 state intent, no duplicate meta intent
-        CarPlayMediaKeys.broadcastMediaChange(context, song1, playing = false)
-        assertEquals(3, shadow.broadcastIntents.size)
-        val lastIntent = shadow.broadcastIntents.last()
-        assertEquals("com.android.music.playstatechanged", lastIntent.action)
-        assertEquals(false, lastIntent.getBooleanExtra("playing", true))
-
-        // New track arrives: 1 new meta intent
-        val song2 = CarPlayNowPlaying(
-            title = "Song 2",
-            artist = "Artist 2",
-            album = "Album 2",
-            playing = false,
-        )
-        CarPlayMediaKeys.broadcastMediaChange(context, song2, playing = false)
-        assertEquals(4, shadow.broadcastIntents.size)
-        assertEquals("com.android.music.metachanged", shadow.broadcastIntents.last().action)
-        assertEquals("Song 2", shadow.broadcastIntents.last().getStringExtra("track"))
+        // Verify directory file count is capped at 2
+        val cacheDir = File(context.externalCacheDir ?: File(context.cacheDir, "covers"), "covers")
+        val files = cacheDir.listFiles()?.filter { it.extension == "jpg" } ?: emptyList()
+        assertTrue("Total cover cache files must never exceed 2", files.size <= 2)
     }
 
     @Test
-    fun broadcastMediaChangeAllowsLateArrivingDurationAndArtworkId() {
-        CarPlayMediaKeys.resetBroadcastState()
-        val shadow = org.robolectric.Shadows.shadowOf(context)
-        shadow.clearBroadcastIntents()
+    fun coverSlotManagerHandlesNullAndRecycledBitmapsSafely() {
+        val manager = CoverSlotManager(context)
 
-        // Packet 1: Initial title/artist arrives first, duration is still 0
-        val packet1 = CarPlayNowPlaying(
-            title = "Late Song",
-            artist = "Late Artist",
-            album = "Late Album",
-            durationMillis = 0L,
-            playing = true,
-        )
-        CarPlayMediaKeys.broadcastMediaChange(context, packet1, playing = true)
-        val initialMeta = shadow.broadcastIntents.first { it.action == "com.android.music.metachanged" }
-        assertEquals(0L, initialMeta.getLongExtra("duration", -1L))
-        val initialId = initialMeta.getLongExtra("id", -1L)
-        assertTrue("Initial ID must be a valid positive non-zero hash", initialId > 0L)
+        // Null bitmap
+        val nullUri = manager.saveCover(null)
+        assertEquals("Null bitmap must return empty string without exception", "", nullUri)
 
-        // Packet 2: Next iAP2 packet delivers duration
-        val packet2 = CarPlayNowPlaying(
-            title = "Late Song",
-            artist = "Late Artist",
-            album = "Late Album",
-            durationMillis = 240000L,
-            playing = true,
-        )
-        CarPlayMediaKeys.broadcastMediaChange(context, packet2, playing = true)
-        val durationMeta = shadow.broadcastIntents.last { it.action == "com.android.music.metachanged" }
-        assertEquals("Late arriving duration must trigger broadcast update", 240000L, durationMeta.getLongExtra("duration", -1L))
-
-        // Packet 3: Artwork transfer ID arrives later
-        val packet3 = packet2.copy(artworkTransferId = 88)
-        CarPlayMediaKeys.broadcastMediaChange(context, packet3, playing = true)
-        val artMeta = shadow.broadcastIntents.last { it.action == "com.android.music.metachanged" }
-        assertEquals("Late arriving artwork transfer ID must trigger broadcast update", 88L, artMeta.getLongExtra("id", -1L))
+        // Recycled bitmap
+        val bmp = Bitmap.createBitmap(50, 50, Bitmap.Config.ARGB_8888)
+        bmp.recycle()
+        val recycledUri = manager.saveCover(bmp)
+        assertEquals("Recycled bitmap must return empty string without exception", "", recycledUri)
     }
 
     @Test
-    fun broadcastMediaChangeSendsStoppedOnDisconnectAndPreservesPositionOnPause() {
-        CarPlayMediaKeys.resetBroadcastState()
-        val shadow = org.robolectric.Shadows.shadowOf(context)
-        shadow.clearBroadcastIntents()
+    fun instrumentBridgeExecutesSafelyWithoutCrashing() {
+        val bridge = XingruiInstrumentBridge(context)
 
-        // 1. Song starts with elapsed = 0
-        val songSnapshotAtStart = CarPlayNowPlaying(
-            title = "Position Song",
-            artist = "Position Artist",
-            elapsedMillis = 0L,
-            durationMillis = 180000L,
-            playing = true,
-        )
-        CarPlayMediaKeys.broadcastMediaChange(context, songSnapshotAtStart, playing = true)
+        // Test normal update with empty/null titles (must not crash)
+        bridge.updateMedia(null, null, null, null, false)
+        bridge.updateMedia("Valid Song", "Valid Artist", "Valid Album", null, true)
 
-        // 2. Playback runs, 2Hz ticks update lastKnownPosition to 52000L, then pause occurs.
-        // The cached lastPublishedNowPlaying has elapsed = 0L, but forcedPosition = 52000L is provided.
-        CarPlayMediaKeys.broadcastMediaChange(context, songSnapshotAtStart, playing = false, forcedPosition = 52000L)
-        val pauseIntent = shadow.broadcastIntents.last { it.action == "com.android.music.playstatechanged" }
-        assertEquals(2, pauseIntent.getIntExtra("playstate", -1)) // 2 = PAUSED
-        assertEquals("Pause broadcast must preserve current playing position instead of old 0", 52000L, pauseIntent.getLongExtra("position", -1L))
+        val bmp = Bitmap.createBitmap(50, 50, Bitmap.Config.ARGB_8888)
+        bridge.updateMedia("With Art", "Artist", "Album", bmp, true)
 
-        // 3. CarPlay disconnects with empty NowPlaying (not null, but blank fields)
-        val emptyNowPlaying = CarPlayNowPlaying(title = "", artist = "", album = "", playing = false)
-        CarPlayMediaKeys.broadcastMediaChange(context, emptyNowPlaying, playing = false)
-        val stopIntent = shadow.broadcastIntents.last { it.action == "com.android.music.playstatechanged" }
-        assertEquals("Empty/cleared NowPlaying must send playstate 1 (STOPPED) to clear cluster display", 1, stopIntent.getIntExtra("playstate", -1))
-        assertEquals(0L, stopIntent.getLongExtra("position", -1L))
-    }
-
-    @Test
-    fun trackChangeResetsLastKnownPositionAndPreventsPreviousSongPositionBleed() {
-        CarPlayMediaKeys.resetBroadcastState()
-        val shadow = org.robolectric.Shadows.shadowOf(context)
-        shadow.clearBroadcastIntents()
-
-        // 1. First song playing up to 120000ms
-        val song1 = CarPlayNowPlaying(
-            title = "First Song",
-            artist = "Artist",
-            elapsedMillis = 120000L,
-            durationMillis = 180000L,
-            playing = true,
-        )
-        CarPlayMediaKeys.broadcastMediaChange(context, song1, playing = true)
-
-        // 2. Second song arrives without elapsedMillis in initial metadata packet
-        val song2Initial = CarPlayNowPlaying(
-            title = "Second Song",
-            artist = "Artist",
-            elapsedMillis = null,
-            durationMillis = 240000L,
-            playing = true,
-        )
-        CarPlayMediaKeys.broadcastMediaChange(context, song2Initial, playing = true)
-
-        val metaIntent = shadow.broadcastIntents.last { it.action == "com.android.music.metachanged" }
-        assertEquals("Second Song", metaIntent.getStringExtra("track"))
-        assertEquals("Track change without elapsedMillis must reset position to 0 instead of bleeding previous song's 120000ms", 0L, metaIntent.getLongExtra("position", -1L))
+        bridge.clearMedia()
+        bridge.release()
     }
 }
