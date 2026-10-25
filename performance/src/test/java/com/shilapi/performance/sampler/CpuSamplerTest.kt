@@ -1,6 +1,7 @@
 package com.shilapi.performance.sampler
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class CpuSamplerTest {
@@ -27,5 +28,26 @@ class CpuSamplerTest {
         val sampler = CpuSampler()
         val usage = sampler.computeUsageFromLine("")
         assertEquals(-1, usage)
+    }
+
+    @Test
+    fun samplePerformsInlineDeltaWhenBaselineUnset() {
+        var sleptMs = 0L
+        val sampler = CpuSampler()
+        sampler.reset()
+
+        val lines = listOf(
+            "cpu  100 20 30 850 0 0 0 0 0 0",
+            "cpu  200 40 60 900 0 0 0 0 0 0",
+        )
+        var callIndex = 0
+
+        val metrics = sampler.sample(
+            readStatLine = { lines.getOrNull(callIndex++) },
+            sleepMs = { delay -> sleptMs = delay },
+        )
+        assertNotNull(metrics)
+        assertEquals(120L, sleptMs)
+        assertEquals(75, metrics.usagePercent)
     }
 }
