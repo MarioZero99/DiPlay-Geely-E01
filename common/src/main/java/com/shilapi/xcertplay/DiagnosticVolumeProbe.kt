@@ -37,7 +37,6 @@ internal object DiagnosticVolumeProbe {
         "/mnt/usb_storage",
         "/mnt/udisk",
         "/mnt/usb",
-        "/mnt/media_rw",
     )
 
     internal fun unescapeMountPoint(raw: String): String {
@@ -56,7 +55,7 @@ internal object DiagnosticVolumeProbe {
         val candidates = mutableListOf<File>()
         val systemPrefixes = listOf(
             "/system", "/data", "/dev", "/proc", "/sys", "/mnt/secure", "/mnt/asec", "/mnt/obb",
-            "/mnt/shell", "/mnt/runtime", "/cache", "/config",
+            "/mnt/shell", "/mnt/runtime", "/mnt/media_rw", "/cache", "/config",
         )
         val targetFs = setOf("vfat", "exfat", "texfat", "ntfs", "fuse", "fuseblk", "ext4", "ext3", "ext2", "f2fs")
         for (line in mountsContent.lineSequence()) {
@@ -112,9 +111,40 @@ internal object DiagnosticVolumeProbe {
         val candidates = linkedMapOf<String, File>()
         var mountsContent = ""
 
-        // Source 1: /proc/mounts, the kernel's own mount table.
-        // This is the primary source: it names all currently mounted filesystems directly,
-        // without guessing names or depending on broadcast timing.
+        // Source 1: StorageManager (via reflection, same as CX File Explorer / Android framework)
+        // StorageManager.getVolumeList() returns StorageVolume objects representing mounted volumes.
+        // It provides the canonical presentation path (e.g. /storage/usbotg) and marks removable/primary state.
+        runCatching {
+            val sm = context.getSystemService(Context.STORAGE_SERVICE)
+            if (sm != null) {
+                val method = sm.javaClass.getMethod("getVolumeList")
+                val volumes = method.invoke(sm) as? Array<*>
+                if (volumes != null) {
+                    for (vol in volumes) {
+                        if (vol == null) continue
+                        val getPathMethod = vol.javaClass.getMethod("getPath")
+                        val path = getPathMethod.invoke(vol) as? String ?: continue
+                        val file = File(path)
+                        if (isPrimaryStorage(file)) continue
+
+                        // Check state if available
+                        val state = runCatching {
+                            vol.javaClass.getMethod("getState").invoke(vol) as? String
+                        }.getOrNull() ?: runCatching {
+                            sm.javaClass.getMethod("getVolumeState", String::class.java).invoke(sm, path) as? String
+                        }.getOrNull()
+                        if (state != null && state != "mounted") continue
+
+                        if (file.isDirectory || com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+                            candidates[file.absolutePath] = file
+                        }
+                    }
+                }
+            }
+        }
+
+        // Source 2: /proc/mounts, the kernel's own mount table.
+        // This is a direct source naming currently mounted filesystems, filtering out system & raw mirrors (/mnt/media_rw).
         runCatching {
             if (procMountsFile != null && procMountsFile.exists() && procMountsFile.canRead()) {
                 mountsContent = procMountsFile.readText()
@@ -124,7 +154,7 @@ internal object DiagnosticVolumeProbe {
             }
         }
 
-        // Source 2: the system's own contract getExternalFilesDirs.
+        // Source 3: the system's own contract getExternalFilesDirs.
         // The second entry onwards is another volume; the first is this app's own external directory.
         runCatching {
             val dirs = context.getExternalFilesDirs(null) ?: emptyArray()
@@ -137,15 +167,15 @@ internal object DiagnosticVolumeProbe {
             }
         }
 
-        // Source 3: the path ACTION_MEDIA_MOUNTED carried, recorded when the stick was plugged in.
+        // Source 4: the path ACTION_MEDIA_MOUNTED carried, recorded when the stick was plugged in.
         for (path in extraMountPaths) {
             val file = File(path)
             if (!file.isDirectory || isPrimaryStorage(file)) continue
             candidates[file.absolutePath] = file
         }
 
-        // Source 4: static vendor roots, fallback when /proc/mounts yielded nothing.
-        // On Android, USB sticks are mounted under container roots (e.g. /storage/usbotg, /mnt/media_rw) or as subdirectories.
+        // Source 5: static vendor roots, fallback when nothing yielded so far.
+        // On Android, USB sticks are mounted under container roots (e.g. /storage/usbotg) or as subdirectories.
         if (candidates.isEmpty()) {
             for (rootPath in vendorMountRoots) {
                 val root = File(rootPath)

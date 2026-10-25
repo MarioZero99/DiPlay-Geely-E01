@@ -186,14 +186,14 @@ internal object DiagnosticExportStore {
     }
 
     // A stick is mounted as a child of these roots, not at the root itself: E01 puts it at
-    // /storage/usbotg/usbotg-sda1, with the raw twin under /mnt/media_rw.
+    // /storage/usbotg/usbotg-sda1.
+    // Notice: /mnt/media_rw is excluded because it is the kernel raw mirror of /storage.
     private val usbMountRoots = listOf(
         "/storage/usbotg",
         "/storage/udisk",
         "/mnt/usb_storage",
         "/mnt/udisk",
         "/mnt/usb",
-        "/mnt/media_rw",
     )
 
     private fun usbVolumeDirectories(): List<File> = usbMountRoots.flatMap { path ->
