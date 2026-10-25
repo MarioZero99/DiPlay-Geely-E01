@@ -71,7 +71,8 @@ class SettingsPagesUiTest {
         Triple("wireless", "Wireless settings", "1 · Car hotspot (Wi-Fi)"),
         Triple("wired", "Wired settings", null),
         Triple("display", "Display and audio", "Resolution"),
-        Triple("system", "System settings", "Save diagnostic report"),
+        Triple("governance", "Vehicle governance", "Save diagnostic report"),
+        Triple("system", "System settings", "Open after the car starts"),
     )
 
     /**

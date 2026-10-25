@@ -760,6 +760,11 @@ class DiPlayActivity : ComponentActivity() {
                 bucket(columns, R.string.display_and_audio, R.string.display_and_audio_hint, R.string.apply_reconnects_carplay_for_size_resolution_music_buffer)
                 displayPerformanceCard(columns)
             },
+            buildGovernanceSection = { col ->
+                val columns = CardColumns(col)
+                bucket(columns, R.string.vehicle_governance_title, R.string.vehicle_governance_hint)
+                vehicleGovernanceCards(columns)
+            },
             buildSystemSection = { col ->
                 val columns = CardColumns(col)
                 bucket(columns, R.string.system_settings, R.string.system_settings_hint)
@@ -1027,7 +1032,6 @@ class DiPlayActivity : ComponentActivity() {
         // page. Both decide whether the car authenticates as an Apple-licensed accessory, a wrong
         // value costs CarPlay outright, and no driver can diagnose that from the screen. They stay
         // at their built-in values.
-        vehicleGovernanceCards(columns)
         columns.card(R.string.automatic_connection, R.drawable.ic_dp_automation) { card ->
             toggle(card, getString(R.string.open_after_the_car_starts), getString(R.string.availability_depends_on_your_head_unit_s_startup_settings), AirPlayPersistence.loadAutoStartOnBoot(this)) { AirPlayPersistence.saveAutoStartOnBoot(this, it) }
             toggle(card, getString(R.string.report_location_to_iphone), getString(R.string.report_android_location_to_the_iphone), locationReportingEnabled) { setLocationReporting(it) }

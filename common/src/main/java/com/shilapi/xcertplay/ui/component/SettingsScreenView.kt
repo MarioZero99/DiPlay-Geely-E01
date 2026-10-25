@@ -20,6 +20,7 @@ enum class SettingsTab(val key: String) {
     CONNECTION("connection"),
     AUDIO("audio"),
     DISPLAY("display"),
+    GOVERNANCE("governance"),
     SYSTEM("system"),
     EXPERIMENTAL("experimental");
 
@@ -43,6 +44,7 @@ class SettingsScreenView(
     buildAudioSection: (LinearLayout) -> Unit,
     buildConnectionSection: (LinearLayout) -> Unit,
     buildDisplaySection: (LinearLayout) -> Unit,
+    buildGovernanceSection: (LinearLayout) -> Unit = {},
     buildSystemSection: (LinearLayout) -> Unit,
     buildExperimentalSection: ((LinearLayout) -> Unit)? = null,
 ) : FrameLayout(context) {
@@ -87,6 +89,7 @@ class SettingsScreenView(
             SettingsTab.CONNECTION to context.getString(R.string.connection),
             SettingsTab.AUDIO to context.getString(R.string.audio_routing),
             SettingsTab.DISPLAY to context.getString(R.string.display_and_performance),
+            SettingsTab.GOVERNANCE to context.getString(R.string.vehicle_governance_title),
             SettingsTab.SYSTEM to context.getString(R.string.system_settings),
         )
         if (hasExperimental && buildExperimentalSection != null) {
@@ -149,6 +152,7 @@ class SettingsScreenView(
         contentContainers[SettingsTab.CONNECTION] = wrapSection(buildConnectionSection).also { contentStage.addView(it) }
         contentContainers[SettingsTab.AUDIO] = wrapSection(buildAudioSection).also { contentStage.addView(it) }
         contentContainers[SettingsTab.DISPLAY] = wrapSection(buildDisplaySection).also { contentStage.addView(it) }
+        contentContainers[SettingsTab.GOVERNANCE] = wrapSection(buildGovernanceSection).also { contentStage.addView(it) }
         contentContainers[SettingsTab.SYSTEM] = wrapSection(buildSystemSection).also { contentStage.addView(it) }
         if (hasExperimental && buildExperimentalSection != null) {
             contentContainers[SettingsTab.EXPERIMENTAL] = wrapSection(buildExperimentalSection).also { contentStage.addView(it) }

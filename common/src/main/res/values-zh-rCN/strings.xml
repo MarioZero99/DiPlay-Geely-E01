@@ -5,7 +5,7 @@
     <string name="settings_hint">所有设置都在这一页。</string>
     <string name="system_settings">系统设置</string>
     <string name="close_settings">关闭设置</string>
-    <string name="system_settings_hint">开机自启、位置上报、调试日志、语言，以及诊断报告。</string>
+    <string name="system_settings_hint">开机自启、位置上报、调试日志，以及语言。</string>
     <string name="experimental_features">实验性功能</string>
     <string name="experimental_features_hint">只在本地版里有。这些功能还在车上试。</string>
     <string name="experimental_report_upload">报告上传</string>

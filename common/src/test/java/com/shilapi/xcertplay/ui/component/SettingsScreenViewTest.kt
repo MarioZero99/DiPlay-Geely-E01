@@ -53,6 +53,7 @@ class SettingsScreenViewTest {
             buildAudioSection = { it.addView(TextView(context).apply { text = "Audio" }) },
             buildConnectionSection = { it.addView(TextView(context).apply { text = "Conn" }) },
             buildDisplaySection = { it.addView(TextView(context).apply { text = "Disp" }) },
+            buildGovernanceSection = { it.addView(TextView(context).apply { text = "Gov" }) },
             buildSystemSection = { it.addView(TextView(context).apply { text = "Sys" }) },
             buildExperimentalSection = { it.addView(TextView(context).apply { text = "Exp" }) },
         )
@@ -60,7 +61,32 @@ class SettingsScreenViewTest {
         view.selectTab(SettingsTab.CONNECTION)
         assertEquals(SettingsTab.CONNECTION, view.currentTab())
 
+        view.selectTab(SettingsTab.SYSTEM)
+        val gov = textViews(view).first { it.text == "Gov" }
+        assertEquals(View.GONE, panel(gov).visibility)
+
+        view.selectTab(SettingsTab.GOVERNANCE)
+        assertEquals(SettingsTab.GOVERNANCE, view.currentTab())
+        assertEquals(View.VISIBLE, panel(gov).visibility)
+
         view.selectTab(SettingsTab.EXPERIMENTAL)
         assertEquals(SettingsTab.EXPERIMENTAL, view.currentTab())
+    }
+
+    private fun panel(label: View): View {
+        var current = label
+        while (current.parent is View && current.parent !is android.widget.ScrollView) {
+            current = current.parent as View
+        }
+        return current.parent as? View ?: current
+    }
+
+    private fun textViews(root: View): List<TextView> {
+        val found = mutableListOf<TextView>()
+        if (root is TextView) found += root
+        if (root is android.view.ViewGroup) {
+            for (index in 0 until root.childCount) found += textViews(root.getChildAt(index))
+        }
+        return found
     }
 }

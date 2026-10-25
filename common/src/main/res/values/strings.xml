@@ -5,7 +5,7 @@
     <string name="settings_hint">Every setting is on this page.</string>
     <string name="system_settings">System settings</string>
     <string name="close_settings">Close settings</string>
-    <string name="system_settings_hint">Startup, location reporting, debug logs, language, and diagnostic reports.</string>
+    <string name="system_settings_hint">Startup, location reporting, debug logs, and language.</string>
     <string name="experimental_features">Experimental features</string>
     <string name="experimental_features_hint">Only in the local build. These are still being tried on the car.</string>
     <string name="experimental_report_upload">Report upload</string>
