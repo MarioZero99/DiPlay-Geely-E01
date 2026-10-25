@@ -7,9 +7,10 @@ import java.io.File
 /**
  * Mount points a diagnostic report might be saved to.
  *
- * A stick on this head unit is a child of a vendor root, often `/mnt/media_rw/usbotg-sda1`, and the
- * same stick may also appear under `/storage`. This only collects those directories. It does not
- * create `DiPlay` and it does not write a probe file: looking is not saving.
+ * A stick on this head unit is mounted at `/mnt/media_rw/usbotg-sda1`. An ordinary app lists and
+ * writes the same stick at `/storage/usbotg-sda1` when that directory exists. This collects those
+ * directories and shows the `/storage` one. It does not create `DiPlay` and it does not write a
+ * probe file: looking is not saving.
  */
 internal object DiagnosticVolumeProbe {
     private val vendorMountRoots = listOf(
@@ -96,6 +97,7 @@ internal object DiagnosticVolumeProbe {
         context: Context,
         extraMountPaths: Collection<String> = emptySet(),
         procMountsFile: File? = defaultProcMounts(),
+        storageRoot: File = File("/storage"),
     ): List<File> {
         val found = linkedMapOf<String, File>()
         var mountsContent = ""
@@ -158,7 +160,22 @@ internal object DiagnosticVolumeProbe {
                 }
             }
         }
-        return found.values.toList()
+        return found.values.map { visibleRoot(it, storageRoot) }.distinctBy { it.absolutePath }
+    }
+
+    /**
+     * The raw mount is `/mnt/media_rw/<name>`. The directory an app can list and write is
+     * `/storage/<name>` when it exists. A name with another slash is not the volume root.
+     */
+    internal fun visibleRoot(dir: File, storageRoot: File = File("/storage")): File {
+        val marker = "/mnt/media_rw/"
+        val path = dir.absolutePath
+        val at = path.indexOf(marker)
+        if (at < 0) return dir
+        val leaf = path.substring(at + marker.length).trim('/')
+        if (leaf.isEmpty() || leaf.contains('/')) return dir
+        val twin = File(storageRoot, leaf)
+        return if (twin.isDirectory) twin else dir
     }
 
     private fun remember(found: MutableMap<String, File>, file: File) {

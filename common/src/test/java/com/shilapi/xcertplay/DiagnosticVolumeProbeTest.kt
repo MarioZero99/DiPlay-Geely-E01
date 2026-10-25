@@ -37,6 +37,31 @@ class DiagnosticVolumeProbeTest {
         assertFalse(found.any { it.absolutePath == music.absolutePath })
     }
 
+    @Test fun aRawMediaRwStickIsShownAsTheStorageDirectoryWithTheSameName() {
+        val raw = File(temp.newFolder("mnt", "media_rw"), "usbotg-sda1").apply { mkdirs() }
+        val storage = temp.newFolder("storage")
+        File(storage, "usbotg-sda1").mkdirs()
+        val found = DiagnosticVolumeProbe.candidates(
+            context,
+            setOf(raw.absolutePath),
+            procMountsFile = null,
+            storageRoot = storage,
+        )
+        assertEquals(listOf(File(storage, "usbotg-sda1").absolutePath), found.map { it.absolutePath })
+    }
+
+    @Test fun aRawMediaRwStickStaysWhenTheStorageDirectoryIsMissing() {
+        val raw = File(temp.newFolder("mnt", "media_rw"), "usbotg-sda1").apply { mkdirs() }
+        val storage = temp.newFolder("empty-storage")
+        val found = DiagnosticVolumeProbe.candidates(
+            context,
+            setOf(raw.absolutePath),
+            procMountsFile = null,
+            storageRoot = storage,
+        )
+        assertEquals(listOf(raw.absolutePath), found.map { it.absolutePath })
+    }
+
     @Test fun candidatesKeepsAMountedBroadcastAndDropsTheHeadUnit() {
         val mountedDir = temp.newFolder("mnt-media-rw-usb")
         val primary = Environment.getExternalStorageDirectory()
