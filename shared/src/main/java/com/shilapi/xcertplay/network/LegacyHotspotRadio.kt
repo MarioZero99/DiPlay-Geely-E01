@@ -35,12 +35,12 @@ internal object LegacyHotspotRadio {
         }
     }
 
-    class Settled {
+    class Settled(private val settleThresholdMs: Long = 2_000L) {
         private var frequency: Int? = null
         private var since = 0L
         fun observe(value: Int?, nowMs: Long): Int? {
             if (value != frequency) { frequency = value; since = nowMs }
-            return value?.takeIf { nowMs - since >= 2_000 }
+            return value?.takeIf { nowMs - since >= settleThresholdMs }
         }
     }
 }

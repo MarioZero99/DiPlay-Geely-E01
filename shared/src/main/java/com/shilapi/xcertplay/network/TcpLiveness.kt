@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.network
 
+import android.annotation.SuppressLint
 import android.os.Build
 import android.system.Os
 import java.io.FileDescriptor
@@ -36,6 +37,7 @@ internal object TcpLiveness {
      * reported rather than raised: this runs inside a session, and a connection without the tuning is
      * exactly what it was before this existed.
      */
+    @SuppressLint("NewApi")
     fun configure(socket: Socket, diagnostic: (String) -> Unit) {
         try {
             socket.keepAlive = true
@@ -43,8 +45,8 @@ internal object TcpLiveness {
             diagnostic("TCP peer health tuning unavailable: socket keepalive failed: ${failure.javaClass.simpleName}")
             return
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            diagnostic("TCP peer health basic keepalive enabled; fine sockopt tuning requires API 26")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            diagnostic("TCP peer health fine sockopt tuning requires API 21+")
             return
         }
         val descriptor = socketDescriptor(socket)
