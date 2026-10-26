@@ -9,7 +9,9 @@ import android.content.ServiceConnection
 import android.graphics.Bitmap
 import android.os.IBinder
 import android.os.RemoteException
+import android.os.SystemClock
 import com.ecarx.xui.adaptapi.diminteraction.IDimTransListener
+import com.shilapi.xcertplay.AirPlayPersistence
 import com.shilapi.xcertplay.DiagLog
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
@@ -161,12 +163,23 @@ internal class XingruiInstrumentBridge(context: Context) {
         }
     }
 
+    private var lastSentTitle: String? = null
+    private var lastSentArtist: String? = null
+    private var lastSentPlaying: Boolean? = null
+    private var lastSentTimeMs: Long = 0L
+
+    private fun truncateCanString(str: String): String {
+        val trimmed = str.trim()
+        return if (trimmed.length > MAX_CAN_TEXT_LENGTH) trimmed.substring(0, MAX_CAN_TEXT_LENGTH) else trimmed
+    }
+
     private fun sendMediaUpdate(
         title: String?,
         artist: String?,
         album: String?,
         artwork: Bitmap?,
-        isPlaying: Boolean
+        isPlaying: Boolean,
+        force: Boolean = false
     ) {
         try {
             if (dimService == null && !isBound.get()) {
@@ -179,9 +192,22 @@ internal class XingruiInstrumentBridge(context: Context) {
                 return
             }
 
-            val safeTitle = if (!title.isNullOrBlank()) title else " "
-            val safeArtist = if (!artist.isNullOrBlank()) artist else " "
-            val safeAlbum = if (!album.isNullOrBlank()) album else " "
+            val safeTitle = truncateCanString(if (!title.isNullOrBlank()) title else " ")
+            val safeArtist = truncateCanString(if (!artist.isNullOrBlank()) artist else " ")
+            val safeAlbum = truncateCanString(if (!album.isNullOrBlank()) album else " ")
+
+            val now = SystemClock.uptimeMillis()
+            val isMetadataSame = safeTitle == lastSentTitle && safeArtist == lastSentArtist
+            val isPlayingSame = isPlaying == lastSentPlaying
+
+            if (!force && isMetadataSame && isPlayingSame) {
+                return
+            }
+
+            val elapsed = now - lastSentTimeMs
+            if (!force && elapsed < MIN_CAN_INTERVAL_MS && isMetadataSame) {
+                return
+            }
 
             // Guarantee cover URI is never empty to prevent triggering IPKServer -102 clear-screen
             val coverPath = if (artwork != null && !artwork.isRecycled) {
@@ -200,12 +226,17 @@ internal class XingruiInstrumentBridge(context: Context) {
                 coverManager.getBlankCoverUri()
             }
 
+            val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
+
             try {
-                // Source 6 = Online music (enables album art display in AlbumService)
-                service.onSourceChanged(SOURCE_ONLINE_MUSIC)
-                service.updateMedia(0, safeTitle, safeAlbum, safeArtist, coverPath, SOURCE_ONLINE_MUSIC)
-                service.onAction(if (isPlaying) 1 else 2, SOURCE_ONLINE_MUSIC)
-                DiagLog.i(TAG, "Sent to Xingrui IPK: $safeTitle - $safeArtist (cover=$coverPath, playing=$isPlaying)")
+                service.onSourceChanged(sourceType)
+                service.updateMedia(0, safeTitle, safeAlbum, safeArtist, coverPath, sourceType)
+                service.onAction(if (isPlaying) 1 else 2, sourceType)
+                lastSentTitle = safeTitle
+                lastSentArtist = safeArtist
+                lastSentPlaying = isPlaying
+                lastSentTimeMs = now
+                DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType): $safeTitle - $safeArtist (cover=$coverPath, playing=$isPlaying)")
             } catch (e: RemoteException) {
                 DiagLog.w(TAG, "RemoteException calling MediaService, will reconnect", e)
                 dimService = null
@@ -219,13 +250,17 @@ internal class XingruiInstrumentBridge(context: Context) {
     fun clearMedia() {
         if (!isSupported || executor.isShutdown) return
         lastCachedMedia = null
+        lastSentTitle = null
+        lastSentArtist = null
+        lastSentPlaying = null
         executor.execute {
             try {
                 val service = dimService ?: return@execute
+                val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
                 try {
-                    service.updateMedia(0, " ", " ", " ", "", SOURCE_ONLINE_MUSIC)
-                    service.onAction(2, SOURCE_ONLINE_MUSIC)
-                    DiagLog.i(TAG, "Cleared Xingrui IPK media")
+                    service.updateMedia(0, " ", " ", " ", "", sourceType)
+                    service.onAction(2, sourceType)
+                    DiagLog.i(TAG, "Cleared Xingrui IPK media (source=$sourceType)")
                 } catch (e: RemoteException) {
                     DiagLog.w(TAG, "RemoteException while clearing media", e)
                 }
@@ -242,15 +277,19 @@ internal class XingruiInstrumentBridge(context: Context) {
                 receiverRegistered = false
             }
             dimService?.let { service ->
+                val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
                 runCatching {
-                    service.updateMedia(0, " ", " ", " ", "", SOURCE_ONLINE_MUSIC)
-                    service.onAction(2, SOURCE_ONLINE_MUSIC)
+                    service.updateMedia(0, " ", " ", " ", "", sourceType)
+                    service.onAction(2, sourceType)
                 }
             }
             boundBinder?.unlinkToDeath(deathRecipient, 0)
             boundBinder = null
             dimService = null
             lastCachedMedia = null
+            lastSentTitle = null
+            lastSentArtist = null
+            lastSentPlaying = null
             if (isBound.compareAndSet(true, false)) {
                 appContext.unbindService(serviceConnection)
             }
@@ -263,7 +302,12 @@ internal class XingruiInstrumentBridge(context: Context) {
 
     companion object {
         private const val TAG = "XingruiInstrument"
+        const val SOURCE_USB = 0
+        const val SOURCE_BLUETOOTH = 2
         const val SOURCE_ONLINE_MUSIC = 6
+
+        private const val MIN_CAN_INTERVAL_MS = 2000L
+        private const val MAX_CAN_TEXT_LENGTH = 31
 
         private const val PKG_INSTRUMENT_SERVER = "com.neusoft.shockwave.instrumentserver"
         private const val CLS_MEDIA_SERVICE = "com.ecarx.xui.adaptapi.diminteraction.MediaService"

@@ -289,6 +289,7 @@ internal object CarPlayMediaKeys {
             }
         }
         private var currentArtwork: Bitmap? = null
+        private var lastGenuineTitle: String? = null
 
         private val artworkWorker = Executors.newSingleThreadExecutor { r ->
             Thread(r, "DiPlay-ArtworkQueue").apply { isDaemon = true; priority = Thread.NORM_PRIORITY - 1 }
@@ -377,25 +378,44 @@ internal object CarPlayMediaKeys {
                     }
                     return@post
                 }
+                val rawTitle = info.title
+                // Filter dynamic lyric updates (format: "<Lyric Text> - <Song Title>")
+                val effectiveTitle = if (!rawTitle.isNullOrBlank() && !lastGenuineTitle.isNullOrBlank() &&
+                    rawTitle.endsWith(" - $lastGenuineTitle")
+                ) {
+                    lastGenuineTitle
+                } else {
+                    if (!rawTitle.isNullOrBlank()) {
+                        lastGenuineTitle = rawTitle
+                    }
+                    rawTitle
+                }
+
+                val filteredInfo = if (effectiveTitle != rawTitle) {
+                    info.copy(title = effectiveTitle)
+                } else {
+                    info
+                }
+
                 val previous = lastPublishedNowPlaying
-                val isTrackChanged = previous != null && (previous.title != info.title || previous.artist != info.artist)
+                val isTrackChanged = previous != null && (previous.title != filteredInfo.title || previous.artist != filteredInfo.artist)
                 if (isTrackChanged) {
                     // Reset position immediately when track changes, so late elapsed time won't bleed previous song's end position
-                    lastKnownPosition = info.elapsedMillis?.takeIf { it >= 0 } ?: 0L
+                    lastKnownPosition = filteredInfo.elapsedMillis?.takeIf { it >= 0 } ?: 0L
                 } else {
-                    info.elapsedMillis?.let { if (it >= 0) lastKnownPosition = it }
+                    filteredInfo.elapsedMillis?.let { if (it >= 0) lastKnownPosition = it }
                 }
-                if (!metadataChanged(previous, info)) {
+                if (!metadataChanged(previous, filteredInfo)) {
                     // Filter out 2Hz elapsed time or status ticks to protect system_server heap
                     return@post
                 }
                 val previousArtworkId = previous?.artworkTransferId
-                val newArtworkId = info.artworkTransferId
+                val newArtworkId = filteredInfo.artworkTransferId
                 if (newArtworkId != previousArtworkId) {
                     updateArtwork(null)
                 }
-                lastPublishedNowPlaying = info
-                publishMetadata(info, currentArtwork)
+                lastPublishedNowPlaying = filteredInfo
+                publishMetadata(filteredInfo, currentArtwork)
             }
         }
 
@@ -510,6 +530,7 @@ internal object CarPlayMediaKeys {
             controller?.nowPlayingListener = null
             controller?.artworkListener = null
             lastPublishedNowPlaying = null
+            lastGenuineTitle = null
             updateArtwork(null)
             instrumentBridge?.release()
             instrumentBridge = null

@@ -133,10 +133,23 @@ class CarPlayMediaKeysBroadcastTest {
         bridge.updateMedia(null, null, null, null, false)
         bridge.updateMedia("Valid Song", "Valid Artist", "Valid Album", null, true)
 
+        // Verify string over 31 characters does not crash
+        val longTitle = "This is a very very very long song title that exceeds thirty-one characters"
+        bridge.updateMedia(longTitle, "Long Artist Name Exceeding Thirty One", "Long Album Name", null, true)
+
         val bmp = Bitmap.createBitmap(50, 50, Bitmap.Config.ARGB_8888)
         bridge.updateMedia("With Art", "Artist", "Album", bmp, true)
 
         bridge.clearMedia()
         bridge.release()
+    }
+
+    @Test
+    fun clusterMediaSourceDefaultsToBluetooth() {
+        assertEquals("Cluster media source should default to 2 (Bluetooth)", 2, AirPlayPersistence.loadClusterMediaSource(context))
+        AirPlayPersistence.saveClusterMediaSource(context, 0)
+        assertEquals("Cluster media source can be saved as 0 (USB)", 0, AirPlayPersistence.loadClusterMediaSource(context))
+        // Reset back to 2
+        AirPlayPersistence.saveClusterMediaSource(context, 2)
     }
 }

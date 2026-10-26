@@ -74,6 +74,7 @@ object AirPlayPersistence {
     private const val KEY_CLUSTER_MAP = "cluster_map_enabled"
     private const val KEY_CLUSTER_MAP_SCALE = "cluster_map_scale_percent"
     private const val KEY_CLUSTER_MEDIA_METADATA = "cluster_media_metadata_enabled"
+    private const val KEY_CLUSTER_MEDIA_SOURCE = "cluster_media_source"
     private const val KEY_CLUSTER_CONTENT = "cluster_content"
     private const val KEY_CLUSTER_MARKER_X = "cluster_marker_horizontal_step"
     private const val KEY_CLUSTER_MARKER_Y = "cluster_marker_vertical_step"
@@ -650,6 +651,13 @@ object AirPlayPersistence {
 
     fun saveClusterMediaMetadataEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_CLUSTER_MEDIA_METADATA, enabled).apply()
+    }
+
+    fun loadClusterMediaSource(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_CLUSTER_MEDIA_SOURCE, 2) // Default 2 (Bluetooth)
+
+    fun saveClusterMediaSource(context: Context, source: Int) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY_CLUSTER_MEDIA_SOURCE, source).apply()
     }
 
     fun loadClusterContent(context: Context): CarPlayClusterDisplay.Content =
