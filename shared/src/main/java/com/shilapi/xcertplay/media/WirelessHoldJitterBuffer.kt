@@ -6,7 +6,7 @@ import kotlin.math.ceil
  * Manages packet-count gating for wireless media audio streams.
  *
  * For wireless media streams:
- * - Cold start / track reset: gates until ~1000ms of AAC packets accumulate (47 packets at 48kHz, 44 at 44.1kHz).
+ * - Cold start / track reset: gates until ~1250ms of AAC packets accumulate (60 packets at 48kHz, 56 at 44.1kHz).
  * - After underrun: escalates gate until ~2200ms of AAC packets accumulate (104 packets at 48kHz, 95 at 44.1kHz).
  *
  * For wired connections or non-media audio types (telephony, prompts):
@@ -16,7 +16,7 @@ class WirelessHoldJitterBuffer(
     val isWireless: Boolean,
     val audioType: String,
     val sampleRate: Int = 48000,
-    val initialHoldMs: Int = 1000,
+    val initialHoldMs: Int = 1280,
     val escalatedHoldMs: Int = 2200,
 ) {
     var hasUnderrun: Boolean = false

@@ -19,6 +19,7 @@ object MediaAudioBuffer {
     val presets = listOf(300, DEFAULT_MILLIS, 1000)
 
     private const val HEADROOM_MILLIS = 200 // room above the start level so bursts after a gap fit
+    private const val WIRELESS_HEADROOM_MILLIS = 900 // expands capacity to 1400ms for wireless media (500 + 900)
     private const val MIN_TRACK_BUFFER_BYTES = 16 * 1024
     private const val MIN_START_BUFFER_BYTES = 4 * 1024
 
@@ -27,7 +28,14 @@ object MediaAudioBuffer {
     data class Plan(val trackBufferBytes: Int, val startBytes: Int)
 
     /** AudioTrack capacity and the amount to queue before play() for one output stream. */
-    fun plan(audioType: String, sampleRate: Int, channels: Int, minBufferBytes: Int, mediaMillis: Int): Plan {
+    fun plan(
+        audioType: String,
+        sampleRate: Int,
+        channels: Int,
+        minBufferBytes: Int,
+        mediaMillis: Int,
+        isWireless: Boolean = false,
+    ): Plan {
         val lowLatency = Plan(
             trackBufferBytes = maxOf(minBufferBytes * 4, MIN_TRACK_BUFFER_BYTES),
             startBytes = maxOf(minBufferBytes, MIN_START_BUFFER_BYTES),
@@ -35,7 +43,8 @@ object MediaAudioBuffer {
         if (audioType != "media") return lowLatency
         val bytesPerSecond = sampleRate.toLong() * channels.coerceIn(1, 2) * 2
         val start = (bytesPerSecond * sanitize(mediaMillis) / 1000).toInt()
-        val capacity = (bytesPerSecond * (sanitize(mediaMillis) + HEADROOM_MILLIS) / 1000).toInt()
+        val headroom = if (isWireless) WIRELESS_HEADROOM_MILLIS else HEADROOM_MILLIS
+        val capacity = (bytesPerSecond * (sanitize(mediaMillis) + headroom) / 1000).toInt()
         return Plan(
             trackBufferBytes = maxOf(capacity, lowLatency.trackBufferBytes),
             startBytes = maxOf(start, lowLatency.startBytes),

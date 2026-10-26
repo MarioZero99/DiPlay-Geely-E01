@@ -814,7 +814,14 @@ private class AudioRenderer(
             DiagLog.e(TAG, "AudioTrack buffer size unavailable rate=${format.sampleRate} channels=${format.channels}")
             return
         }
-        val plan = MediaAudioBuffer.plan(format.audioType, format.sampleRate, format.channels, minBuffer, mediaBufferMillis)
+        val plan = MediaAudioBuffer.plan(
+            format.audioType,
+            format.sampleRate,
+            format.channels,
+            minBuffer,
+            mediaBufferMillis,
+            isWireless = isWireless,
+        )
         val frameBytes = if (format.channels >= 2) 4 else 2
         bytesPerSecond = format.sampleRate * frameBytes
         val built: AudioTrack

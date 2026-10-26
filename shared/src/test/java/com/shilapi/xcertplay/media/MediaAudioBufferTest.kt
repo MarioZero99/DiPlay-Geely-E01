@@ -9,7 +9,16 @@ class MediaAudioBufferTest {
         // 48 kHz stereo 16-bit = 192 000 bytes/s.
         val plan = MediaAudioBuffer.plan("media", 48_000, 2, minBufferBytes = 7_680, mediaMillis = 500)
         assertEquals(96_000, plan.startBytes)
-        assertEquals(134_400, plan.trackBufferBytes)
+        assertEquals(134_400, plan.trackBufferBytes) // 500ms + 200ms headroom = 700ms
+    }
+
+    @Test
+    fun `wireless music buffers chosen start delay with 1400ms track capacity`() {
+        // 48 kHz stereo 16-bit = 192 000 bytes/s.
+        // For wireless, 500ms start (96_000) + 900ms headroom = 1400ms capacity (268_800 bytes)
+        val plan = MediaAudioBuffer.plan("media", 48_000, 2, minBufferBytes = 7_680, mediaMillis = 500, isWireless = true)
+        assertEquals(96_000, plan.startBytes)
+        assertEquals(268_800, plan.trackBufferBytes)
     }
 
     @Test

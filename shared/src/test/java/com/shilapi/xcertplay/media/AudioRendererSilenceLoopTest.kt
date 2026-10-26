@@ -55,11 +55,11 @@ class AudioRendererSilenceLoopTest {
         try {
             sink.onAudioStarted(96, lpcmFormat(), firstSample = 0)
 
-            // 1. 注入 50 包真实非零音频数据 (50 >= 47 门限)，触发起播门限
+            // 1. 注入 65 包真实非零音频数据 (65 >= 60 门限)，触发起播门限
             val loudPcm = ByteArray(1920) { index ->
                 if ((index / 2) % 2 == 0) 0x7F.toByte() else 0x10.toByte()
             }
-            repeat(50) { seq ->
+            repeat(65) { seq ->
                 sink.onAudioRtp(96, lpcmFormat(), rtpPacket(loudPcm), sample = seq * 480)
             }
 
@@ -82,10 +82,10 @@ class AudioRendererSilenceLoopTest {
             }
             assertTrue("断流期间末端必须持续写入全0静音帧填缝，防止硬件打结爆音", zeroWrites.isNotEmpty())
 
-            // 3. 模拟新曲首批数据包到达（未满 47 包门限，例如 5 包），验证在静音掩护下平稳蓄水，绝不中断静音
+            // 3. 模拟新曲首批数据包到达（未满 60 包门限，例如 5 包），验证在静音掩护下平稳蓄水，绝不中断静音
             writtenBuffers.clear()
             repeat(5) { seq ->
-                sink.onAudioRtp(96, lpcmFormat(), rtpPacket(loudPcm), sample = (50 + seq) * 480)
+                sink.onAudioRtp(96, lpcmFormat(), rtpPacket(loudPcm), sample = (65 + seq) * 480)
             }
             Thread.sleep(100)
 
@@ -95,10 +95,10 @@ class AudioRendererSilenceLoopTest {
             }
             assertTrue("蓄水期间队列非空但门控未开，必须持续写入静音掩护声卡", bufferingZeroWrites.isNotEmpty())
 
-            // 4. 继续注入剩余数据包直至蓄满 50 包 (>= 47 门限)，触发开闸起播
+            // 4. 继续注入剩余数据包直至蓄满 60 包 (5 + 60 = 65 >= 60 门限)，触发开闸起播
             writtenBuffers.clear()
-            repeat(45) { seq ->
-                sink.onAudioRtp(96, lpcmFormat(), rtpPacket(loudPcm), sample = (55 + seq) * 480)
+            repeat(60) { seq ->
+                sink.onAudioRtp(96, lpcmFormat(), rtpPacket(loudPcm), sample = (70 + seq) * 480)
             }
             Thread.sleep(150)
 
