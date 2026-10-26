@@ -1008,14 +1008,6 @@ class DiPlayActivity : ComponentActivity() {
             }.apply { isEnabled = !exportInProgress }
             card.addView(exportButton, matchButton(10, 60))
 
-            if (SupabaseLogUpload.enabled(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_KEY)) {
-                uploadButton = button(
-                    if (uploadInProgress) getString(R.string.uploading_report) else getString(R.string.generate_and_upload_report),
-                    false,
-                ) { uploadGeneratedReport() }.apply { isEnabled = !uploadInProgress }
-                card.addView(uploadButton, matchButton(16, 60))
-            }
-
             card.addView(
                 label(
                     getString(R.string.reports_save_to_usb_then_downloads) +
@@ -3258,7 +3250,8 @@ class DiPlayActivity : ComponentActivity() {
         val request = ++browseRequest
         sheet.showLoading(directory.name, getString(R.string.export_loading))
         Thread({
-            val readable = runCatching { directory.list() }.getOrNull() != null
+            val readable = (runCatching { directory.list() }.getOrNull() != null) ||
+                (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${directory.absolutePath}\""))
             val entries = if (readable) DiagnosticExportStore.children(directory) else emptyList()
             runOnUiThread {
                 if (!browseAlive(generation, request)) return@runOnUiThread

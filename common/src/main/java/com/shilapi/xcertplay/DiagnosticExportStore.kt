@@ -49,14 +49,53 @@ internal object DiagnosticExportStore {
         return places
     }
 
-    /** Directories first, then files, by lower-case name. An unreadable directory is an empty list. */
+    private fun isAccessibleDir(dir: File): Boolean =
+        dir.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${dir.absolutePath}\""))
+
+    private class RootExportFile(parent: File, child: String, private val isDir: Boolean) : File(parent, child) {
+        override fun isDirectory(): Boolean = isDir
+        override fun isFile(): Boolean = !isDir
+    }
+
+    /** Directories first, then files, by lower-case name. An unreadable directory falls back to root listing or empty list. */
     fun children(directory: File): List<File> {
-        val listed = runCatching { directory.listFiles() }.getOrNull() ?: return emptyList()
-        return listed.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        val listed = runCatching { directory.listFiles() }.getOrNull()
+        if (listed != null) {
+            return listed.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        }
+        if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+            val rootEntries = listFilesViaRoot(directory)
+            if (rootEntries.isNotEmpty()) {
+                return rootEntries.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+            }
+        }
+        return emptyList()
+    }
+
+    private fun listFilesViaRoot(directory: File): List<File> {
+        val path = directory.absolutePath
+        // Android 5.1 toolbox 的 ls 不支持 -p 和 -1。
+        // 使用 POSIX / mksh shell 内建语法：目录加末尾 '/'，普通文件不加，单次完成无二次 stat 开销。
+        val cmd = "for f in \"$path\"/*; do [ -e \"\$f\" ] || continue; [ -d \"\$f\" ] && echo \"\${f##*/}/\" || echo \"\${f##*/}\"; done"
+        val (rc, body) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput(cmd)
+        if (rc != 0 || body.isBlank()) return emptyList()
+        return parseRootDirectoryListing(directory, body)
+    }
+
+    internal fun parseRootDirectoryListing(directory: File, body: String): List<File> {
+        return body.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("ls:") }
+            .map { entryName ->
+                val isDir = entryName.endsWith("/")
+                val cleanName = entryName.removeSuffix("/")
+                RootExportFile(directory, cleanName, isDir)
+            }
+            .toList()
     }
 
     /** Keeps real directories, including ones [File.list] cannot read, then one path per stick. */
-    internal fun chooseMounts(dirs: List<File>): List<File> = preferListedCopy(dirs.filter { it.isDirectory })
+    internal fun chooseMounts(dirs: List<File>): List<File> = preferListedCopy(dirs.filter { isAccessibleDir(it) })
 
     /**
      * Two paths with the same leaf are one stick. A copy the app can list beats one it cannot,
@@ -100,7 +139,9 @@ internal object DiagnosticExportStore {
         return ExportOutcome(file.absolutePath, backup?.uri, written)
     }
 
-    private fun canList(dir: File): Boolean = dir.isDirectory && runCatching { dir.list() }.getOrNull() != null
+    private fun canList(dir: File): Boolean =
+        (dir.isDirectory && runCatching { dir.list() }.getOrNull() != null) ||
+        (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${dir.absolutePath}\""))
 
     private data class Backup(val uri: Uri?, val file: File)
 

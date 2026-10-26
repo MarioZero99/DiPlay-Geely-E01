@@ -150,11 +150,12 @@ internal object DiagnosticVolumeProbe {
         if (found.isEmpty()) {
             for (rootPath in vendorMountRoots) {
                 val root = File(rootPath)
-                if (!root.isDirectory) continue
+                val isDir = root.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"$rootPath\""))
+                if (!isDir) continue
                 val children = runCatching { root.listFiles() }.getOrNull().orEmpty().filter { it.isDirectory }
                 for (target in listOf(root) + children) {
                     val listed = runCatching { target.list() }.getOrNull()
-                    if (mountsContent.isEmpty() || isMountedFileSystem(target, mountsContent) || listed?.isNotEmpty() == true) {
+                    if (mountsContent.isEmpty() || isMountedFileSystem(target, mountsContent) || listed?.isNotEmpty() == true || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${target.absolutePath}\""))) {
                         remember(found, target)
                     }
                 }
@@ -175,13 +176,17 @@ internal object DiagnosticVolumeProbe {
         val leaf = path.substring(at + marker.length).trim('/')
         if (leaf.isEmpty() || leaf.contains('/')) return dir
         val twin = File(storageRoot, leaf)
-        return if (twin.isDirectory) {
+        if (twin.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${twin.absolutePath}\""))) {
             DiagLog.i("DiagnosticExport", "usb $path -> ${twin.absolutePath}")
-            twin
-        } else {
-            DiagLog.i("DiagnosticExport", "usb $path kept, ${twin.absolutePath} is not a directory")
-            dir
+            return twin
         }
+        val genericOtg = File(storageRoot, "usbotg")
+        if (genericOtg.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${genericOtg.absolutePath}\""))) {
+            DiagLog.i("DiagnosticExport", "usb $path -> ${genericOtg.absolutePath}")
+            return genericOtg
+        }
+        DiagLog.i("DiagnosticExport", "usb $path kept, ${twin.absolutePath} is not a directory")
+        return dir
     }
 
     private fun remember(found: MutableMap<String, File>, file: File) {

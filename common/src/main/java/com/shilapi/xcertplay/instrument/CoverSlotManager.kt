@@ -4,7 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Environment
-import android.util.Log
+import com.shilapi.xcertplay.DiagLog
 import java.io.File
 import java.io.FileOutputStream
 
@@ -37,7 +37,7 @@ internal class CoverSlotManager(private val context: Context) {
                         bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
                         out.flush()
                     }
-                }.onFailure { Log.w(TAG, "Failed to create blank cover fallback", it) }
+                }.onFailure { DiagLog.w(TAG, "Failed to create blank cover fallback", it) }
             }
         }
     }
@@ -69,7 +69,7 @@ internal class CoverSlotManager(private val context: Context) {
             currentSlot = nextSlot
             toSdcardUri(targetFile)
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed to save cover art safely, falling back to blank cover", t)
+            DiagLog.w(TAG, "Failed to save cover art safely, falling back to blank cover", t)
             getBlankCoverUri()
         }
     }

@@ -41,10 +41,10 @@ object RootShellBridge {
 
     internal fun extractOutput(output: String): Pair<Int?, String> {
         val marker = output.lastIndexOf(RC_MARKER)
-        if (marker < 0) return null to output.trim().take(200)
+        if (marker < 0) return null to output.trim()
         val rc = output.substring(marker + RC_MARKER.length).trim().toIntOrNull()
         val body = output.substring(0, marker).trim()
-        return rc to body.take(200)
+        return rc to body
     }
 
     internal fun classifyOutput(output: String): Boolean =
@@ -93,11 +93,16 @@ object RootShellBridge {
         "/system/bin/svc wifi ${if (enable) "enable" else "disable"}"
 
     fun execute(command: String, timeoutMillis: Long = ROOT_COMMAND_TIMEOUT_MILLIS): Boolean {
-        if (command.contains('\n') || command.contains('\r')) return false
+        val (rc, _) = executeWithOutput(command, timeoutMillis)
+        return rc == 0
+    }
+
+    fun executeWithOutput(command: String, timeoutMillis: Long = ROOT_COMMAND_TIMEOUT_MILLIS): Pair<Int?, String> {
+        if (command.contains('\n') || command.contains('\r')) return null to ""
         val wrapped = wrap(command)
         if (wrapped.toByteArray(Charsets.UTF_8).size > MAX_COMMAND_BYTES) {
             DiagLog.w(TAG, "Root command exceeds $MAX_COMMAND_BYTES bytes: $command")
-            return false
+            return null to ""
         }
         val waitBudget = timeoutMillis.coerceAtLeast(100L)
         val acquired = try {
@@ -107,36 +112,36 @@ object RootShellBridge {
         }
         if (!acquired) {
             DiagLog.w(TAG, "Root command lock acquisition timeout for: $command")
-            return false
+            return null to ""
         }
         return try {
             if (inFlight.get()) {
                 DiagLog.w(TAG, "Previous root command still in flight in vendor service, dropping: $command")
-                return false
+                return null to ""
             }
             inFlight.set(true)
-            val done = AtomicReference<Boolean?>(null)
+            val result = AtomicReference<Pair<Int?, String>?>(null)
             val worker = Thread({
                 try {
-                    done.set(executeBlocking(command, wrapped))
+                    result.set(executeBlockingWithOutput(command, wrapped))
                 } finally {
                     inFlight.set(false)
                 }
-            }, "root-shell")
+            }, "root-shell-output")
             worker.isDaemon = true
             worker.start()
             worker.join(timeoutMillis.coerceAtLeast(0L))
-            done.get() ?: run {
+            result.get() ?: run {
                 DiagLog.w(TAG, "Root command exceeded ${timeoutMillis}ms: $command")
-                false
+                null to ""
             }
         } finally {
             executionLock.unlock()
         }
     }
 
-    private fun executeBlocking(originalCommand: String, wrapped: String): Boolean {
-        val binder = findExtraUtilsService() ?: return false
+    private fun executeBlockingWithOutput(originalCommand: String, wrapped: String): Pair<Int?, String> {
+        val binder = findExtraUtilsService() ?: return null to ""
         return synchronized("ExtraUtilsService_Global_Lock".intern()) {
             try {
                 val output = transact(binder, wrapped)
@@ -145,14 +150,13 @@ object RootShellBridge {
                     if (originalCommand.contains("service call")) {
                         DiagLog.i(TAG, "service call reply: $body")
                     }
-                    true
                 } else {
                     DiagLog.w(TAG, "Root command failed (rc=$rc, cmd='$originalCommand'): $body")
-                    false
                 }
+                rc to body
             } catch (error: Throwable) {
                 DiagLog.w(TAG, "Root transaction failed: ${error.message}")
-                false
+                null to ""
             }
         }
     }

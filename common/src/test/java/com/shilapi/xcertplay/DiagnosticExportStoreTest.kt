@@ -100,6 +100,19 @@ class DiagnosticExportStoreTest {
         assertFalse(DiagnosticExportStore.exportViaRoot(target, "test report", context.cacheDir))
     }
 
+    @Test fun parseRootDirectoryListingDistinguishesFilesAndDirectories() {
+        val root = File("/storage/usbotg")
+        val output = "DiPlay/\nLost.dir/\nMusic/\nsong.mp3\nreport.txt\n"
+        val entries = DiagnosticExportStore.parseRootDirectoryListing(root, output)
+        assertEquals(5, entries.size)
+        val sorted = entries.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        assertEquals(listOf("DiPlay", "Lost.dir", "Music", "report.txt", "song.mp3"), sorted.map { it.name })
+        assertTrue(sorted[0].isDirectory)
+        assertFalse(sorted[0].isFile)
+        assertFalse(sorted[3].isDirectory)
+        assertTrue(sorted[3].isFile)
+    }
+
     /** [File.list] is not final. Returning null is the unlistable stick this process cannot chmod into. */
     private class UnlistableDir(path: File) : File(path.absolutePath) {
         override fun list(): Array<String>? = null
