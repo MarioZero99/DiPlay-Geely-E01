@@ -680,7 +680,7 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
 
     private fun validateSsid(value: String?): String {
         val ssid = unquote(value)
-        if (ssid.isNullOrEmpty() || ssid == WifiManager.UNKNOWN_SSID) {
+        if (ssid.isNullOrEmpty() || ssid == UNKNOWN_SSID_LITERAL) {
             throw IOException("LocalOnlyHotspot did not report a usable SSID")
         }
         if ('\u0000' in ssid) throw IOException("LocalOnlyHotspot SSID contains U+0000")
@@ -722,9 +722,9 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
         val keyManagement = configuration.allowedKeyManagement
             ?: throw IOException("LocalOnlyHotspot did not report its key management")
         val open = keyManagement.get(WifiConfiguration.KeyMgmt.NONE)
-        val wpa2 = keyManagement.get(WifiConfiguration.KeyMgmt.WPA2_PSK)
-        val sae = keyManagement.get(WifiConfiguration.KeyMgmt.SAE)
-        val owe = keyManagement.get(WifiConfiguration.KeyMgmt.OWE)
+        val wpa2 = keyManagement.get(KEY_MGMT_WPA2_PSK)
+        val sae = keyManagement.get(KEY_MGMT_SAE)
+        val owe = keyManagement.get(KEY_MGMT_OWE)
 
         return when {
             owe -> throw IOException("Unsupported LocalOnlyHotspot security type: OWE")
@@ -835,5 +835,9 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
         const val MULTICAST_LOCK_TAG = "xcertplay-local-only-hotspot-mdns"
         const val NANOS_PER_MILLISECOND = 1_000_000L
         val INTERFACE_POLL_NANOS: Long = TimeUnit.MILLISECONDS.toNanos(100)
+        private const val UNKNOWN_SSID_LITERAL = "<unknown ssid>"
+        private const val KEY_MGMT_WPA2_PSK = 4
+        private const val KEY_MGMT_SAE = 8
+        private const val KEY_MGMT_OWE = 9
     }
 }
