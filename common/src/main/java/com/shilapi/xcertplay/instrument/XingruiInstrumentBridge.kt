@@ -223,8 +223,7 @@ internal class XingruiInstrumentBridge(context: Context) {
             try {
                 val service = dimService ?: return@execute
                 try {
-                    val blankCover = coverManager.getBlankCoverUri()
-                    service.updateMedia(0, " ", " ", " ", blankCover, SOURCE_ONLINE_MUSIC)
+                    service.updateMedia(0, " ", " ", " ", "", SOURCE_ONLINE_MUSIC)
                     service.onAction(2, SOURCE_ONLINE_MUSIC)
                     DiagLog.i(TAG, "Cleared Xingrui IPK media")
                 } catch (e: RemoteException) {
@@ -244,8 +243,7 @@ internal class XingruiInstrumentBridge(context: Context) {
             }
             dimService?.let { service ->
                 runCatching {
-                    val blankCover = coverManager.getBlankCoverUri()
-                    service.updateMedia(0, " ", " ", " ", blankCover, SOURCE_ONLINE_MUSIC)
+                    service.updateMedia(0, " ", " ", " ", "", SOURCE_ONLINE_MUSIC)
                     service.onAction(2, SOURCE_ONLINE_MUSIC)
                 }
             }

@@ -73,11 +73,11 @@ internal object DiagnosticExportStore {
     }
 
     private fun listFilesViaRoot(directory: File): List<File> {
-        val path = directory.absolutePath
+        val safePath = directory.absolutePath.replace("$", "\\$")
         // Android 5.1 toolbox 的 ls 不支持 -p 和 -1。
         // 使用 POSIX / mksh shell 内建语法：目录加末尾 '/'，普通文件不加，单次完成无二次 stat 开销。
-        val cmd = "for f in \"$path\"/*; do [ -e \"\$f\" ] || continue; [ -d \"\$f\" ] && echo \"\${f##*/}/\" || echo \"\${f##*/}\"; done"
-        val (rc, body) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput(cmd)
+        val cmd = "for f in \"$safePath\"/*; do [ -e \"\$f\" ] || continue; [ -d \"\$f\" ] && echo \"\${f##*/}/\" || echo \"\${f##*/}\"; done"
+        val (rc, body) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput(cmd, 3000L)
         if (rc != 0 || body.isBlank()) return emptyList()
         return parseRootDirectoryListing(directory, body)
     }
@@ -85,7 +85,7 @@ internal object DiagnosticExportStore {
     internal fun parseRootDirectoryListing(directory: File, body: String): List<File> {
         return body.lineSequence()
             .map { it.trim() }
-            .filter { it.isNotEmpty() && !it.startsWith("ls:") }
+            .filter { it.isNotEmpty() && !it.startsWith("ls:") && !it.startsWith("$") && !it.startsWith(".") }
             .map { entryName ->
                 val isDir = entryName.endsWith("/")
                 val cleanName = entryName.removeSuffix("/")

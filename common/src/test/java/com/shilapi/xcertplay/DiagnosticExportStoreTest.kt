@@ -102,7 +102,7 @@ class DiagnosticExportStoreTest {
 
     @Test fun parseRootDirectoryListingDistinguishesFilesAndDirectories() {
         val root = File("/storage/usbotg")
-        val output = "DiPlay/\nLost.dir/\nMusic/\nsong.mp3\nreport.txt\n"
+        val output = "\$RECYCLE.BIN/\n.Trash-1000/\nDiPlay/\nLost.dir/\nMusic/\nsong.mp3\nreport.txt\n"
         val entries = DiagnosticExportStore.parseRootDirectoryListing(root, output)
         assertEquals(5, entries.size)
         val sorted = entries.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
