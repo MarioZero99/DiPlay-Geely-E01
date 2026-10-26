@@ -233,6 +233,9 @@
     <string name="error">Error</string>
     <string name="export_empty">(This folder is empty)</string>
     <string name="export_internal_storage">Phone storage</string>
+    <string name="export_usb_storage">USB storage (%1$s)</string>
+    <string name="export_sdcard_storage">SD card (%1$s)</string>
+    <string name="export_storage_space">%1$s free of %2$s</string>
     <string name="export_loading">Reading…</string>
     <string name="export_pick_hint">Choose a place and look at its files</string>
     <string name="export_save_to_disk">Save to this drive</string>

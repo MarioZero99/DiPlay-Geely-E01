@@ -233,11 +233,37 @@ class ExportFolderSheet(
 
     private fun row(choice: Choice): View {
         if (!choice.clickable) {
-            return TextView(context).apply {
-                text = choice.title
-                textSize = 16f
-                setTextColor(palette.textMuted)
-                setPadding(dp(16), dp(14), dp(16), dp(14))
+            val isNotice = choice.title.startsWith("(") || choice.title.startsWith("（")
+            if (isNotice) {
+                return TextView(context).apply {
+                    text = choice.title
+                    textSize = 16f
+                    setTextColor(palette.textMuted)
+                    setPadding(dp(16), dp(14), dp(16), dp(14))
+                }
+            }
+            return LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                minimumHeight = dp(48)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), dp(10), dp(16), dp(10))
+                background = GradientDrawable().apply {
+                    setColor(palette.cardInner)
+                    cornerRadius = dp(10).toFloat()
+                    alpha = 140
+                }
+                addView(TextView(context).apply {
+                    text = choice.title
+                    textSize = 16f
+                    setTextColor(palette.textMain)
+                })
+                if (!choice.detail.isNullOrBlank()) {
+                    addView(TextView(context).apply {
+                        text = choice.detail
+                        textSize = 13f
+                        setTextColor(palette.textMuted)
+                    }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(2) })
+                }
             }
         }
         return LinearLayout(context).apply {

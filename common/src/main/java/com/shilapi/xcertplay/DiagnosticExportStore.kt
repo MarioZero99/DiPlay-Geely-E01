@@ -15,6 +15,7 @@ internal data class ExportFolder(
     val label: String,
     val directory: File,
     val usb: Boolean,
+    val detail: String? = null,
 )
 
 /**
@@ -39,14 +40,64 @@ internal object DiagnosticExportStore {
         val usb = chooseMounts(
             DiagnosticVolumeProbe.candidates(context, extraMountPaths, procMountsFile)
                 .filter { it.absolutePath != downloads.absolutePath },
-        ).map { ExportFolder(it.name, it, usb = true) }
-        val places = usb + ExportFolder(context.getString(R.string.export_internal_storage), downloads, usb = false)
+        ).map { dir ->
+            val label = formatVolumeLabel(context, dir, usb = true)
+            val detail = formatVolumeDetail(context, dir)
+            ExportFolder(label, dir, usb = true, detail = detail)
+        }
+        val internalLabel = context.getString(R.string.export_internal_storage)
+        val internalDetail = formatVolumeDetail(context, downloads)
+        val places = usb + ExportFolder(internalLabel, downloads, usb = false, detail = internalDetail)
         DiagLog.i("DiagnosticExport", places.joinToString(" | ") { folder ->
             val dir = folder.directory
             val listed = runCatching { dir.list() }.getOrNull()
             "${dir.absolutePath} usb=${folder.usb} dir=${dir.isDirectory} list=${listed?.size ?: "null"} write=${dir.canWrite()}"
         }.ifEmpty { "places empty" })
         return places
+    }
+
+    internal fun formatVolumeLabel(context: Context, dir: File, usb: Boolean): String {
+        if (!usb) return context.getString(R.string.export_internal_storage)
+        val sysDesc = runCatching {
+            val sm = context.getSystemService(Context.STORAGE_SERVICE) ?: return@runCatching null
+            val volumes = sm.javaClass.getMethod("getVolumeList").invoke(sm) as? Array<*> ?: return@runCatching null
+            for (vol in volumes) {
+                if (vol == null) continue
+                val path = vol.javaClass.getMethod("getPath").invoke(vol) as? String ?: continue
+                if (path == dir.absolutePath || path.trimEnd('/') == dir.absolutePath.trimEnd('/')) {
+                    val desc = runCatching {
+                        vol.javaClass.getMethod("getDescription", Context::class.java).invoke(vol, context) as? String
+                    }.getOrNull()
+                    if (!desc.isNullOrBlank()) return@runCatching desc
+                }
+            }
+            null
+        }.getOrNull()
+        if (!sysDesc.isNullOrBlank()) return "$sysDesc (${dir.name})"
+
+        val nameLower = dir.name.lowercase()
+        return when {
+            nameLower.contains("usb") || nameLower.contains("udisk") || nameLower.contains("otg") ->
+                context.getString(R.string.export_usb_storage, dir.name)
+            nameLower.contains("sdcard") ->
+                context.getString(R.string.export_sdcard_storage, dir.name)
+            else -> dir.name
+        }
+    }
+
+    internal fun formatVolumeDetail(context: Context, dir: File): String {
+        val spaceInfo = runCatching {
+            val stat = android.os.StatFs(dir.absolutePath)
+            val blockCount = stat.blockCountLong
+            if (blockCount > 0L) {
+                val available = stat.availableBlocksLong * stat.blockSizeLong
+                val total = blockCount * stat.blockSizeLong
+                val freeStr = android.text.format.Formatter.formatFileSize(context, available)
+                val totalStr = android.text.format.Formatter.formatFileSize(context, total)
+                context.getString(R.string.export_storage_space, freeStr, totalStr)
+            } else null
+        }.getOrNull()
+        return if (spaceInfo != null) "$spaceInfo · ${dir.absolutePath}" else dir.absolutePath
     }
 
     private fun isAccessibleDir(dir: File): Boolean =
@@ -60,7 +111,7 @@ internal object DiagnosticExportStore {
     /** Directories first, then files, by lower-case name. An unreadable directory falls back to root listing or empty list. */
     fun children(directory: File): List<File> {
         val listed = runCatching { directory.listFiles() }.getOrNull()
-        if (listed != null) {
+        if (!listed.isNullOrEmpty()) {
             return listed.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
         }
         if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
@@ -69,7 +120,7 @@ internal object DiagnosticExportStore {
                 return rootEntries.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
             }
         }
-        return emptyList()
+        return listed?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })) ?: emptyList()
     }
 
     private fun listFilesViaRoot(directory: File): List<File> {

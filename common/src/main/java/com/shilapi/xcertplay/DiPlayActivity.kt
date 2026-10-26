@@ -3229,7 +3229,7 @@ class DiPlayActivity : ComponentActivity() {
         if (exportInProgress) return
         val sheet = exportSheet ?: return
         val rows = exportRoots.map { folder ->
-            ExportFolderSheet.Choice(folder.label, folder.directory.absolutePath, clickable = true) {
+            ExportFolderSheet.Choice(folder.label, folder.detail ?: folder.directory.absolutePath, clickable = true) {
                 openDirectory(folder.directory, folder.directory)
             }
         }
@@ -3279,7 +3279,11 @@ class DiPlayActivity : ComponentActivity() {
                         openDirectory(entry, mountRoot)
                     }
                 } else {
-                    rows += ExportFolderSheet.Choice(entry.name, null, clickable = false, onClick = null)
+                    val fileLength = runCatching { entry.length() }.getOrDefault(0L)
+                    val sizeDetail = if (fileLength > 0L) {
+                        android.text.format.Formatter.formatFileSize(applicationContext, fileLength)
+                    } else null
+                    rows += ExportFolderSheet.Choice(entry.name, sizeDetail, clickable = false, onClick = null)
                 }
             }
         }

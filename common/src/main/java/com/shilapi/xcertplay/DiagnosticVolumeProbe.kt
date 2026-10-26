@@ -126,6 +126,11 @@ internal object DiagnosticVolumeProbe {
         runCatching {
             if (procMountsFile != null && procMountsFile.exists() && procMountsFile.canRead()) {
                 mountsContent = procMountsFile.readText()
+            } else if (procMountsFile != null && com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+                val (rc, body) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("cat /proc/mounts", 2000L)
+                if (rc == 0 && body.isNotBlank()) mountsContent = body
+            }
+            if (mountsContent.isNotEmpty()) {
                 for (mount in parseMountPoints(mountsContent)) remember(found, mount)
             }
         }
@@ -155,7 +160,14 @@ internal object DiagnosticVolumeProbe {
                 val children = runCatching { root.listFiles() }.getOrNull().orEmpty().filter { it.isDirectory }
                 for (target in listOf(root) + children) {
                     val listed = runCatching { target.list() }.getOrNull()
-                    if (mountsContent.isEmpty() || isMountedFileSystem(target, mountsContent) || listed?.isNotEmpty() == true || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${target.absolutePath}\""))) {
+                    val hasFiles = (listed != null && listed.isNotEmpty()) ||
+                        (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() &&
+                            com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput(
+                                "for f in \"${target.absolutePath}\"/*; do [ -e \"\$f\" ] && echo 1 && break; done",
+                                1000L,
+                            ).second.trim() == "1")
+                    val isMounted = mountsContent.isNotEmpty() && isMountedFileSystem(target, mountsContent)
+                    if (isMounted || hasFiles) {
                         remember(found, target)
                     }
                 }

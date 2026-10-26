@@ -227,6 +227,9 @@
     <string name="error">错误</string>
     <string name="export_empty">（这个目录是空的）</string>
     <string name="export_internal_storage">机身存储</string>
+    <string name="export_usb_storage">U 盘（%1$s）</string>
+    <string name="export_sdcard_storage">SD 卡（%1$s）</string>
+    <string name="export_storage_space">可用 %1$s / 共 %2$s</string>
     <string name="export_loading">正在读取…</string>
     <string name="export_pick_hint">点一个位置，查看里面的文件</string>
     <string name="export_save_to_disk">保存到这个盘</string>
