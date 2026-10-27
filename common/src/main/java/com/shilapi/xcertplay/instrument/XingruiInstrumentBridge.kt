@@ -191,8 +191,12 @@ internal class XingruiInstrumentBridge(context: Context) {
         lastCachedMedia = CachedMedia(title, artist, album, isPlaying)
         val gen = currentGeneration.get()
         executor.execute {
-            if (released.get() || currentGeneration.get() != gen) return@execute
-            processMediaUpdate(gen, title, artist, album, isPlaying)
+            try {
+                if (released.get() || currentGeneration.get() != gen) return@execute
+                processMediaUpdate(gen, title, artist, album, isPlaying)
+            } catch (t: Throwable) {
+                DiagLog.e(TAG, "Error in processMediaUpdate worker", t)
+            }
         }
     }
 
@@ -259,23 +263,27 @@ internal class XingruiInstrumentBridge(context: Context) {
                 pendingPlaying = null
                 pendingToken = -1L
                 executor.execute {
-                    if (released.get() || currentGeneration.get() != gen) return@execute
-                    // 补发开始时：如果已经发出过新歌（sendToken 变了），丢弃
-                    if (sendToken != token) {
-                        DiagLog.d(TAG, "Dropped pending onAction: a newer track or full send occurred (token $token != $sendToken)")
-                        return@execute
+                    try {
+                        if (released.get() || currentGeneration.get() != gen) return@execute
+                        // 补发开始时：如果已经发出过新歌（sendToken 变了），丢弃
+                        if (sendToken != token) {
+                            DiagLog.d(TAG, "Dropped pending onAction: a newer track or full send occurred (token $token != $sendToken)")
+                            return@execute
+                        }
+                        // 如果新的播放状态已经和上次发送的一致，丢弃
+                        if (lastSentPlaying == actionPlaying) {
+                            DiagLog.d(TAG, "Dropped pending onAction: playing state already matches last sent ($actionPlaying)")
+                            return@execute
+                        }
+                        // 如果当前缓存的最新状态已经不再是这笔动作，丢弃
+                        if (lastCachedMedia?.isPlaying != actionPlaying) {
+                            DiagLog.d(TAG, "Dropped pending onAction: cached playing state changed (${lastCachedMedia?.isPlaying} != $actionPlaying)")
+                            return@execute
+                        }
+                        doSendActionOnly(gen, actionPlaying)
+                    } catch (t: Throwable) {
+                        DiagLog.e(TAG, "Error in pending onAction worker", t)
                     }
-                    // 如果新的播放状态已经和上次发送的一致，丢弃
-                    if (lastSentPlaying == actionPlaying) {
-                        DiagLog.d(TAG, "Dropped pending onAction: playing state already matches last sent ($actionPlaying)")
-                        return@execute
-                    }
-                    // 如果当前缓存的最新状态已经不再是这笔动作，丢弃
-                    if (lastCachedMedia?.isPlaying != actionPlaying) {
-                        DiagLog.d(TAG, "Dropped pending onAction: cached playing state changed (${lastCachedMedia?.isPlaying} != $actionPlaying)")
-                        return@execute
-                    }
-                    doSendActionOnly(gen, actionPlaying)
                 }
             }
         }
@@ -300,8 +308,8 @@ internal class XingruiInstrumentBridge(context: Context) {
             } else {
                 DiagLog.d(TAG, "Discarded pending onAction bookkeeping because generation moved during IPC (gen=$gen)")
             }
-        } catch (e: RemoteException) {
-            DiagLog.w(TAG, "RemoteException calling onAction, will reconnect", e)
+        } catch (t: Throwable) {
+            DiagLog.w(TAG, "Exception calling onAction, will reconnect", t)
             dimService = null
             isBound.set(false)
             safeBind()
@@ -329,11 +337,12 @@ internal class XingruiInstrumentBridge(context: Context) {
         val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
 
         try {
+            DiagLog.i(TAG, "Sending to Xingrui IPK (source=$sourceType, gen=$gen): $safeTitle - $safeArtist (playing=$isPlaying)")
             // 每次真正调用 updateMedia 之前先 onSourceChanged(0)。
             // 封面删了，这句不能删。东软初始状态是 -101，没调用过就整包丢弃。
             service.onSourceChanged(sourceType)
-            // 播放中的封面参数固定为非空字符串 "carplay"，用来避开东软对 "" 发 -102 关屏。清屏才传 ""。
-            service.updateMedia(0, safeTitle, safeAlbum, safeArtist, "carplay", sourceType)
+            // 播放中的封面参数固定为 "http://carplay"，用来避开东软对 "" 发 -102 关屏，且避免进入本地图片解码广播。清屏才传 ""。
+            service.updateMedia(0, safeTitle, safeAlbum, safeArtist, "http://carplay", sourceType)
             service.onAction(if (isPlaying) 1 else 2, sourceType)
 
             // 三次调用都成功之后才记账。记账前再看代数，并且和清屏加代数放在同一把锁里。
@@ -344,8 +353,8 @@ internal class XingruiInstrumentBridge(context: Context) {
             } else {
                 DiagLog.d(TAG, "Discarded cluster send bookkeeping because generation moved during IPC (gen=$gen)")
             }
-        } catch (e: RemoteException) {
-            DiagLog.w(TAG, "RemoteException calling MediaService, will reconnect", e)
+        } catch (t: Throwable) {
+            DiagLog.w(TAG, "Exception calling MediaService, will reconnect", t)
             dimService = null
             isBound.set(false)
             safeBind()

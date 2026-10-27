@@ -20,6 +20,8 @@ class DiagnosticExportStoreTest {
 
     @After fun tearDown() {
         DiagnosticVolumeProbe.volumeListProvider = null
+        DiagnosticVolumeProbe.volumePathsProvider = null
+        DiagnosticVolumeProbe.volumeStateProvider = null
     }
 
     class TestVolume(
@@ -45,6 +47,17 @@ class DiagnosticExportStoreTest {
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         assertEquals(downloads.absolutePath, folders.last().directory.absolutePath)
         assertFalse(folders.last().usb)
+    }
+
+    @Test fun foldersFallbackToVolumePathsWhenVolumeListEmpty() {
+        val raw = File(context.cacheDir, "mnt/media_rw/usbotg-sda1").apply { mkdirs() }
+        File(raw, "song.mp3").writeText("a")
+        DiagnosticVolumeProbe.volumeListProvider = { emptyArray<Any>() }
+        DiagnosticVolumeProbe.volumePathsProvider = { arrayOf(raw.absolutePath) }
+        DiagnosticVolumeProbe.volumeStateProvider = { "mounted" }
+
+        val folders = DiagnosticExportStore.folders(context)
+        assertTrue(folders.any { it.usb && it.directory.absolutePath == raw.absolutePath })
     }
 
     @Test fun childrenPutsDirectoriesFirst() {

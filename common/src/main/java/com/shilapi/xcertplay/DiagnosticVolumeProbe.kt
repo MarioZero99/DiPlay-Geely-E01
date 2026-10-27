@@ -15,6 +15,8 @@ import java.io.File
 internal object DiagnosticVolumeProbe {
 
     internal var volumeListProvider: ((Context) -> Array<*>?)? = null
+    internal var volumePathsProvider: ((Context) -> Array<String>?)? = null
+    internal var volumeStateProvider: ((String) -> String?)? = null
 
     /**
      * 路径只允许一种替换：
@@ -39,7 +41,9 @@ internal object DiagnosticVolumeProbe {
     }
 
     /**
-     * 第一屏仅调用 StorageManager.getVolumeList() 抓取已挂载的可移动系统卷。
+     * 第一屏抓取系统已挂载的可移动卷：
+     * 1. 优先调用 StorageManager.getVolumeList() 反射解析 StorageVolume。
+     * 2. 若 getVolumeList 不存在或返回空，回退到 MTK Android 5.1 标准的 StorageManager.getVolumePaths()。
      */
     fun candidates(
         context: Context,
@@ -47,12 +51,13 @@ internal object DiagnosticVolumeProbe {
     ): List<File> {
         val found = linkedMapOf<String, File>()
 
+        // 1. 尝试标准 AOSP StorageManager.getVolumeList()
         val volumes = volumeListProvider?.invoke(context) ?: runCatching {
             val sm = context.getSystemService(Context.STORAGE_SERVICE) ?: return@runCatching null
             sm.javaClass.getMethod("getVolumeList").invoke(sm) as? Array<*>
         }.getOrNull()
 
-        if (volumes != null) {
+        if (volumes != null && volumes.isNotEmpty()) {
             for (vol in volumes) {
                 if (vol == null) continue
                 runCatching {
@@ -80,6 +85,41 @@ internal object DiagnosticVolumeProbe {
 
                     val effectiveFile = resolveVolumePath(candidateFile, storageRoot)
                     found[effectiveFile.absolutePath] = effectiveFile
+                    DiagLog.i("DiagnosticVolumeProbe", "Candidate from getVolumeList: ${effectiveFile.absolutePath} (raw=$path, state=$state)")
+                }.onFailure { t ->
+                    DiagLog.w("DiagnosticVolumeProbe", "Error inspecting volume in getVolumeList", t)
+                }
+            }
+        }
+
+        // 2. MTK 5.1 厂商接口回退：StorageManager.getVolumePaths()
+        if (found.isEmpty()) {
+            val paths = volumePathsProvider?.invoke(context) ?: runCatching {
+                val sm = context.getSystemService(Context.STORAGE_SERVICE) ?: return@runCatching null
+                val method = runCatching { sm.javaClass.getMethod("getVolumePaths") }.getOrNull()
+                method?.invoke(sm) as? Array<*>
+            }.getOrNull()
+
+            if (paths != null && paths.isNotEmpty()) {
+                val sm = context.getSystemService(Context.STORAGE_SERVICE)
+                val getVolumeStateMethod = runCatching {
+                    sm?.javaClass?.getMethod("getVolumeState", String::class.java)
+                }.getOrNull()
+
+                for (item in paths) {
+                    val path = item as? String ?: continue
+                    if (path.isBlank()) continue
+                    val candidateFile = File(path)
+                    if (isPrimaryStorage(candidateFile)) continue
+
+                    val state = volumeStateProvider?.invoke(path) ?: runCatching {
+                        getVolumeStateMethod?.invoke(sm, path) as? String
+                    }.getOrNull()
+                    if (state != null && state != "mounted") continue
+
+                    val effectiveFile = resolveVolumePath(candidateFile, storageRoot)
+                    found[effectiveFile.absolutePath] = effectiveFile
+                    DiagLog.i("DiagnosticVolumeProbe", "Candidate from getVolumePaths: ${effectiveFile.absolutePath} (raw=$path, state=$state)")
                 }
             }
         }

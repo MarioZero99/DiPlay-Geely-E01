@@ -360,6 +360,36 @@ class CarPlayMediaKeysBroadcastTest {
     }
 
     @Test
+    fun updateMediaHandlesRuntimeExceptionWithoutCrashingWorker() {
+        val bridge = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
+        val fakeService = FakeDimTransListener()
+        bridge.dimServiceForTest = fakeService
+
+        // 第一次发送成功
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", isPlaying = true)
+        bridge.drainQueueForTest()
+        val initialToken = bridge.getSendTokenForTest()
+
+        // 模拟远端抛出 RuntimeException (例如 IllegalStateException)
+        fakeService.throwableToThrow = IllegalStateException("Simulated remote crash")
+        bridge.updateMedia("Song 2", "Artist 2", "Album 2", isPlaying = true)
+        bridge.drainQueueForTest()
+
+        assertEquals("抛 RuntimeException 时不能递增 sendToken", initialToken, bridge.getSendTokenForTest())
+        assertEquals("抛异常时保持上一次真正发出的歌名", "Song 1", bridge.getLastSentTitleForTest())
+
+        // 恢复后能够继续发送，worker 没有死掉
+        fakeService.throwableToThrow = null
+        bridge.dimServiceForTest = fakeService
+        bridge.updateMedia("Song 2", "Artist 2", "Album 2", isPlaying = true)
+        bridge.drainQueueForTest()
+
+        assertTrue("恢复后重发成功必须递增 sendToken", bridge.getSendTokenForTest() > initialToken)
+        assertEquals("Song 2", bridge.getLastSentTitleForTest())
+        bridge.release()
+    }
+
+    @Test
     fun clearDuringInFlightSendDropsBookkeepingAndRetriesSameSong() {
         val bridge = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
         val entered = java.util.concurrent.CountDownLatch(1)
@@ -444,22 +474,26 @@ class CarPlayMediaKeysBroadcastTest {
         var updateMediaCalls = 0
         var onActionCalls = 0
         var shouldThrow = false
+        var throwableToThrow: Throwable? = null
         var beforeUpdateMedia: (() -> Unit)? = null
         var beforeOnAction: (() -> Unit)? = null
 
         override fun onSourceChanged(source: Int) {
+            throwableToThrow?.let { throw it }
             if (shouldThrow) throw RemoteException("Simulated failure")
             sourceChangedCalls++
         }
 
         override fun updateMedia(p0: Int, title: String?, album: String?, artist: String?, cover: String?, source: Int) {
             beforeUpdateMedia?.invoke()
+            throwableToThrow?.let { throw it }
             if (shouldThrow) throw RemoteException("Simulated failure")
             updateMediaCalls++
         }
 
         override fun onAction(action: Int, source: Int) {
             beforeOnAction?.invoke()
+            throwableToThrow?.let { throw it }
             if (shouldThrow) throw RemoteException("Simulated failure")
             onActionCalls++
         }
