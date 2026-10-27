@@ -359,11 +359,93 @@ class CarPlayMediaKeysBroadcastTest {
         bridge.release()
     }
 
+    @Test
+    fun clearDuringInFlightSendDropsBookkeepingAndRetriesSameSong() {
+        val bridge = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val releaseIpc = java.util.concurrent.CountDownLatch(1)
+        val parkNextUpdate = java.util.concurrent.atomic.AtomicBoolean(true)
+        val fake = FakeDimTransListener()
+        fake.beforeUpdateMedia = {
+            if (parkNextUpdate.compareAndSet(true, false)) {
+                entered.countDown()
+                releaseIpc.await(3, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+        bridge.dimServiceForTest = fake
+
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", true)
+        assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
+        bridge.clearMedia()
+        releaseIpc.countDown()
+        bridge.drainQueueForTest()
+
+        assertNull("清屏后不能留下正在发送的歌名", bridge.getLastSentTitleForTest())
+        assertNull(bridge.getLastSentArtistForTest())
+        assertNull(bridge.getLastSentPlayingForTest())
+        assertEquals("作废的发送不能递增 sendToken", 0L, bridge.getSendTokenForTest())
+
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", true)
+        bridge.drainQueueForTest()
+
+        assertEquals("Song 1", bridge.getLastSentTitleForTest())
+        assertEquals("Artist 1", bridge.getLastSentArtistForTest())
+        assertEquals(true, bridge.getLastSentPlayingForTest())
+        assertEquals(1L, bridge.getSendTokenForTest())
+        assertEquals("第一次发送、清屏、重新打开各调用一次 updateMedia", 3, fake.updateMediaCalls)
+        bridge.release()
+    }
+
+    @Test
+    fun clearDuringInFlightPauseDoesNotRestorePlayState() {
+        val bridge = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
+        val fake = FakeDimTransListener()
+        bridge.dimServiceForTest = fake
+
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", true)
+        bridge.drainQueueForTest()
+        assertEquals(true, bridge.getLastSentPlayingForTest())
+
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val releaseIpc = java.util.concurrent.CountDownLatch(1)
+        val parkNextAction = java.util.concurrent.atomic.AtomicBoolean(false)
+        fake.beforeOnAction = {
+            if (parkNextAction.compareAndSet(true, false)) {
+                entered.countDown()
+                releaseIpc.await(3, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", false)
+        bridge.drainQueueForTest()
+        assertTrue("两秒内的暂停必须先暂存", bridge.hasPendingActionForTest())
+
+        parkNextAction.set(true)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+            .idleFor(java.time.Duration.ofMillis(2_100))
+        assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
+
+        bridge.clearMedia()
+        releaseIpc.countDown()
+        bridge.drainQueueForTest()
+
+        assertNull(bridge.getLastSentTitleForTest())
+        assertNull("补发暂停不能在清屏之后写回播放状态", bridge.getLastSentPlayingForTest())
+
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", false)
+        bridge.drainQueueForTest()
+        assertEquals("Song 1", bridge.getLastSentTitleForTest())
+        assertEquals(false, bridge.getLastSentPlayingForTest())
+        bridge.release()
+    }
+
     private class FakeDimTransListener : IDimTransListener.Stub() {
         var sourceChangedCalls = 0
         var updateMediaCalls = 0
         var onActionCalls = 0
         var shouldThrow = false
+        var beforeUpdateMedia: (() -> Unit)? = null
+        var beforeOnAction: (() -> Unit)? = null
 
         override fun onSourceChanged(source: Int) {
             if (shouldThrow) throw RemoteException("Simulated failure")
@@ -371,11 +453,13 @@ class CarPlayMediaKeysBroadcastTest {
         }
 
         override fun updateMedia(p0: Int, title: String?, album: String?, artist: String?, cover: String?, source: Int) {
+            beforeUpdateMedia?.invoke()
             if (shouldThrow) throw RemoteException("Simulated failure")
             updateMediaCalls++
         }
 
         override fun onAction(action: Int, source: Int) {
+            beforeOnAction?.invoke()
             if (shouldThrow) throw RemoteException("Simulated failure")
             onActionCalls++
         }

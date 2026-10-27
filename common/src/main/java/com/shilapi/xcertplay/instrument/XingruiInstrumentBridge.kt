@@ -71,6 +71,10 @@ internal class XingruiInstrumentBridge(context: Context) {
     @Volatile
     private var sendToken: Long = 0L
 
+    // 成功记账和清屏改代数共用这把锁。东软调用返回的瞬间可能正好在清屏，
+    // 「看代数」和「写下上次已发送」不能被清屏插开。
+    private val sentStateLock = Any()
+
     private var pendingRunnable: Runnable? = null
     private var pendingGen: Int = -1
     private var pendingPlaying: Boolean? = null
@@ -291,9 +295,11 @@ internal class XingruiInstrumentBridge(context: Context) {
         val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
         try {
             service.onAction(if (isPlaying) 1 else 2, sourceType)
-            lastSentPlaying = isPlaying
-            lastSentTimeMs = SystemClock.uptimeMillis()
-            DiagLog.i(TAG, "Sent pending onAction to Xingrui IPK (source=$sourceType, gen=$gen): isPlaying=$isPlaying")
+            if (recordActionIfCurrent(gen, isPlaying)) {
+                DiagLog.i(TAG, "Sent pending onAction to Xingrui IPK (source=$sourceType, gen=$gen): isPlaying=$isPlaying")
+            } else {
+                DiagLog.d(TAG, "Discarded pending onAction bookkeeping because generation moved during IPC (gen=$gen)")
+            }
         } catch (e: RemoteException) {
             DiagLog.w(TAG, "RemoteException calling onAction, will reconnect", e)
             dimService = null
@@ -330,15 +336,14 @@ internal class XingruiInstrumentBridge(context: Context) {
             service.updateMedia(0, safeTitle, safeAlbum, safeArtist, "carplay", sourceType)
             service.onAction(if (isPlaying) 1 else 2, sourceType)
 
-            // 记号与「上次已发送」严格记录在 onSourceChanged、updateMedia、onAction 都成功之后。
-            // 失败时保持上一次真正发出去的状态，下一包相同内容还会再试，且不会误杀旧记号。
-            sendToken++
-            lastSentTitle = safeTitle
-            lastSentArtist = safeArtist
-            lastSentPlaying = isPlaying
-            lastSentTimeMs = SystemClock.uptimeMillis()
-
-            DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType, gen=$gen, token=$sendToken): $safeTitle - $safeArtist (playing=$isPlaying)")
+            // 三次调用都成功之后才记账。记账前再看代数，并且和清屏加代数放在同一把锁里。
+            // 对不上就不要记：失败、或者清屏已经发生，都保持清屏留下的空记录，同一首歌还会再发。
+            val token = recordFullSendIfCurrent(gen, safeTitle, safeArtist, isPlaying)
+            if (token != null) {
+                DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType, gen=$gen, token=$token): $safeTitle - $safeArtist (playing=$isPlaying)")
+            } else {
+                DiagLog.d(TAG, "Discarded cluster send bookkeeping because generation moved during IPC (gen=$gen)")
+            }
         } catch (e: RemoteException) {
             DiagLog.w(TAG, "RemoteException calling MediaService, will reconnect", e)
             dimService = null
@@ -348,22 +353,18 @@ internal class XingruiInstrumentBridge(context: Context) {
     }
 
     /**
-     * 用于关掉「仪表媒体信息」。它加一次代数，取消暂存，清空缓存和上次发送记录，然后只排一笔清屏。
-     * 清屏任务先 onSourceChanged(0)，再 updateMedia(0, " ", " ", " ", "", 0)，再 onAction(2, 0)。
-     * 不解绑，不把 released 设为 true。服务还在，之后的新歌用新代数继续发。
+     * 关掉「仪表媒体信息」。加一次代数，取消暂存，清空缓存和上次发送记录，然后只排一笔清屏。
+     * 清屏任务真正执行时再清一次上次发送记录。正在进行的东软调用返回后还会写回歌名，这笔清屏排在它后面。
+     * 服务不在也要清记录。不解绑，不把 released 设为 true。之后的新歌用新代数继续发。
      */
     fun clearMedia() {
         if (!isSupported || executor.isShutdown) return
-        val gen = currentGeneration.incrementAndGet()
+        val gen = bumpGenerationAndClearSentState()
         cancelPendingAction()
         lastCachedMedia = null
-        lastSentTitle = null
-        lastSentArtist = null
-        lastSentPlaying = null
-        lastSentTimeMs = 0L
 
         executor.execute {
-            if (currentGeneration.get() != gen) return@execute
+            if (!claimClearSentState(gen)) return@execute
             try {
                 val service = dimServiceForTest ?: dimService ?: return@execute
                 val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
@@ -389,21 +390,26 @@ internal class XingruiInstrumentBridge(context: Context) {
     fun release() {
         if (!isSupported) return
         try {
-            if (released.compareAndSet(false, true)) {
+            val gen = synchronized(sentStateLock) {
+                if (!released.compareAndSet(false, true)) {
+                    -1
+                } else {
+                    val next = currentGeneration.incrementAndGet()
+                    clearSentStateLocked()
+                    next
+                }
+            }
+            if (gen < 0) return
+            try {
                 if (receiverRegistered) {
                     runCatching { appContext.unregisterReceiver(audioRequireReceiver) }
                     receiverRegistered = false
                 }
-                val gen = currentGeneration.incrementAndGet()
                 cancelPendingAction()
                 lastCachedMedia = null
-                lastSentTitle = null
-                lastSentArtist = null
-                lastSentPlaying = null
-                lastSentTimeMs = 0L
 
                 executor.execute {
-                    if (currentGeneration.get() != gen) {
+                    if (!claimClearSentState(gen)) {
                         finishRelease()
                         return@execute
                     }
@@ -424,9 +430,62 @@ internal class XingruiInstrumentBridge(context: Context) {
                         finishRelease()
                     }
                 }
+            } catch (t: Throwable) {
+                DiagLog.w(TAG, "Error during release", t)
             }
         } catch (t: Throwable) {
             DiagLog.w(TAG, "Error during release", t)
+        }
+    }
+
+    private fun clearSentStateLocked() {
+        lastSentTitle = null
+        lastSentArtist = null
+        lastSentPlaying = null
+        lastSentTimeMs = 0L
+    }
+
+    private fun bumpGenerationAndClearSentState(): Int = synchronized(sentStateLock) {
+        val gen = currentGeneration.incrementAndGet()
+        clearSentStateLocked()
+        gen
+    }
+
+    /** 清屏任务开始时再清一次。代数已经变了就整笔清屏都不做。 */
+    private fun claimClearSentState(gen: Int): Boolean = synchronized(sentStateLock) {
+        if (currentGeneration.get() != gen) {
+            false
+        } else {
+            clearSentStateLocked()
+            true
+        }
+    }
+
+    private fun recordFullSendIfCurrent(
+        gen: Int,
+        title: String,
+        artist: String,
+        isPlaying: Boolean,
+    ): Long? = synchronized(sentStateLock) {
+        if (released.get() || currentGeneration.get() != gen) {
+            null
+        } else {
+            val token = ++sendToken
+            lastSentTitle = title
+            lastSentArtist = artist
+            lastSentPlaying = isPlaying
+            lastSentTimeMs = SystemClock.uptimeMillis()
+            token
+        }
+    }
+
+    private fun recordActionIfCurrent(gen: Int, isPlaying: Boolean): Boolean = synchronized(sentStateLock) {
+        if (released.get() || currentGeneration.get() != gen) {
+            false
+        } else {
+            lastSentPlaying = isPlaying
+            lastSentTimeMs = SystemClock.uptimeMillis()
+            true
         }
     }
 
@@ -463,11 +522,13 @@ internal class XingruiInstrumentBridge(context: Context) {
     }
     internal fun simulateFullSendForTest(title: String, artist: String, isPlaying: Boolean) {
         cancelPendingAction()
-        sendToken++
-        lastSentTitle = title
-        lastSentArtist = artist
-        lastSentPlaying = isPlaying
-        lastSentTimeMs = SystemClock.uptimeMillis()
+        synchronized(sentStateLock) {
+            sendToken++
+            lastSentTitle = title
+            lastSentArtist = artist
+            lastSentPlaying = isPlaying
+            lastSentTimeMs = SystemClock.uptimeMillis()
+        }
     }
 
     companion object {
