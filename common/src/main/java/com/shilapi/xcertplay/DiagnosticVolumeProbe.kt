@@ -104,6 +104,27 @@ internal object DiagnosticVolumeProbe {
 
         runCatching {
             val sm = context.getSystemService(Context.STORAGE_SERVICE) ?: return@runCatching
+            // 1. Try StorageManager.getVolumePaths() (standard hidden API on Android 5.1 / MTK)
+            val getVolumePaths = runCatching { sm.javaClass.getMethod("getVolumePaths") }.getOrNull()
+            if (getVolumePaths != null) {
+                val paths = getVolumePaths.invoke(sm) as? Array<*>
+                if (paths != null) {
+                    for (item in paths) {
+                        val pathStr = item as? String ?: continue
+                        val state = runCatching {
+                            sm.javaClass.getMethod("getVolumeState", String::class.java).invoke(sm, pathStr) as? String
+                        }.getOrNull()
+                        if (state == "mounted") {
+                            val f = File(pathStr)
+                            if (!isPrimaryStorage(f)) {
+                                remember(found, f)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Try getVolumeList()
             val volumes = sm.javaClass.getMethod("getVolumeList").invoke(sm) as? Array<*> ?: return@runCatching
             for (vol in volumes) {
                 if (vol == null) continue
@@ -132,6 +153,20 @@ internal object DiagnosticVolumeProbe {
             }
             if (mountsContent.isNotEmpty()) {
                 for (mount in parseMountPoints(mountsContent)) remember(found, mount)
+            }
+        }
+
+        if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+            runCatching {
+                val (rc, body) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("ls -1 /mnt/media_rw", 2000L)
+                if (rc == 0 && body.isNotBlank()) {
+                    for (line in body.lineSequence()) {
+                        val trimmed = line.trim()
+                        if (trimmed.isNotEmpty() && !trimmed.startsWith("ls:") && !trimmed.startsWith(".")) {
+                            remember(found, File("/mnt/media_rw", trimmed))
+                        }
+                    }
+                }
             }
         }
 
@@ -192,10 +227,12 @@ internal object DiagnosticVolumeProbe {
             DiagLog.i("DiagnosticExport", "usb $path -> ${twin.absolutePath}")
             return twin
         }
-        val genericOtg = File(storageRoot, "usbotg")
-        if (genericOtg.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${genericOtg.absolutePath}\""))) {
-            DiagLog.i("DiagnosticExport", "usb $path -> ${genericOtg.absolutePath}")
-            return genericOtg
+        if (leaf == "usbotg") {
+            val genericOtg = File(storageRoot, "usbotg")
+            if (genericOtg.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${genericOtg.absolutePath}\""))) {
+                DiagLog.i("DiagnosticExport", "usb $path -> ${genericOtg.absolutePath}")
+                return genericOtg
+            }
         }
         DiagLog.i("DiagnosticExport", "usb $path kept, ${twin.absolutePath} is not a directory")
         return dir

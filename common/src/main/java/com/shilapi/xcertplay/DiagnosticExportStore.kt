@@ -77,7 +77,7 @@ internal object DiagnosticExportStore {
 
         val nameLower = dir.name.lowercase()
         return when {
-            nameLower.contains("usb") || nameLower.contains("udisk") || nameLower.contains("otg") ->
+            nameLower.contains("usb") || nameLower.contains("udisk") || nameLower.contains("otg") || nameLower.contains("sda") || nameLower.contains("sdb") ->
                 context.getString(R.string.export_usb_storage, dir.name)
             nameLower.contains("sdcard") ->
                 context.getString(R.string.export_sdcard_storage, dir.name)
@@ -146,7 +146,24 @@ internal object DiagnosticExportStore {
     }
 
     /** Keeps real directories, including ones [File.list] cannot read, then one path per stick. */
-    internal fun chooseMounts(dirs: List<File>): List<File> = preferListedCopy(dirs.filter { isAccessibleDir(it) })
+    internal fun chooseMounts(dirs: List<File>): List<File> {
+        val accessible = dirs.filter { dir ->
+            if (!isAccessibleDir(dir)) return@filter false
+            val nameLower = dir.name.lowercase()
+            if (nameLower.contains("sdcard")) {
+                val hasSpace = runCatching {
+                    val stat = android.os.StatFs(dir.absolutePath)
+                    stat.blockCountLong > 0L
+                }.getOrDefault(false)
+                val hasFiles = runCatching { dir.list() }.getOrNull()?.isNotEmpty() == true
+                if (!hasSpace && !hasFiles) {
+                    return@filter false
+                }
+            }
+            true
+        }
+        return preferListedCopy(accessible)
+    }
 
     /**
      * Two paths with the same leaf are one stick. A copy the app can list beats one it cannot,

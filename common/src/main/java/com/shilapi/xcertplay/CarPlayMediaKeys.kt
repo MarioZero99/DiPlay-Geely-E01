@@ -132,6 +132,72 @@ internal object CarPlayMediaKeys {
         return builder.build()
     }
 
+    internal data class FilteredTrack(
+        val info: CarPlayNowPlaying,
+        val isLyric: Boolean,
+        val genuineTitle: String?,
+        val genuineArtist: String?,
+        val genuineAlbum: String?,
+        val durationMillis: Long?,
+    )
+
+    internal fun filterLyricMetadata(
+        info: CarPlayNowPlaying,
+        lastGenuineTitle: String?,
+        lastGenuineArtist: String?,
+        lastGenuineAlbum: String?,
+        lastDurationMillis: Long?,
+    ): FilteredTrack {
+        val rawTitle = info.title
+        val rawArtist = info.artist
+        val rawAlbum = info.album
+        val rawDuration = info.durationMillis
+
+        val isLyricSwap = !lastGenuineTitle.isNullOrBlank() && rawArtist == lastGenuineTitle
+        val isLyricSuffix = !rawTitle.isNullOrBlank() && !lastGenuineTitle.isNullOrBlank() &&
+            (rawTitle.endsWith(" - $lastGenuineTitle") || (rawTitle.contains(lastGenuineTitle) && rawTitle != lastGenuineTitle))
+        val isLyricCredit = !rawTitle.isNullOrBlank() &&
+            (rawTitle.startsWith("词：") || rawTitle.startsWith("词:") ||
+             rawTitle.startsWith("曲：") || rawTitle.startsWith("曲:") ||
+             rawTitle.startsWith("编曲：") || rawTitle.startsWith("编曲:") ||
+             rawTitle.startsWith("制作：") || rawTitle.startsWith("制作人："))
+        val isMidTrackTitleDrift = !lastGenuineTitle.isNullOrBlank() &&
+            lastDurationMillis != null && rawDuration != null &&
+            lastDurationMillis == rawDuration && rawDuration > 20_000L &&
+            (info.elapsedMillis ?: 0L) > 3_000L &&
+            rawTitle != lastGenuineTitle &&
+            (rawAlbum == lastGenuineAlbum || rawAlbum.isNullOrBlank())
+
+        val isLyric = isLyricSwap || isLyricSuffix || isLyricCredit || isMidTrackTitleDrift
+
+        return if (isLyric) {
+            val effTitle = lastGenuineTitle ?: rawTitle
+            val effArtist = lastGenuineArtist ?: (if (rawArtist != lastGenuineTitle) rawArtist else null)
+            val effAlbum = lastGenuineAlbum ?: rawAlbum
+            FilteredTrack(
+                info = info.copy(title = effTitle, artist = effArtist, album = effAlbum),
+                isLyric = true,
+                genuineTitle = lastGenuineTitle,
+                genuineArtist = lastGenuineArtist,
+                genuineAlbum = lastGenuineAlbum,
+                durationMillis = lastDurationMillis,
+            )
+        } else {
+            val genTitle = if (!rawTitle.isNullOrBlank()) rawTitle else lastGenuineTitle
+            val genArtist = if (!rawArtist.isNullOrBlank()) rawArtist else lastGenuineArtist
+            val genAlbum = if (!rawAlbum.isNullOrBlank()) rawAlbum else lastGenuineAlbum
+            val genDuration = if (rawDuration != null && rawDuration > 0) rawDuration else lastDurationMillis
+            FilteredTrack(
+                info = info,
+                isLyric = false,
+                genuineTitle = genTitle,
+                genuineArtist = genArtist,
+                genuineAlbum = genAlbum,
+                durationMillis = genDuration,
+            )
+        }
+    }
+
     @Volatile private var lastKnownPosition: Long = 0L
 
     /**
@@ -290,6 +356,9 @@ internal object CarPlayMediaKeys {
         }
         private var currentArtwork: Bitmap? = null
         private var lastGenuineTitle: String? = null
+        private var lastGenuineArtist: String? = null
+        private var lastGenuineAlbum: String? = null
+        private var lastDurationMillis: Long? = null
 
         private val artworkWorker = Executors.newSingleThreadExecutor { r ->
             Thread(r, "DiPlay-ArtworkQueue").apply { isDaemon = true; priority = Thread.NORM_PRIORITY - 1 }
@@ -378,24 +447,18 @@ internal object CarPlayMediaKeys {
                     }
                     return@post
                 }
-                val rawTitle = info.title
-                // Filter dynamic lyric updates (format: "<Lyric Text> - <Song Title>")
-                val effectiveTitle = if (!rawTitle.isNullOrBlank() && !lastGenuineTitle.isNullOrBlank() &&
-                    rawTitle.endsWith(" - $lastGenuineTitle")
-                ) {
-                    lastGenuineTitle
-                } else {
-                    if (!rawTitle.isNullOrBlank()) {
-                        lastGenuineTitle = rawTitle
-                    }
-                    rawTitle
-                }
-
-                val filteredInfo = if (effectiveTitle != rawTitle) {
-                    info.copy(title = effectiveTitle)
-                } else {
-                    info
-                }
+                val filterResult = filterLyricMetadata(
+                    info,
+                    lastGenuineTitle,
+                    lastGenuineArtist,
+                    lastGenuineAlbum,
+                    lastDurationMillis,
+                )
+                lastGenuineTitle = filterResult.genuineTitle
+                lastGenuineArtist = filterResult.genuineArtist
+                lastGenuineAlbum = filterResult.genuineAlbum
+                lastDurationMillis = filterResult.durationMillis
+                val filteredInfo = filterResult.info
 
                 val previous = lastPublishedNowPlaying
                 val isTrackChanged = previous != null && (previous.title != filteredInfo.title || previous.artist != filteredInfo.artist)
@@ -531,6 +594,9 @@ internal object CarPlayMediaKeys {
             controller?.artworkListener = null
             lastPublishedNowPlaying = null
             lastGenuineTitle = null
+            lastGenuineArtist = null
+            lastGenuineAlbum = null
+            lastDurationMillis = null
             updateArtwork(null)
             instrumentBridge?.release()
             instrumentBridge = null

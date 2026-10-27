@@ -653,8 +653,21 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_CLUSTER_MEDIA_METADATA, enabled).apply()
     }
 
-    fun loadClusterMediaSource(context: Context): Int =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_CLUSTER_MEDIA_SOURCE, 2) // Default 2 (Bluetooth)
+    const val SOURCE_USB = 0
+    const val SOURCE_BLUETOOTH = 2
+    const val SOURCE_ONLINE = 6
+
+    fun loadClusterMediaSource(context: Context): Int {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val source = sp.getInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_USB)
+        // Neusoft IPKServer MediaBean line 171 intercepts Bluetooth (2) when A2DP is disconnected (which CarPlay causes).
+        // Auto-migrate SOURCE_BLUETOOTH to SOURCE_USB (0) so cluster displays media properly.
+        if (source == SOURCE_BLUETOOTH) {
+            sp.edit().putInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_USB).apply()
+            return SOURCE_USB
+        }
+        return source
+    }
 
     fun saveClusterMediaSource(context: Context, source: Int) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY_CLUSTER_MEDIA_SOURCE, source).apply()

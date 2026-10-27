@@ -7,6 +7,7 @@ import com.shilapi.xcertplay.instrument.CoverSlotManager
 import com.shilapi.xcertplay.instrument.XingruiInstrumentBridge
 import com.shilapi.xcertplay.media.CarPlayNowPlaying
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -145,11 +146,88 @@ class CarPlayMediaKeysBroadcastTest {
     }
 
     @Test
-    fun clusterMediaSourceDefaultsToBluetooth() {
-        assertEquals("Cluster media source should default to 2 (Bluetooth)", 2, AirPlayPersistence.loadClusterMediaSource(context))
-        AirPlayPersistence.saveClusterMediaSource(context, 0)
-        assertEquals("Cluster media source can be saved as 0 (USB)", 0, AirPlayPersistence.loadClusterMediaSource(context))
-        // Reset back to 2
+    fun clusterMediaSourceDefaultsToUsb() {
+        assertEquals("Cluster media source should default to 0 (USB)", 0, AirPlayPersistence.loadClusterMediaSource(context))
+        AirPlayPersistence.saveClusterMediaSource(context, 6)
+        assertEquals("Cluster media source can be saved as 6 (Online)", 6, AirPlayPersistence.loadClusterMediaSource(context))
+        // Saving 2 (Bluetooth) must auto-migrate to 0 (USB) to prevent EastSoft IPKServer blocking when A2DP is disconnected
         AirPlayPersistence.saveClusterMediaSource(context, 2)
+        assertEquals("Bluetooth (2) must auto-migrate to USB (0)", 0, AirPlayPersistence.loadClusterMediaSource(context))
+    }
+
+    @Test
+    fun dynamicLyricFilteringRejectsKugouSwapAndSpam() {
+        // 1. Initial Genuine Track
+        val initialTrack = CarPlayNowPlaying(
+            title = "さよならの夏～コクリコ坂から～",
+            artist = "手嶌葵",
+            album = "コクリコ坂から歌集",
+            durationMillis = 288_000L,
+            elapsedMillis = 1000L,
+            playing = true,
+        )
+        val r1 = CarPlayMediaKeys.filterLyricMetadata(initialTrack, null, null, null, null)
+        assertFalse(r1.isLyric)
+        assertEquals("さよならの夏～コクリコ坂から～", r1.genuineTitle)
+        assertEquals("手嶌葵", r1.genuineArtist)
+        assertEquals("コクリコ坂から歌集", r1.genuineAlbum)
+        assertEquals(288_000L, r1.durationMillis)
+
+        // 2. Kugou Lyric Swap: artist is set to previous song title, title is lyric text
+        val kugouLyric = CarPlayNowPlaying(
+            title = "光る海に かすむ船は",
+            artist = "さよならの夏～コクリコ坂から～",
+            album = "コクリコ坂から歌集",
+            durationMillis = 288_000L,
+            elapsedMillis = 25_000L,
+            playing = true,
+        )
+        val r2 = CarPlayMediaKeys.filterLyricMetadata(kugouLyric, r1.genuineTitle, r1.genuineArtist, r1.genuineAlbum, r1.durationMillis)
+        assertTrue("Kugou swapped lyric packet must be flagged as lyric", r2.isLyric)
+        assertEquals("Title must stay genuine track name", "さよなら的夏～コクリコ坂から～".replace("的", "の"), r2.info.title)
+        assertEquals("Artist must stay genuine artist", "手嶌葵", r2.info.artist)
+
+        // 3. Lyric credit line: "词：万里村ゆき子"
+        val creditLine = CarPlayNowPlaying(
+            title = "词：万里村ゆき子",
+            artist = "さよならの夏～コクリコ坂から～",
+            album = "コクリコ坂から歌集",
+            durationMillis = 288_000L,
+            elapsedMillis = 30_000L,
+            playing = true,
+        )
+        val r3 = CarPlayMediaKeys.filterLyricMetadata(creditLine, r2.genuineTitle, r2.genuineArtist, r2.genuineAlbum, r2.durationMillis)
+        assertTrue("Credit line must be flagged as lyric", r3.isLyric)
+        assertEquals("さよならの夏～コクリコ坂から～", r3.info.title)
+        assertEquals("手嶌葵", r3.info.artist)
+
+        // 4. Formatted suffix lyric: "夏日长 有无尽的远方 - 当世界年纪小"
+        val suffixLyric = CarPlayNowPlaying(
+            title = "夏日长 有无尽的远方 - 当世界年纪小",
+            artist = "当世界年纪小",
+            album = "",
+            durationMillis = 210_000L,
+            elapsedMillis = 40_000L,
+            playing = true,
+        )
+        val r4 = CarPlayMediaKeys.filterLyricMetadata(suffixLyric, "当世界年纪小", "任素汐", "", 210_000L)
+        assertTrue(r4.isLyric)
+        assertEquals("当世界年纪小", r4.info.title)
+        assertEquals("任素汐", r4.info.artist)
+
+        // 5. Real track skip (new song with different duration and reset elapsed)
+        val nextTrack = CarPlayNowPlaying(
+            title = "下一站天后",
+            artist = "Twins",
+            album = "Touch Of Love",
+            durationMillis = 205_000L,
+            elapsedMillis = 0L,
+            playing = true,
+        )
+        val r5 = CarPlayMediaKeys.filterLyricMetadata(nextTrack, r4.genuineTitle, r4.genuineArtist, r4.genuineAlbum, r4.durationMillis)
+        assertFalse("Real track skip must not be flagged as lyric", r5.isLyric)
+        assertEquals("下一站天后", r5.genuineTitle)
+        assertEquals("Twins", r5.genuineArtist)
+        assertEquals(205_000L, r5.durationMillis)
     }
 }
