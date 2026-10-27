@@ -1,6 +1,8 @@
 package com.shilapi.xcertplay
 
+import android.content.Context
 import android.os.Environment
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -16,10 +18,28 @@ import java.io.File
 class DiagnosticExportStoreTest {
     private val context get() = RuntimeEnvironment.getApplication()
 
+    @After fun tearDown() {
+        DiagnosticVolumeProbe.volumeListProvider = null
+    }
+
+    class TestVolume(
+        val path: String,
+        val removable: Boolean = true,
+        val state: String = "mounted",
+        val primary: Boolean = false,
+        val description: String = "USB 存储",
+    ) {
+        fun isRemovable(): Boolean = removable
+        fun isPrimary(): Boolean = primary
+        fun getDescription(context: Context): String = description
+    }
+
     @Test fun foldersKeepTheOnlyListedCopyOfTheStick() {
         val raw = File(context.cacheDir, "mnt/media_rw/usbotg-sda1").apply { mkdirs() }
         File(raw, "song.mp3").writeText("a")
-        val folders = DiagnosticExportStore.folders(context, setOf(raw.absolutePath), procMountsFile = null)
+        DiagnosticVolumeProbe.volumeListProvider = { arrayOf(TestVolume(raw.absolutePath)) }
+
+        val folders = DiagnosticExportStore.folders(context)
         assertTrue(folders.any { it.usb && it.directory.absolutePath == raw.absolutePath })
         assertFalse(File(raw, "DiPlay").exists())
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)

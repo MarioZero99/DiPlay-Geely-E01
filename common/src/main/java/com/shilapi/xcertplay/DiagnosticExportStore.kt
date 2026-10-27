@@ -31,13 +31,9 @@ internal data class ExportOutcome(
 
 /** Saves one diagnostic report into the folder the user confirmed, plus a private copy for sharing. */
 internal object DiagnosticExportStore {
-    fun folders(
-        context: Context,
-        extraMountPaths: Collection<String> = emptySet(),
-        procMountsFile: File? = DiagnosticVolumeProbe.defaultProcMounts(),
-    ): List<ExportFolder> {
+    fun folders(context: Context): List<ExportFolder> {
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val usb = DiagnosticVolumeProbe.candidates(context, extraMountPaths, procMountsFile)
+        val usb = DiagnosticVolumeProbe.candidates(context)
             .filter { it.absolutePath != downloads.absolutePath }
             .map { dir ->
                 val label = formatVolumeLabel(context, dir, usb = true)
@@ -58,8 +54,10 @@ internal object DiagnosticExportStore {
     internal fun formatVolumeLabel(context: Context, dir: File, usb: Boolean): String {
         if (!usb) return context.getString(R.string.export_internal_storage)
         val sysDesc = runCatching {
-            val sm = context.getSystemService(Context.STORAGE_SERVICE) ?: return@runCatching null
-            val volumes = sm.javaClass.getMethod("getVolumeList").invoke(sm) as? Array<*> ?: return@runCatching null
+            val volumes = DiagnosticVolumeProbe.volumeListProvider?.invoke(context) ?: runCatching {
+                val sm = context.getSystemService(Context.STORAGE_SERVICE) ?: return@runCatching null
+                sm.javaClass.getMethod("getVolumeList").invoke(sm) as? Array<*>
+            }.getOrNull() ?: return@runCatching null
             for (vol in volumes) {
                 if (vol == null) continue
                 val path = vol.javaClass.getMethod("getPath").invoke(vol) as? String ?: continue

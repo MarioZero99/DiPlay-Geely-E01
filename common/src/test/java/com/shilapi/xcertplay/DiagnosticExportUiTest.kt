@@ -84,7 +84,9 @@ class DiagnosticExportUiTest {
         val stick = File(context.cacheDir, "usb-otg-sda1").apply { deleteRecursively(); mkdirs() }
         File(stick, "readme.txt").writeText("hello")
         File(stick, "Music").mkdirs()
-        ReflectionHelpers.getField<MutableSet<String>>(activity, "mountedUsbPaths").add(stick.absolutePath)
+        DiagnosticVolumeProbe.volumeListProvider = {
+            arrayOf(DiagnosticExportStoreTest.TestVolume(stick.absolutePath, description = stick.name))
+        }
         try {
             ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
             awaitText(activity, stick.name)
@@ -109,6 +111,7 @@ class DiagnosticExportUiTest {
             assertFalse(File(stick, "Music/DiPlay").exists())
             assertNotNull(texts(activity).firstOrNull { it.text == activity.getString(R.string.share) })
         } finally {
+            DiagnosticVolumeProbe.volumeListProvider = null
             stick.deleteRecursively()
             controller.pause().stop().destroy()
         }

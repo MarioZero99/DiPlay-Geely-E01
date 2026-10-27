@@ -68,10 +68,13 @@ internal class XingruiInstrumentBridge(context: Context) {
     private var lastSentPlaying: Boolean? = null
     @Volatile
     private var lastSentTimeMs: Long = 0L
+    @Volatile
+    private var sendToken: Long = 0L
 
     private var pendingRunnable: Runnable? = null
     private var pendingGen: Int = -1
     private var pendingPlaying: Boolean? = null
+    private var pendingToken: Long = -1L
 
     private val deathRecipient = object : IBinder.DeathRecipient {
         override fun binderDied() {
@@ -210,14 +213,16 @@ internal class XingruiInstrumentBridge(context: Context) {
         val isPlayingSame = isPlaying == lastSentPlaying
 
         if (isMetadataSame && isPlayingSame) {
+            // 播放状态已与上次发送一致（如暂停后又恢复播放），立即取消暂存的暂停
+            cancelPendingAction()
             return
         }
 
         val elapsed = now - lastSentTimeMs
         if (isMetadataSame && !isPlayingSame && elapsed < MIN_CAN_INTERVAL_MS) {
             // 歌名和歌手没变、播放状态变了、距离上次成功发送不足 2 秒：不要丢。
-            // 记下最新的播放或暂停，以及当时的代数。窗口结束时把一笔 onAction(1) 或 onAction(2) 排进同一条队列。
-            schedulePendingAction(gen, isPlaying, delayMs = MIN_CAN_INTERVAL_MS - elapsed)
+            // 记下最新的播放或暂停，以及当时的代数与完整发送记号。窗口结束时把一笔 onAction(1) 或 onAction(2) 排进同一条队列。
+            schedulePendingAction(gen, isPlaying, sendToken, delayMs = MIN_CAN_INTERVAL_MS - elapsed)
             return
         }
 
@@ -232,22 +237,40 @@ internal class XingruiInstrumentBridge(context: Context) {
         pendingRunnable = null
         pendingGen = -1
         pendingPlaying = null
+        pendingToken = -1L
     }
 
     @Synchronized
-    private fun schedulePendingAction(gen: Int, isPlaying: Boolean, delayMs: Long) {
+    private fun schedulePendingAction(gen: Int, isPlaying: Boolean, token: Long, delayMs: Long) {
         cancelPendingAction()
         pendingGen = gen
         pendingPlaying = isPlaying
+        pendingToken = token
         val r = Runnable {
             synchronized(this@XingruiInstrumentBridge) {
-                if (pendingGen != gen || released.get()) return@Runnable
+                if (pendingGen != gen || pendingToken != token || released.get()) return@Runnable
                 val actionPlaying = pendingPlaying ?: return@Runnable
                 pendingRunnable = null
                 pendingGen = -1
                 pendingPlaying = null
+                pendingToken = -1L
                 executor.execute {
                     if (released.get() || currentGeneration.get() != gen) return@execute
+                    // 补发开始时：如果已经发出过新歌（sendToken 变了），丢弃
+                    if (sendToken != token) {
+                        DiagLog.d(TAG, "Dropped pending onAction: a newer track or full send occurred (token $token != $sendToken)")
+                        return@execute
+                    }
+                    // 如果新的播放状态已经和上次发送的一致，丢弃
+                    if (lastSentPlaying == actionPlaying) {
+                        DiagLog.d(TAG, "Dropped pending onAction: playing state already matches last sent ($actionPlaying)")
+                        return@execute
+                    }
+                    // 如果当前缓存的最新状态已经不再是这笔动作，丢弃
+                    if (lastCachedMedia?.isPlaying != actionPlaying) {
+                        DiagLog.d(TAG, "Dropped pending onAction: cached playing state changed (${lastCachedMedia?.isPlaying} != $actionPlaying)")
+                        return@execute
+                    }
                     doSendActionOnly(gen, actionPlaying)
                 }
             }
@@ -280,6 +303,12 @@ internal class XingruiInstrumentBridge(context: Context) {
         isPlaying: Boolean,
     ) {
         if (released.get() || currentGeneration.get() != gen) return
+        sendToken++
+        lastSentTitle = safeTitle
+        lastSentArtist = safeArtist
+        lastSentPlaying = isPlaying
+        lastSentTimeMs = SystemClock.uptimeMillis()
+
         if (dimService == null && !isBound.get()) {
             safeBind()
         }
@@ -299,11 +328,7 @@ internal class XingruiInstrumentBridge(context: Context) {
             // 播放中的封面参数固定为非空字符串 "carplay"，用来避开东软对 "" 发 -102 关屏。清屏才传 ""。
             service.updateMedia(0, safeTitle, safeAlbum, safeArtist, "carplay", sourceType)
             service.onAction(if (isPlaying) 1 else 2, sourceType)
-            lastSentTitle = safeTitle
-            lastSentArtist = safeArtist
-            lastSentPlaying = isPlaying
-            lastSentTimeMs = SystemClock.uptimeMillis()
-            DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType, gen=$gen): $safeTitle - $safeArtist (playing=$isPlaying)")
+            DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType, gen=$gen, token=$sendToken): $safeTitle - $safeArtist (playing=$isPlaying)")
         } catch (e: RemoteException) {
             DiagLog.w(TAG, "RemoteException calling MediaService, will reconnect", e)
             dimService = null
@@ -413,7 +438,22 @@ internal class XingruiInstrumentBridge(context: Context) {
     internal fun isReleasedForTest(): Boolean = released.get()
     internal fun hasPendingActionForTest(): Boolean = synchronized(this) { pendingRunnable != null }
     internal fun triggerSchedulePendingActionForTest(gen: Int, isPlaying: Boolean, delayMs: Long) {
-        schedulePendingAction(gen, isPlaying, delayMs)
+        schedulePendingAction(gen, isPlaying, sendToken, delayMs)
+    }
+    internal fun getSendTokenForTest(): Long = sendToken
+    internal fun getLastSentPlayingForTest(): Boolean? = lastSentPlaying
+    internal fun drainQueueForTest() {
+        runCatching {
+            executor.submit {}.get(2, java.util.concurrent.TimeUnit.SECONDS)
+        }
+    }
+    internal fun simulateFullSendForTest(title: String, artist: String, isPlaying: Boolean) {
+        cancelPendingAction()
+        sendToken++
+        lastSentTitle = title
+        lastSentArtist = artist
+        lastSentPlaying = isPlaying
+        lastSentTimeMs = SystemClock.uptimeMillis()
     }
 
     companion object {

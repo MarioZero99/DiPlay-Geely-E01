@@ -236,4 +236,49 @@ class CarPlayMediaKeysBroadcastTest {
         assertFalse("代数变了之后暂存任务必须被取消", bridge.hasPendingActionForTest())
         bridge.release()
     }
+
+    @Test
+    fun pendingPauseCancelledWhenPlaybackResumesWithinWindow() {
+        val bridge = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
+        val gen = bridge.getCurrentGenerationForTest()
+        // 模拟已完整发出「正在播放」
+        bridge.simulateFullSendForTest("Song 1", "Artist 1", isPlaying = true)
+        assertEquals(true, bridge.getLastSentPlayingForTest())
+
+        // 2秒内暂存一笔暂停
+        bridge.triggerSchedulePendingActionForTest(gen, isPlaying = false, delayMs = 1500L)
+        assertTrue("节流期内暂停必须暂存", bridge.hasPendingActionForTest())
+
+        // 2秒内恢复播放（状态与上次发送一致），必须立即取消定时器里的暂停！
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", isPlaying = true)
+        bridge.drainQueueForTest()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertFalse("恢复播放后暂存的暂停必须被立即取消，不得发给仪表", bridge.hasPendingActionForTest())
+        assertEquals("上次发送的状态依然保持播放", true, bridge.getLastSentPlayingForTest())
+        bridge.release()
+    }
+
+    @Test
+    fun pendingPauseDroppedWhenNewSongSent() {
+        val bridge = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
+        val gen = bridge.getCurrentGenerationForTest()
+        // 模拟已发出第一首「正在播放」
+        bridge.simulateFullSendForTest("Song 1", "Artist 1", isPlaying = true)
+        val token1 = bridge.getSendTokenForTest()
+
+        // 节流期内暂存一笔暂停（记下 token1）
+        bridge.triggerSchedulePendingActionForTest(gen, isPlaying = false, delayMs = 1500L)
+        assertTrue(bridge.hasPendingActionForTest())
+
+        // 随后切到第二首并发出更新，触发完整新歌发送
+        bridge.updateMedia("Song 2", "Artist 2", "Album 2", isPlaying = true)
+        bridge.drainQueueForTest()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        val token2 = bridge.getSendTokenForTest()
+        assertTrue("新歌发送必须递增 sendToken", token2 > token1)
+        assertFalse("切歌后旧暂存任务已被取消", bridge.hasPendingActionForTest())
+        bridge.release()
+    }
 }

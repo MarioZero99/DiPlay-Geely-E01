@@ -3201,8 +3201,6 @@ class DiPlayActivity : ComponentActivity() {
         val host = cockpitHost ?: findViewById<ViewGroup>(android.R.id.content) ?: return
         val generation = ++browseGeneration
         val request = ++browseRequest
-        val mounted = mountedUsbPaths.toSet()
-        if (mounted.isNotEmpty()) DiagLog.i("DiagnosticExport", "broadcast ${mounted.joinToString()}")
         val sheet = ExportFolderSheet(this, palette) {
             browseGeneration++
             browseRequest++
@@ -3213,7 +3211,7 @@ class DiPlayActivity : ComponentActivity() {
         host.addView(sheet, FrameLayout.LayoutParams(-1, -1))
         sheet.showLoading(getString(R.string.save_diagnostic_report), getString(R.string.export_loading))
         Thread({
-            val roots = runCatching { DiagnosticExportStore.folders(applicationContext, mounted) }.getOrElse { error ->
+            val roots = runCatching { DiagnosticExportStore.folders(applicationContext) }.getOrElse { error ->
                 DiagLog.w("DiagnosticExport", "places failed", error)
                 emptyList()
             }
