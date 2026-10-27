@@ -1,78 +1,107 @@
-# 星瑞 E01 仪表媒体（歌词/节流补发/防回跳）与 U 盘原生卷方案重构计划
+# 星瑞 E01 仪表媒体与 U 盘系统卷
 
-## 核心目标
-1. **仪表 2 秒节流不丢状态**：节流期内的播放/暂停暂存，窗口结束补发 `onAction(1/2)`。
-2. **歌词规则收窄**：进度归零或时长变化直通放行真切歌，精准拦截 3 种伪装歌词包，删掉过宽规则（解决《七里香 (Live)》被误杀）。
-3. **断开防上一首回跳**：清屏与发歌统一放入单后台队列，引入 `generation` 代数废弃滞后任务，清屏排在队列末尾，执行完再解绑。
-4. **源类型坚守 0**：固定使用东软不死通道 `0`（HDD-Audio），不改成 1 或 2。彻底剔除封面写盘逻辑。
-5. **U 盘按 CX 三步对齐**：使用 `StorageManager.getVolumeList()` 抓取系统已挂载可移动卷，标题用系统的「USB 存储」，仅允许 `/storage/$name` 同名有效替换，彻底剔除 `/proc/mounts` 猜测、`ls -1` 与 `/storage/usbotg` 误映射。
+改 `CarPlayMediaKeys.kt`、`XingruiInstrumentBridge.kt`、`DiagnosticVolumeProbe.kt`、`DiagnosticExportStore.kt`，以及对应的单测。不改源类型，不写封面文件，不把 CX 的整套卷分类搬进来。
 
----
+源类型继续用 `AirPlayPersistence.loadClusterMediaSource()`。读到旧值 2 时仍迁成 0。0 在东软里叫 `HDD-Audio`，蓝牙断开时不会被丢掉。不要改成 1 或 2。
 
-## 一、 仪表模块改动（`CarPlayMediaKeys.kt`）
+## 歌词
 
-### 1. 歌词过滤与真切歌通行判定 (`filterLyricMetadata`)
-* **真切歌直通判定**：
-  * 条件 1：`info.elapsedMillis == 0L` 或 `(info.elapsedMillis ?: -1L) < 1000L`（切歌进度归零）；
-  * 条件 2：`info.durationMillis != null && lastDurationMillis != null && info.durationMillis != lastDurationMillis`（曲目总时长变更）；
-  * 命中任一条件：**判定为真切歌**，无条件放行，更新 `lastGenuineTitle`、`lastGenuineArtist`、`lastDurationMillis`。
-* **仅拦截 3 种确定性歌词包**：
-  1. 歌手等于当前歌名（酷狗字段对调）：`!lastGenuineTitle.isNullOrBlank() && info.artist == lastGenuineTitle`
-  2. 歌名以当前歌名结尾：`!rawTitle.isNullOrBlank() && !lastGenuineTitle.isNullOrBlank() && rawTitle.endsWith(" - $lastGenuineTitle")`
-  3. 歌名以制作人员标识开头：`rawTitle.startsWith("词：")`、`"曲："`、`"编曲："`、`"制作人："`（兼容中英文冒号）。
-* **彻底删除的错误规则**：
-  * ❌ 删除 `rawTitle.contains(lastGenuineTitle)`（之前导致《七里香》切《七里香 (Live)》被锁死）。
-  * ❌ 删除“同长度且播放超 3 秒漂移锁死”。
+`filterLyricMetadata` 按这个顺序判断，先命中的为准。
 
----
+1. 还没有上一首真歌名：这包就是第一首，放行。
+2. 命中下面三种之一：当成歌词。歌名、歌手、专辑、时长都保持上一首，不更新。进度是 0、进度为空、总时长变了，也不能放行。
+3. 其余都是新歌，放行。包括《七里香》后面的《七里香 (Live)》、时长相同的下一首、进度停在中途、进度为空。
 
-## 二、 仪表桥接与线程时序（`XingruiInstrumentBridge.kt`）
+三种歌词包：
 
-### 1. 2 秒节流与状态补发
-* 保留 `MIN_CAN_INTERVAL_MS = 2000L`，防 CAN 总线打满锁死。
-* **状态暂存补发机制**：
-  * 当歌名未变但播放状态变更（如切歌 2 秒内手机点了暂停）：
-    * 若处于 2 秒节流窗口内，**不丢弃**，暂存 `pendingAction = (if (isPlaying) 1 else 2)`；
-    * 启动定时调度，在 2 秒窗口结束后，补发一次 `service.onAction(pendingAction, sourceType)` 并清空暂存。
+- 歌手等于上一首真歌名。
+- 歌名以 `" - "` 加上上一首真歌名结尾。不要用 `contains`。
+- 歌名以这些前缀开头，中文冒号和英文冒号都算：`词：` `曲：` `编曲：` `制作：` `制作人：`。
 
-### 2. 同代数（Generation）与同一后台队列时序
-* 维护原子代数 `currentGeneration = AtomicInteger(0)` 与 `isReleased = AtomicBoolean(false)`。
-* 发歌任务携带提交时的代数 `taskGen`。后台线程执行前检查 `currentGeneration.get() == taskGen && !isReleased.get()`，代数不对直接抛弃。
-* **清屏（`clearMedia` / `release`）重构**：
-  * 调用时递增代数：`currentGeneration.incrementAndGet()`（使队列中排队的旧发歌任务全部失效）；
-  * 若是 `release()`，立即置 `isReleased.set(true)` 拒收后续一切新歌；
-  * **清屏指令排进同一个后台队列末尾**：
-    `service.updateMedia(0, " ", " ", " ", "", 0)` + `service.onAction(2, 0)`；
-  * 在该清屏任务执行完毕后，再执行 `safeUnbind()` 断开 AIDL。
-* **仪表索要广播（`AudioRequireAction`）**：
-  * 仅在 `!isReleased.get() && lastCachedMedia != null` 时响应重发；已断开时不应答。
+删掉这两条：
 
-### 3. 源类型与封面极简
-* 保持 `sourceType = 0`。
-* 彻底移除 `CoverSlotManager`、Bitmap 解码与写盘逻辑。播放传 `"carplay"`，清屏传 `""`。
+- 歌名里只要包含上一首真歌名。
+- 时长相同、进度超过 3 秒、标题变了，就锁死第一帧。
 
----
+不要加「进度小于 1 秒就放行」。进度为空不算切歌信号，它走第 3 条，只要没撞上三种歌词包就放行。
 
-## 三、 U 盘存储对齐 CX（`DiagnosticVolumeProbe.kt` 与 `DiagnosticExportStore.kt`）
+## 仪表队列
 
-### 1. 第一屏卷列表（对齐 CX 核心 3 步）
-* 仅调用 `StorageManager.getVolumeList()`，筛选：
-  1. `vol.isRemovable() == true`
-  2. `sm.getVolumeState(path) == "mounted"`
-  3. `!isPrimaryStorage(path)`
-* **标题与路径**：
-  * 标题直接取系统：`vol.getDescription(context)`（系统默认输出「USB 存储」）；
-  * 路径取 `vol.getPath()`。
-* **唯一允许的路径微调**：
-  * 若 `getPath()` 为 `/mnt/media_rw/$name`，且同名的 `/storage/$name` 存在且 `listFiles() != null`，则采用 `/storage/$name`；
-  * **严禁改写/回退为 `/storage/usbotg`**。
-* **彻底清除以下杂质**：
-  * ❌ 移除 `/proc/mounts` 探测与筛选；
-  * ❌ 移除 `ls -1 /mnt/media_rw`；
-  * ❌ 移除厂商目录猜测兜底；
-  * ❌ 移除虚拟 SD 卡（`sdcard1/2`）占位符。
-* 列表末尾保留机身内部存储（`Download`）。
+桥接层继续用现有的单线程 `executor`。新增 `currentGeneration: AtomicInteger` 和 `released: AtomicBoolean`。发歌、补发、清屏都在这条队列里做。任务开始时代数对不上，或者已经 `released`，就返回。
 
-### 2. 点击卷浏览与报告保存
-* 点击后直接对卷路径执行普通 `listFiles()`；列不出直接标明「读不了」，不再用 root 伪造展开。
-* 诊断日志统一保存到该卷根目录的 `DiPlay/` 文件夹（即 `<volumeRoot>/DiPlay/<fileName>`）。
+这些行为留下：
+
+- 每次真正调用 `updateMedia` 之前先 `onSourceChanged(0)`。封面删了，这句不能删。东软初始状态是 `-101`，没调用过就整包丢弃。
+- `truncateCanString` 仍先 trim，再截到 31 个字符，空文本用一个空格。
+- `MIN_CAN_INTERVAL_MS` 仍是 2000。这是防仪表锁死，不是为了封面。
+
+封面文件删掉。`updateMedia` 不再接收 `Bitmap`，桥接层不再使用 `CoverSlotManager`。播放中的封面参数固定为非空字符串 `"carplay"`，用来避开东软对 `""` 发 `-102` 关屏。清屏才传 `""`。`decodeArtwork` 留给 MediaSession，本计划不删会话侧解码，也不为仪表写 jpg。
+
+### 两秒内的暂停
+
+歌名和歌手没变、播放状态变了、距离上次成功发送不足 2 秒：不要丢。记下最新的播放或暂停，以及当时的代数。窗口结束时把一笔 `onAction(1)` 或 `onAction(2)` 排进同一条队列。
+
+这包补发开始时代数不对，或已经断开，就什么都不发。在它发出之前如果已经成功发送过一首新歌，或者已经清屏，取消这包暂存。补发只发 `onAction`，不再发一遍歌名。缓存里的 `playing` 在入队时就改成新状态，不要等补发成功才改。
+
+窗口已经结束，或者歌名变了：按现有路径马上发送，并取消还没发出的暂存。
+
+### 仪表来要歌名
+
+`AudioRequireAction` 里动作是 3 时：已经断开，或者缓存是空的，不应答。否则把缓存排进队列，`force = true`。强制发送不受 2 秒限制，仍要检查代数和 `released`。
+
+### 清屏和断开
+
+`clearMedia` 用于关掉「仪表媒体信息」。它加一次代数，取消暂存，清空缓存和上次发送记录，然后只排一笔清屏。清屏任务先 `onSourceChanged(0)`，再 `updateMedia(0, " ", " ", " ", "", 0)`，再 `onAction(2, 0)`。不解绑，不把 `released` 设为 true。服务还在，之后的新歌用新代数继续发。
+
+`release` 用于断开。先置 `released`，让新的 `updateMedia` 直接返回。再加一次代数，取消暂存，清空缓存，只排一笔清屏。不要调用 `clearMedia`，否则代数加两次，清屏任务会被第二次加代数判成过期。这笔记清屏写完后再解绑、再 `shutdown` 这个 executor。调用 `release` 的线程不要在 worker 里等待这条队列，避免自己等自己。
+
+已经在 binder 调用里的那一笔会先写完。清屏排在它后面，所以最后一笔是关屏。
+
+## U 盘
+
+第一屏只来自 `StorageManager.getVolumeList()`。某一卷反射失败就跳过这一卷，不要让整份列表变成空的。
+
+留下同时满足这些条件的卷：
+
+- `isRemovable()` 为 true
+- 该卷自己的 `getState()` 等于 `mounted`
+- 不是主存储。有 `isPrimary()` 就用它，否则再用现有的路径比较
+
+标题用 `getDescription(context)`。路径用 `getPath()`。卡片上仍显示这条路径，方便和 CX 地址栏对照。
+
+路径只允许一种替换：`getPath()` 是 `/mnt/media_rw/某个名字`，名字里面没有斜线，而且 `/storage/同一个名字` 的 `listFiles()` 至少返回一项。这时用 `/storage` 那条。空目录不算。否则留 `getPath()`。禁止改写成 `/storage/usbotg`。
+
+第一屏删掉这些来源：
+
+- `/proc/mounts`
+- `ls -1 /mnt/media_rw`
+- 厂商目录兜底
+- 为了虚拟 `sdcard1`、`sdcard2` 去扫那些目录
+
+系统卷没列出的空壳不会再出现。`getVolumeList()` 为空，或点进去是空目录，就显示系统给的路径和现有文案「读不了这个目录」。不要再发明别的目录。
+
+点进子文件夹只为了看内容。`openDirectory` 记住的卷根不变。保存位置仍是 `<卷根>/DiPlay/<文件名>`。
+
+列目录只用 `listFiles()`。`children()` 里的 `listFilesViaRoot` 删掉。列不出就用 `export_unreadable`，列表为空。列不出仍然允许保存。
+
+写入先走现有的直接写。失败后再走现有的 `exportViaRoot`：`cp` 然后 `sync`，超时仍是 5 秒。不要因为浏览不再用 root，就把这条写入删掉。
+
+没插 U 盘时，最后一项仍是机身下载目录。
+
+## 测试
+
+`CarPlayMediaKeysBroadcastTest` 补上这些断言：
+
+- 《七里香》接到《七里香 (Live)》，进度为 0，不是歌词，歌名更新。
+- 进度为 0 的 `词：`，是歌词，歌名保持上一首。进度 500 毫秒的 `词：` 同样拦住。
+- 歌手被换成上一首歌名，即使进度为 0，也是歌词。
+- 歌名以 `" - "` 加上一首歌名结尾，是歌词。
+- 只是包含上一首歌名、又对不上上面三种，不是歌词。
+
+卷路径补上：
+
+- `/mnt/media_rw/usbotg-sda1` 在 `/storage/usbotg-sda1` 里有文件时，用后者。
+- `/storage/usbotg-sda1` 是空目录时，留在 `media_rw` 这条。
+- 任何名字都不会变成 `/storage/usbotg`。
+
+队列逻辑若抽成可以单测的判断，补两条：代数变了之后，暂存的暂停不再发送；`release` 只加一次代数，清屏任务仍会执行。不要求在单测里绑上东软服务。
