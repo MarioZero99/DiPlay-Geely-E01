@@ -3250,8 +3250,7 @@ class DiPlayActivity : ComponentActivity() {
         val request = ++browseRequest
         sheet.showLoading(directory.name, getString(R.string.export_loading))
         Thread({
-            val readable = (runCatching { directory.list() }.getOrNull() != null) ||
-                (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${directory.absolutePath}\""))
+            val readable = runCatching { directory.listFiles() }.getOrNull() != null
             val entries = if (readable) DiagnosticExportStore.children(directory) else emptyList()
             runOnUiThread {
                 if (!browseAlive(generation, request)) return@runOnUiThread

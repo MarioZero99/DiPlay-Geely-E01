@@ -6,20 +6,21 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
-import android.graphics.Bitmap
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.RemoteException
 import android.os.SystemClock
 import com.ecarx.xui.adaptapi.diminteraction.IDimTransListener
 import com.shilapi.xcertplay.AirPlayPersistence
 import com.shilapi.xcertplay.DiagLog
-import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 internal class XingruiInstrumentBridge(context: Context) {
     private val appContext = context.applicationContext
-    private val coverManager = CoverSlotManager(appContext)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "XingruiInstrument-Worker").apply { isDaemon = true }
     }
@@ -28,13 +29,15 @@ internal class XingruiInstrumentBridge(context: Context) {
         action = ACTION_MEDIA_SERVICE
         component = ComponentName(
             PKG_INSTRUMENT_SERVER,
-            CLS_MEDIA_SERVICE
+            CLS_MEDIA_SERVICE,
         )
     }
 
-    val isSupported: Boolean = runCatching {
-        appContext.packageManager.resolveService(targetIntent, 0) != null
-    }.getOrDefault(false)
+    internal var isSupportedOverrideForTest: Boolean? = null
+    val isSupported: Boolean
+        get() = isSupportedOverrideForTest ?: runCatching {
+            appContext.packageManager.resolveService(targetIntent, 0) != null
+        }.getOrDefault(false)
 
     @Volatile
     private var dimService: IDimTransListener? = null
@@ -43,20 +46,32 @@ internal class XingruiInstrumentBridge(context: Context) {
     private val isBound = AtomicBoolean(false)
     private var receiverRegistered = false
 
+    private val currentGeneration = AtomicInteger(0)
+    private val released = AtomicBoolean(false)
+
     // Cache of the latest media metadata to replay on connection or steering wheel request
     private data class CachedMedia(
         val title: String?,
         val artist: String?,
         val album: String?,
-        val artwork: Bitmap?,
-        val isPlaying: Boolean
+        val isPlaying: Boolean,
     )
     @Volatile
     private var lastCachedMedia: CachedMedia? = null
 
-    // Bitmap reference deduplication to prevent repetitive disk I/O on play/pause
-    private var lastArtworkRef: WeakReference<Bitmap>? = null
-    private var lastCoverUri: String? = null
+    // Two-second throttle state management
+    @Volatile
+    private var lastSentTitle: String? = null
+    @Volatile
+    private var lastSentArtist: String? = null
+    @Volatile
+    private var lastSentPlaying: Boolean? = null
+    @Volatile
+    private var lastSentTimeMs: Long = 0L
+
+    private var pendingRunnable: Runnable? = null
+    private var pendingGen: Int = -1
+    private var pendingPlaying: Boolean? = null
 
     private val deathRecipient = object : IBinder.DeathRecipient {
         override fun binderDied() {
@@ -79,13 +94,17 @@ internal class XingruiInstrumentBridge(context: Context) {
             }
             dimService = IDimTransListener.Stub.asInterface(service)
 
-            // Immediately replay latest cached media upon connection
-            val cached = lastCachedMedia
-            if (cached != null) {
-                DiagLog.i(TAG, "Replaying cached media on service connected: ${cached.title} - ${cached.artist}")
-                executor.execute {
-                    sendMediaUpdate(cached.title, cached.artist, cached.album, cached.artwork, cached.isPlaying)
-                }
+            if (released.get()) return
+            val cached = lastCachedMedia ?: return
+            val gen = currentGeneration.get()
+            DiagLog.i(TAG, "Replaying cached media on service connected: ${cached.title} - ${cached.artist} (gen=$gen)")
+            executor.execute {
+                if (released.get() || currentGeneration.get() != gen) return@execute
+                cancelPendingAction()
+                val safeTitle = truncateCanString(if (!cached.title.isNullOrBlank()) cached.title else " ")
+                val safeArtist = truncateCanString(if (!cached.artist.isNullOrBlank()) cached.artist else " ")
+                val safeAlbum = truncateCanString(if (!cached.album.isNullOrBlank()) cached.album else " ")
+                doSendMediaUpdate(gen, safeTitle, safeArtist, safeAlbum, cached.isPlaying)
             }
         }
 
@@ -104,12 +123,17 @@ internal class XingruiInstrumentBridge(context: Context) {
             val actionType = intent.getIntExtra(EXTRA_BROADCAST_ACTION, -1)
             DiagLog.d(TAG, "Received AudioRequireAction broadcast: broadcastAction=$actionType")
             if (actionType == ACTION_GET_PLAY_INFO) {
-                val cached = lastCachedMedia
-                if (cached != null) {
-                    DiagLog.i(TAG, "Cluster media tab requested info, replaying: ${cached.title} - ${cached.artist}")
-                    executor.execute {
-                        sendMediaUpdate(cached.title, cached.artist, cached.album, cached.artwork, cached.isPlaying)
-                    }
+                if (released.get()) return
+                val cached = lastCachedMedia ?: return
+                val gen = currentGeneration.get()
+                DiagLog.i(TAG, "Cluster media tab requested info, replaying: ${cached.title} - ${cached.artist} (gen=$gen)")
+                executor.execute {
+                    if (released.get() || currentGeneration.get() != gen) return@execute
+                    cancelPendingAction()
+                    val safeTitle = truncateCanString(if (!cached.title.isNullOrBlank()) cached.title else " ")
+                    val safeArtist = truncateCanString(if (!cached.artist.isNullOrBlank()) cached.artist else " ")
+                    val safeAlbum = truncateCanString(if (!cached.album.isNullOrBlank()) cached.album else " ")
+                    doSendMediaUpdate(gen, safeTitle, safeArtist, safeAlbum, cached.isPlaying)
                 }
             }
         }
@@ -153,114 +177,165 @@ internal class XingruiInstrumentBridge(context: Context) {
         title: String?,
         artist: String?,
         album: String?,
-        artwork: Bitmap?,
-        isPlaying: Boolean
+        isPlaying: Boolean,
     ) {
-        if (!isSupported || executor.isShutdown) return
-        lastCachedMedia = CachedMedia(title, artist, album, artwork, isPlaying)
+        if (released.get() || !isSupported || executor.isShutdown) return
+        // 缓存里的 playing 在入队时就改成新状态，不要等补发成功才改
+        lastCachedMedia = CachedMedia(title, artist, album, isPlaying)
+        val gen = currentGeneration.get()
         executor.execute {
-            sendMediaUpdate(title, artist, album, artwork, isPlaying)
+            if (released.get() || currentGeneration.get() != gen) return@execute
+            processMediaUpdate(gen, title, artist, album, isPlaying)
         }
     }
-
-    private var lastSentTitle: String? = null
-    private var lastSentArtist: String? = null
-    private var lastSentPlaying: Boolean? = null
-    private var lastSentTimeMs: Long = 0L
 
     private fun truncateCanString(str: String): String {
         val trimmed = str.trim()
         return if (trimmed.length > MAX_CAN_TEXT_LENGTH) trimmed.substring(0, MAX_CAN_TEXT_LENGTH) else trimmed
     }
 
-    private fun sendMediaUpdate(
+    private fun processMediaUpdate(
+        gen: Int,
         title: String?,
         artist: String?,
         album: String?,
-        artwork: Bitmap?,
         isPlaying: Boolean,
-        force: Boolean = false
     ) {
-        try {
-            if (dimService == null && !isBound.get()) {
-                safeBind()
-            }
+        val safeTitle = truncateCanString(if (!title.isNullOrBlank()) title else " ")
+        val safeArtist = truncateCanString(if (!artist.isNullOrBlank()) artist else " ")
+        val safeAlbum = truncateCanString(if (!album.isNullOrBlank()) album else " ")
 
-            val service = dimService
-            if (service == null) {
-                DiagLog.d(TAG, "MediaService not ready yet, update cached for replay")
-                return
-            }
+        val now = SystemClock.uptimeMillis()
+        val isMetadataSame = safeTitle == lastSentTitle && safeArtist == lastSentArtist
+        val isPlayingSame = isPlaying == lastSentPlaying
 
-            val safeTitle = truncateCanString(if (!title.isNullOrBlank()) title else " ")
-            val safeArtist = truncateCanString(if (!artist.isNullOrBlank()) artist else " ")
-            val safeAlbum = truncateCanString(if (!album.isNullOrBlank()) album else " ")
+        if (isMetadataSame && isPlayingSame) {
+            return
+        }
 
-            val now = SystemClock.uptimeMillis()
-            val isMetadataSame = safeTitle == lastSentTitle && safeArtist == lastSentArtist
-            val isPlayingSame = isPlaying == lastSentPlaying
+        val elapsed = now - lastSentTimeMs
+        if (isMetadataSame && !isPlayingSame && elapsed < MIN_CAN_INTERVAL_MS) {
+            // 歌名和歌手没变、播放状态变了、距离上次成功发送不足 2 秒：不要丢。
+            // 记下最新的播放或暂停，以及当时的代数。窗口结束时把一笔 onAction(1) 或 onAction(2) 排进同一条队列。
+            schedulePendingAction(gen, isPlaying, delayMs = MIN_CAN_INTERVAL_MS - elapsed)
+            return
+        }
 
-            if (!force && isMetadataSame && isPlayingSame) {
-                return
-            }
+        // 窗口已经结束，或者歌名变了：按现有路径马上发送，并取消还没发出的暂存。
+        cancelPendingAction()
+        doSendMediaUpdate(gen, safeTitle, safeArtist, safeAlbum, isPlaying)
+    }
 
-            val elapsed = now - lastSentTimeMs
-            if (!force && elapsed < MIN_CAN_INTERVAL_MS && isMetadataSame) {
-                return
-            }
+    @Synchronized
+    private fun cancelPendingAction() {
+        pendingRunnable?.let { mainHandler.removeCallbacks(it) }
+        pendingRunnable = null
+        pendingGen = -1
+        pendingPlaying = null
+    }
 
-            // Guarantee cover URI is never empty to prevent triggering IPKServer -102 clear-screen
-            val coverPath = if (artwork != null && !artwork.isRecycled) {
-                val prevBmp = lastArtworkRef?.get()
-                if (prevBmp === artwork && lastCoverUri != null) {
-                    lastCoverUri!!
-                } else {
-                    val uri = coverManager.saveCover(artwork)
-                    lastArtworkRef = WeakReference(artwork)
-                    lastCoverUri = uri
-                    uri
+    @Synchronized
+    private fun schedulePendingAction(gen: Int, isPlaying: Boolean, delayMs: Long) {
+        cancelPendingAction()
+        pendingGen = gen
+        pendingPlaying = isPlaying
+        val r = Runnable {
+            synchronized(this@XingruiInstrumentBridge) {
+                if (pendingGen != gen || released.get()) return@Runnable
+                val actionPlaying = pendingPlaying ?: return@Runnable
+                pendingRunnable = null
+                pendingGen = -1
+                pendingPlaying = null
+                executor.execute {
+                    if (released.get() || currentGeneration.get() != gen) return@execute
+                    doSendActionOnly(gen, actionPlaying)
                 }
-            } else {
-                lastArtworkRef = null
-                lastCoverUri = null
-                coverManager.getBlankCoverUri()
             }
+        }
+        pendingRunnable = r
+        mainHandler.postDelayed(r, delayMs.coerceAtLeast(10L))
+    }
 
-            val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
-
-            try {
-                service.onSourceChanged(sourceType)
-                service.updateMedia(0, safeTitle, safeAlbum, safeArtist, coverPath, sourceType)
-                service.onAction(if (isPlaying) 1 else 2, sourceType)
-                lastSentTitle = safeTitle
-                lastSentArtist = safeArtist
-                lastSentPlaying = isPlaying
-                lastSentTimeMs = now
-                DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType): $safeTitle - $safeArtist (cover=$coverPath, playing=$isPlaying)")
-            } catch (e: RemoteException) {
-                DiagLog.w(TAG, "RemoteException calling MediaService, will reconnect", e)
-                dimService = null
-                isBound.set(false)
-            }
-        } catch (t: Throwable) {
-            DiagLog.e(TAG, "Safe catch-all to prevent any crash in instrument bridge", t)
+    private fun doSendActionOnly(gen: Int, isPlaying: Boolean) {
+        if (released.get() || currentGeneration.get() != gen) return
+        val service = dimService ?: return
+        val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
+        try {
+            service.onAction(if (isPlaying) 1 else 2, sourceType)
+            lastSentPlaying = isPlaying
+            lastSentTimeMs = SystemClock.uptimeMillis()
+            DiagLog.i(TAG, "Sent pending onAction to Xingrui IPK (source=$sourceType, gen=$gen): isPlaying=$isPlaying")
+        } catch (e: RemoteException) {
+            DiagLog.w(TAG, "RemoteException calling onAction, will reconnect", e)
+            dimService = null
+            isBound.set(false)
         }
     }
 
+    private fun doSendMediaUpdate(
+        gen: Int,
+        safeTitle: String,
+        safeArtist: String,
+        safeAlbum: String,
+        isPlaying: Boolean,
+    ) {
+        if (released.get() || currentGeneration.get() != gen) return
+        if (dimService == null && !isBound.get()) {
+            safeBind()
+        }
+
+        val service = dimService
+        if (service == null) {
+            DiagLog.d(TAG, "MediaService not ready yet, update cached for replay")
+            return
+        }
+
+        val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
+
+        try {
+            // 每次真正调用 updateMedia 之前先 onSourceChanged(0)。
+            // 封面删了，这句不能删。东软初始状态是 -101，没调用过就整包丢弃。
+            service.onSourceChanged(sourceType)
+            // 播放中的封面参数固定为非空字符串 "carplay"，用来避开东软对 "" 发 -102 关屏。清屏才传 ""。
+            service.updateMedia(0, safeTitle, safeAlbum, safeArtist, "carplay", sourceType)
+            service.onAction(if (isPlaying) 1 else 2, sourceType)
+            lastSentTitle = safeTitle
+            lastSentArtist = safeArtist
+            lastSentPlaying = isPlaying
+            lastSentTimeMs = SystemClock.uptimeMillis()
+            DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType, gen=$gen): $safeTitle - $safeArtist (playing=$isPlaying)")
+        } catch (e: RemoteException) {
+            DiagLog.w(TAG, "RemoteException calling MediaService, will reconnect", e)
+            dimService = null
+            isBound.set(false)
+        }
+    }
+
+    /**
+     * 用于关掉「仪表媒体信息」。它加一次代数，取消暂存，清空缓存和上次发送记录，然后只排一笔清屏。
+     * 清屏任务先 onSourceChanged(0)，再 updateMedia(0, " ", " ", " ", "", 0)，再 onAction(2, 0)。
+     * 不解绑，不把 released 设为 true。服务还在，之后的新歌用新代数继续发。
+     */
     fun clearMedia() {
         if (!isSupported || executor.isShutdown) return
+        val gen = currentGeneration.incrementAndGet()
+        cancelPendingAction()
         lastCachedMedia = null
         lastSentTitle = null
         lastSentArtist = null
         lastSentPlaying = null
+        lastSentTimeMs = 0L
+
         executor.execute {
+            if (currentGeneration.get() != gen) return@execute
             try {
                 val service = dimService ?: return@execute
                 val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
                 try {
+                    service.onSourceChanged(sourceType)
                     service.updateMedia(0, " ", " ", " ", "", sourceType)
                     service.onAction(2, sourceType)
-                    DiagLog.i(TAG, "Cleared Xingrui IPK media (source=$sourceType)")
+                    DiagLog.i(TAG, "Cleared Xingrui IPK media (source=$sourceType, gen=$gen)")
                 } catch (e: RemoteException) {
                     DiagLog.w(TAG, "RemoteException while clearing media", e)
                 }
@@ -270,34 +345,75 @@ internal class XingruiInstrumentBridge(context: Context) {
         }
     }
 
+    /**
+     * 用于断开。先置 released，让新的 updateMedia 直接返回。再加一次代数，取消暂存，清空缓存，只排一笔清屏。
+     * 不要调用 clearMedia，否则代数加两次，清屏任务会被第二次加代数判成过期。
+     * 这笔清屏写完后再解绑、再 shutdown 这个 executor。调用 release 的线程不要在 worker 里等待这条队列，避免自己等自己。
+     */
     fun release() {
+        if (!isSupported) return
         try {
-            if (receiverRegistered) {
-                runCatching { appContext.unregisterReceiver(audioRequireReceiver) }
-                receiverRegistered = false
-            }
-            dimService?.let { service ->
-                val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
-                runCatching {
-                    service.updateMedia(0, " ", " ", " ", "", sourceType)
-                    service.onAction(2, sourceType)
+            if (released.compareAndSet(false, true)) {
+                if (receiverRegistered) {
+                    runCatching { appContext.unregisterReceiver(audioRequireReceiver) }
+                    receiverRegistered = false
+                }
+                val gen = currentGeneration.incrementAndGet()
+                cancelPendingAction()
+                lastCachedMedia = null
+                lastSentTitle = null
+                lastSentArtist = null
+                lastSentPlaying = null
+                lastSentTimeMs = 0L
+
+                executor.execute {
+                    if (currentGeneration.get() != gen) {
+                        finishRelease()
+                        return@execute
+                    }
+                    try {
+                        val service = dimService
+                        if (service != null) {
+                            val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
+                            runCatching {
+                                service.onSourceChanged(sourceType)
+                                service.updateMedia(0, " ", " ", " ", "", sourceType)
+                                service.onAction(2, sourceType)
+                                DiagLog.i(TAG, "Cleared Xingrui IPK media on release (source=$sourceType, gen=$gen)")
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        DiagLog.w(TAG, "Error during clear in release", t)
+                    } finally {
+                        finishRelease()
+                    }
                 }
             }
-            boundBinder?.unlinkToDeath(deathRecipient, 0)
-            boundBinder = null
-            dimService = null
-            lastCachedMedia = null
-            lastSentTitle = null
-            lastSentArtist = null
-            lastSentPlaying = null
-            if (isBound.compareAndSet(true, false)) {
-                appContext.unbindService(serviceConnection)
-            }
-            executor.shutdown()
-            DiagLog.i(TAG, "Released XingruiInstrumentBridge")
         } catch (t: Throwable) {
             DiagLog.w(TAG, "Error during release", t)
         }
+    }
+
+    private fun finishRelease() {
+        try {
+            boundBinder?.unlinkToDeath(deathRecipient, 0)
+        } catch (t: Throwable) {
+            // ignore
+        }
+        boundBinder = null
+        dimService = null
+        if (isBound.compareAndSet(true, false)) {
+            runCatching { appContext.unbindService(serviceConnection) }
+        }
+        executor.shutdown()
+        DiagLog.i(TAG, "Released XingruiInstrumentBridge successfully")
+    }
+
+    internal fun getCurrentGenerationForTest(): Int = currentGeneration.get()
+    internal fun isReleasedForTest(): Boolean = released.get()
+    internal fun hasPendingActionForTest(): Boolean = synchronized(this) { pendingRunnable != null }
+    internal fun triggerSchedulePendingActionForTest(gen: Int, isPlaying: Boolean, delayMs: Long) {
+        schedulePendingAction(gen, isPlaying, delayMs)
     }
 
     companion object {

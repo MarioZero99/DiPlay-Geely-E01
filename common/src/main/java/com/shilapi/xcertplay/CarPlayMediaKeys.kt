@@ -153,25 +153,40 @@ internal object CarPlayMediaKeys {
         val rawAlbum = info.album
         val rawDuration = info.durationMillis
 
-        val isLyricSwap = !lastGenuineTitle.isNullOrBlank() && rawArtist == lastGenuineTitle
-        val isLyricSuffix = !rawTitle.isNullOrBlank() && !lastGenuineTitle.isNullOrBlank() &&
-            (rawTitle.endsWith(" - $lastGenuineTitle") || (rawTitle.contains(lastGenuineTitle) && rawTitle != lastGenuineTitle))
+        // 1. 还没有上一首真歌名：这包就是第一首，放行。
+        if (lastGenuineTitle.isNullOrBlank()) {
+            val genTitle = if (!rawTitle.isNullOrBlank()) rawTitle else null
+            val genArtist = if (!rawArtist.isNullOrBlank()) rawArtist else null
+            val genAlbum = if (!rawAlbum.isNullOrBlank()) rawAlbum else null
+            val genDuration = if (rawDuration != null && rawDuration > 0) rawDuration else null
+            return FilteredTrack(
+                info = info,
+                isLyric = false,
+                genuineTitle = genTitle,
+                genuineArtist = genArtist,
+                genuineAlbum = genAlbum,
+                durationMillis = genDuration,
+            )
+        }
+
+        // 2. 命中下面三种之一：当成歌词。歌名、歌手、专辑、时长都保持上一首，不更新。
+        //    进度是 0、进度为空、总时长变了，也不能放行。
+        //    - 歌手等于上一首真歌名。
+        //    - 歌名以 " - " 加上一首真歌名结尾。不要用 contains。
+        //    - 歌名以这些前缀开头，中文冒号和英文冒号都算：词： 曲： 编曲： 制作： 制作人：
+        val isLyricSwap = rawArtist == lastGenuineTitle
+        val isLyricSuffix = !rawTitle.isNullOrBlank() && rawTitle.endsWith(" - $lastGenuineTitle")
         val isLyricCredit = !rawTitle.isNullOrBlank() &&
             (rawTitle.startsWith("词：") || rawTitle.startsWith("词:") ||
              rawTitle.startsWith("曲：") || rawTitle.startsWith("曲:") ||
              rawTitle.startsWith("编曲：") || rawTitle.startsWith("编曲:") ||
-             rawTitle.startsWith("制作：") || rawTitle.startsWith("制作人："))
-        val isMidTrackTitleDrift = !lastGenuineTitle.isNullOrBlank() &&
-            lastDurationMillis != null && rawDuration != null &&
-            lastDurationMillis == rawDuration && rawDuration > 20_000L &&
-            (info.elapsedMillis ?: 0L) > 3_000L &&
-            rawTitle != lastGenuineTitle &&
-            (rawAlbum == lastGenuineAlbum || rawAlbum.isNullOrBlank())
+             rawTitle.startsWith("制作：") || rawTitle.startsWith("制作:") ||
+             rawTitle.startsWith("制作人：") || rawTitle.startsWith("制作人:"))
 
-        val isLyric = isLyricSwap || isLyricSuffix || isLyricCredit || isMidTrackTitleDrift
+        val isLyric = isLyricSwap || isLyricSuffix || isLyricCredit
 
         return if (isLyric) {
-            val effTitle = lastGenuineTitle ?: rawTitle
+            val effTitle = lastGenuineTitle
             val effArtist = lastGenuineArtist ?: (if (rawArtist != lastGenuineTitle) rawArtist else null)
             val effAlbum = lastGenuineAlbum ?: rawAlbum
             FilteredTrack(
@@ -183,6 +198,7 @@ internal object CarPlayMediaKeys {
                 durationMillis = lastDurationMillis,
             )
         } else {
+            // 3. 其余都是新歌，放行。包括《七里香》后面的《七里香 (Live)》、时长相同的下一首、进度停在中途、进度为空。
             val genTitle = if (!rawTitle.isNullOrBlank()) rawTitle else lastGenuineTitle
             val genArtist = if (!rawArtist.isNullOrBlank()) rawArtist else lastGenuineArtist
             val genAlbum = if (!rawAlbum.isNullOrBlank()) rawAlbum else lastGenuineAlbum
@@ -349,7 +365,6 @@ internal object CarPlayMediaKeys {
                     lastPublishedNowPlaying?.title,
                     lastPublishedNowPlaying?.artist,
                     lastPublishedNowPlaying?.album,
-                    currentArtwork,
                     playing,
                 )
             }
@@ -577,7 +592,6 @@ internal object CarPlayMediaKeys {
                     nowPlaying?.title,
                     nowPlaying?.artist,
                     nowPlaying?.album,
-                    artwork,
                     isPlaying,
                 )
                 DiagLog.d(TAG, "cluster metadata published: title=${nowPlaying?.title} artist=${nowPlaying?.artist} hasArt=${artwork != null}")

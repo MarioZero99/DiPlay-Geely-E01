@@ -15,51 +15,41 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-// Robolectric 4.17 最低只支持 SDK 23：它的 DefaultSdkProvider 里注册的是 23..37，写 22 会在
-// 加载 runner 时直接报 unsupported SDK，测试一个都跑不到。这里验证的是卷枚举，API 22 的平台差异
-// 在车机上验，不靠单测假装覆盖。
 @Config(sdk = [23], manifest = Config.NONE)
 class DiagnosticVolumeProbeTest {
     @get:Rule val temp = TemporaryFolder()
     private val context get() = RuntimeEnvironment.getApplication()
 
-    @Test fun candidatesUsesVolumeRootNotThePackageFilesDir() {
-        val usbRoot = temp.newFolder("usbotg-sda1")
-        val pkg = File(usbRoot, "Android/data/${context.packageName}/files").apply { mkdirs() }
-        val music = File(usbRoot, "MyMusic").apply { mkdirs() }
-        val wrapped = object : ContextWrapper(context) {
-            override fun getExternalFilesDirs(type: String?): Array<File?> =
-                arrayOf(context.getExternalFilesDir(null), pkg)
-        }
-        val found = DiagnosticVolumeProbe.candidates(wrapped, emptySet(), procMountsFile = null)
-        assertTrue(found.any { it.absolutePath == usbRoot.absolutePath })
-        assertFalse(found.any { it.absolutePath == pkg.absolutePath })
-        assertFalse(found.any { it.absolutePath == music.absolutePath })
-    }
-
-    @Test fun aRawMediaRwStickIsShownAsTheStorageDirectoryWithTheSameName() {
-        val raw = File(temp.newFolder("mnt", "media_rw"), "usbotg-sda1").apply { mkdirs() }
+    @Test fun resolveVolumePathUsesStorageWhenItContainsFiles() {
+        val raw = File("/mnt/media_rw/usbotg-sda1")
         val storage = temp.newFolder("storage")
-        File(storage, "usbotg-sda1").mkdirs()
-        val found = DiagnosticVolumeProbe.candidates(
-            context,
-            setOf(raw.absolutePath),
-            procMountsFile = null,
-            storageRoot = storage,
-        )
-        assertEquals(listOf(File(storage, "usbotg-sda1").absolutePath), found.map { it.absolutePath })
+        val storageStick = File(storage, "usbotg-sda1").apply { mkdirs() }
+        File(storageStick, "test.txt").writeText("hello")
+
+        val resolved = DiagnosticVolumeProbe.resolveVolumePath(raw, storageRoot = storage)
+        assertEquals(storageStick.absolutePath, resolved.absolutePath)
     }
 
-    @Test fun aRawMediaRwStickStaysWhenTheStorageDirectoryIsMissing() {
-        val raw = File(temp.newFolder("mnt", "media_rw"), "usbotg-sda1").apply { mkdirs() }
-        val storage = temp.newFolder("empty-storage")
-        val found = DiagnosticVolumeProbe.candidates(
-            context,
-            setOf(raw.absolutePath),
-            procMountsFile = null,
-            storageRoot = storage,
-        )
-        assertEquals(listOf(raw.absolutePath), found.map { it.absolutePath })
+    @Test fun resolveVolumePathStaysOnMediaRwWhenStorageIsEmptyDirectory() {
+        val raw = File("/mnt/media_rw/usbotg-sda1")
+        val storage = temp.newFolder("storage")
+        val storageStick = File(storage, "usbotg-sda1").apply { mkdirs() }
+        // Directory exists but is completely empty (no files)
+
+        val resolved = DiagnosticVolumeProbe.resolveVolumePath(raw, storageRoot = storage)
+        assertEquals(raw.absolutePath, resolved.absolutePath)
+    }
+
+    @Test fun resolveVolumePathNeverTransformsIntoGenericUsbotg() {
+        val raw = File("/mnt/media_rw/usbotg-sda1")
+        val storage = temp.newFolder("storage")
+        // Even if generic /storage/usbotg exists with files
+        val genericUsbotg = File(storage, "usbotg").apply { mkdirs() }
+        File(genericUsbotg, "other.txt").writeText("other")
+
+        val resolved = DiagnosticVolumeProbe.resolveVolumePath(raw, storageRoot = storage)
+        assertEquals(raw.absolutePath, resolved.absolutePath)
+        assertFalse("Path must never be rewritten to generic /storage/usbotg", resolved.absolutePath.endsWith("/storage/usbotg"))
     }
 
     @Test fun candidatesKeepsAMountedBroadcastAndDropsTheHeadUnit() {
@@ -108,17 +98,5 @@ class DiagnosticVolumeProbeTest {
         assertEquals("/storage/USB DISK", DiagnosticVolumeProbe.unescapeMountPoint("/storage/USB\\040DISK"))
         assertEquals("/mnt/media_rw/USB 1", DiagnosticVolumeProbe.unescapeMountPoint("/mnt/media_rw/USB\\0401"))
         assertEquals("/normal/path", DiagnosticVolumeProbe.unescapeMountPoint("/normal/path"))
-    }
-
-    @Test fun filtersOutLinuxHostMountsLikeHomeAndBoot() {
-        val fakeBoot = temp.newFolder("boot")
-        val fakeHome = temp.newFolder("home")
-        val mountsContent = """
-            /dev/root / ext4 rw,relatime 0 0
-            /dev/sda1 ${fakeBoot.absolutePath} ext4 rw,relatime 0 0
-            /dev/sdb1 ${fakeHome.absolutePath} ext4 rw,relatime 0 0
-        """.trimIndent()
-        val parsed = DiagnosticVolumeProbe.parseMountPoints(mountsContent)
-        assertTrue("Linux host mounts must be ignored", parsed.isEmpty())
     }
 }

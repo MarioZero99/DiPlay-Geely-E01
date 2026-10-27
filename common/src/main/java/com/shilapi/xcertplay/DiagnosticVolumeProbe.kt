@@ -5,24 +5,14 @@ import android.os.Build
 import java.io.File
 
 /**
- * Mount points a diagnostic report might be saved to.
+ * 诊断日志导出的挂载卷探测。
  *
- * A stick on this head unit is mounted at `/mnt/media_rw/usbotg-sda1`. An ordinary app lists and
- * writes the same stick at `/storage/usbotg-sda1` when that directory exists. This collects those
- * directories and shows the `/storage` one. It does not create `DiPlay` and it does not write a
- * probe file: looking is not saving.
+ * 第一屏只来自 StorageManager.getVolumeList()，筛选已挂载、可移动、非主存储的系统卷。
+ * 标题使用系统 getDescription(context)（系统默认「USB 存储」），路径使用 getPath()。
+ * 仅当路径为 /mnt/media_rw/<name> 且同名 /storage/<name> 的 listFiles() 至少返回一项时才做平级替换；
+ * 空目录不替换，绝不改写为 /storage/usbotg。
  */
 internal object DiagnosticVolumeProbe {
-    private val vendorMountRoots = listOf(
-        "/storage/usbotg",
-        "/storage/udisk",
-        "/storage/sdcard1",
-        "/storage/sdcard2",
-        "/mnt/usb_storage",
-        "/mnt/udisk",
-        "/mnt/usb",
-        "/mnt/media_rw",
-    )
 
     internal fun unescapeMountPoint(raw: String): String {
         if (!raw.contains('\\')) return raw
@@ -50,8 +40,6 @@ internal object DiagnosticVolumeProbe {
             val mountPoint = unescapeMountPoint(parts[1])
             val fsType = parts[2].lowercase()
             if (fsType !in targetFs) continue
-            // Exact parent only. /mnt/media_rw has no filesystem of its own;
-            // /mnt/media_rw/usbotg-sda1 is the stick and must be kept.
             if (mountPoint == "/" || mountPoint == "/mnt" || mountPoint == "/mnt/media_rw" || mountPoint.startsWith("/storage/emulated") || systemPrefixes.any { mountPoint.startsWith(it) }) continue
             if (parts.size >= 4) {
                 val options = parts[3].split(",")
@@ -64,7 +52,7 @@ internal object DiagnosticVolumeProbe {
             if (!isLikelyExternal) continue
             val file = File(mountPoint)
             if (!isPrimaryStorage(file)) {
-                if (file.isDirectory || (dev.startsWith("/dev/block/") && com.shilapi.xcertplay.system.RootShellBridge.isAvailable())) {
+                if (file.isDirectory) {
                     candidates.add(file)
                 }
             }
@@ -90,8 +78,29 @@ internal object DiagnosticVolumeProbe {
     }
 
     /**
-     * Volume roots only. `getExternalFilesDirs` hands back `Android/data/<pkg>/files`; the root is
-     * what a person can recognise, so the package directory is never returned.
+     * 路径只允许一种替换：
+     * getPath() 是 /mnt/media_rw/某个名字，名字里面没有斜线，
+     * 而且 /storage/同一个名字 的 listFiles() 至少返回一项。这时用 /storage 那条。
+     * 空目录不算。否则留 getPath()。禁止改写成 /storage/usbotg。
+     */
+    internal fun resolveVolumePath(dir: File, storageRoot: File = File("/storage")): File {
+        val path = dir.absolutePath
+        val prefix = "/mnt/media_rw/"
+        if (!path.startsWith(prefix)) return dir
+        val leaf = path.removePrefix(prefix).trim('/')
+        if (leaf.isEmpty() || leaf.contains('/')) return dir
+        val twin = File(storageRoot, leaf)
+        val listed = runCatching { twin.listFiles() }.getOrNull()
+        if (listed != null && listed.isNotEmpty()) {
+            DiagLog.i("DiagnosticExport", "usb $path -> ${twin.absolutePath} (has ${listed.size} files)")
+            return twin
+        }
+        DiagLog.i("DiagnosticExport", "usb $path kept (twin ${twin.absolutePath} not found or empty)")
+        return dir
+    }
+
+    /**
+     * 第一屏仅调用 StorageManager.getVolumeList() 抓取已挂载的可移动系统卷。
      */
     fun candidates(
         context: Context,
@@ -100,163 +109,55 @@ internal object DiagnosticVolumeProbe {
         storageRoot: File = File("/storage"),
     ): List<File> {
         val found = linkedMapOf<String, File>()
-        var mountsContent = ""
 
         runCatching {
             val sm = context.getSystemService(Context.STORAGE_SERVICE) ?: return@runCatching
-            // 1. Try StorageManager.getVolumePaths() (standard hidden API on Android 5.1 / MTK)
-            val getVolumePaths = runCatching { sm.javaClass.getMethod("getVolumePaths") }.getOrNull()
-            if (getVolumePaths != null) {
-                val paths = getVolumePaths.invoke(sm) as? Array<*>
-                if (paths != null) {
-                    for (item in paths) {
-                        val pathStr = item as? String ?: continue
-                        val state = runCatching {
-                            sm.javaClass.getMethod("getVolumeState", String::class.java).invoke(sm, pathStr) as? String
-                        }.getOrNull()
-                        if (state == "mounted") {
-                            val f = File(pathStr)
-                            if (!isPrimaryStorage(f)) {
-                                remember(found, f)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 2. Try getVolumeList()
             val volumes = sm.javaClass.getMethod("getVolumeList").invoke(sm) as? Array<*> ?: return@runCatching
             for (vol in volumes) {
                 if (vol == null) continue
-                val path = vol.javaClass.getMethod("getPath").invoke(vol) as? String ?: continue
-                val file = File(path)
-                val state = runCatching {
-                    vol.javaClass.getMethod("getState").invoke(vol) as? String
-                }.getOrNull() ?: runCatching {
-                    sm.javaClass.getMethod("getVolumeState", String::class.java).invoke(sm, path) as? String
-                }.getOrNull()
-                if (state != null && state != "mounted") continue
-                if (file.isDirectory || com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-                    remember(found, file)
+                runCatching {
+                    val isRemovable = runCatching {
+                        vol.javaClass.getMethod("isRemovable").invoke(vol) as? Boolean
+                    }.getOrNull() ?: false
+                    if (!isRemovable) return@runCatching
+
+                    val path = vol.javaClass.getMethod("getPath").invoke(vol) as? String ?: return@runCatching
+                    if (path.isBlank()) return@runCatching
+
+                    val state = runCatching {
+                        vol.javaClass.getMethod("getState").invoke(vol) as? String
+                    }.getOrNull() ?: runCatching {
+                        sm.javaClass.getMethod("getVolumeState", String::class.java).invoke(sm, path) as? String
+                    }.getOrNull()
+                    if (state != "mounted") return@runCatching
+
+                    val isPrimary = runCatching {
+                        vol.javaClass.getMethod("isPrimary").invoke(vol) as? Boolean
+                    }.getOrNull()
+                    val candidateFile = File(path)
+                    if (isPrimary == true || isPrimaryStorage(candidateFile)) return@runCatching
+
+                    val effectiveFile = resolveVolumePath(candidateFile, storageRoot)
+                    found[effectiveFile.absolutePath] = effectiveFile
                 }
-            }
-        }
-
-        // Drops system mounts and the empty parent /mnt/media_rw. A child such as
-        // /mnt/media_rw/usbotg-sda1 is the stick and is kept.
-        runCatching {
-            if (procMountsFile != null && procMountsFile.exists() && procMountsFile.canRead()) {
-                mountsContent = procMountsFile.readText()
-            } else if (procMountsFile != null && com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-                val (rc, body) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("cat /proc/mounts", 2000L)
-                if (rc == 0 && body.isNotBlank()) mountsContent = body
-            }
-            if (mountsContent.isNotEmpty()) {
-                for (mount in parseMountPoints(mountsContent)) remember(found, mount)
-            }
-        }
-
-        if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-            runCatching {
-                val (rc, body) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("ls -1 /mnt/media_rw", 2000L)
-                if (rc == 0 && body.isNotBlank()) {
-                    for (line in body.lineSequence()) {
-                        val trimmed = line.trim()
-                        if (trimmed.isNotEmpty() && !trimmed.startsWith("ls:") && !trimmed.startsWith(".")) {
-                            remember(found, File("/mnt/media_rw", trimmed))
-                        }
-                    }
-                }
-            }
-        }
-
-        runCatching {
-            val dirs = context.getExternalFilesDirs(null) ?: emptyArray()
-            for (index in 1 until dirs.size) {
-                val dir = dirs[index] ?: continue
-                val root = extractVolumeRoot(dir) ?: continue
-                remember(found, root)
             }
         }
 
         for (path in extraMountPaths) {
+            if (path == "/" || path == "/mnt" || path == "/mnt/media_rw") continue
             val file = File(path)
-            if (!file.isDirectory) continue
-            remember(found, file)
+            if (isPrimaryStorage(file)) continue
+            val effective = resolveVolumePath(file, storageRoot)
+            found[effective.absolutePath] = effective
         }
 
-        // Vendor containers are a last resort. An empty parent such as /mnt/media_rw is not a stick;
-        // a child that is mounted, or that already has files, is.
-        if (found.isEmpty()) {
-            for (rootPath in vendorMountRoots) {
-                val root = File(rootPath)
-                val isDir = root.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"$rootPath\""))
-                if (!isDir) continue
-                val children = runCatching { root.listFiles() }.getOrNull().orEmpty().filter { it.isDirectory }
-                for (target in listOf(root) + children) {
-                    val listed = runCatching { target.list() }.getOrNull()
-                    val hasFiles = (listed != null && listed.isNotEmpty()) ||
-                        (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() &&
-                            com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput(
-                                "for f in \"${target.absolutePath}\"/*; do [ -e \"\$f\" ] && echo 1 && break; done",
-                                1000L,
-                            ).second.trim() == "1")
-                    val isMounted = mountsContent.isNotEmpty() && isMountedFileSystem(target, mountsContent)
-                    if (isMounted || hasFiles) {
-                        remember(found, target)
-                    }
-                }
-            }
-        }
-        return found.values.map { visibleRoot(it, storageRoot) }.distinctBy { it.absolutePath }
+        return found.values.toList()
     }
 
-    /**
-     * The raw mount is `/mnt/media_rw/<name>`. The directory an app can list and write is
-     * `/storage/<name>` when it exists. A name with another slash is not the volume root.
-     */
-    internal fun visibleRoot(dir: File, storageRoot: File = File("/storage")): File {
-        val marker = "/mnt/media_rw/"
-        val path = dir.absolutePath
-        val at = path.indexOf(marker)
-        if (at < 0) return dir
-        val leaf = path.substring(at + marker.length).trim('/')
-        if (leaf.isEmpty() || leaf.contains('/')) return dir
-        val twin = File(storageRoot, leaf)
-        if (twin.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${twin.absolutePath}\""))) {
-            DiagLog.i("DiagnosticExport", "usb $path -> ${twin.absolutePath}")
-            return twin
-        }
-        if (leaf == "usbotg") {
-            val genericOtg = File(storageRoot, "usbotg")
-            if (genericOtg.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${genericOtg.absolutePath}\""))) {
-                DiagLog.i("DiagnosticExport", "usb $path -> ${genericOtg.absolutePath}")
-                return genericOtg
-            }
-        }
-        DiagLog.i("DiagnosticExport", "usb $path kept, ${twin.absolutePath} is not a directory")
-        return dir
-    }
-
-    private fun remember(found: MutableMap<String, File>, file: File) {
-        val path = file.absolutePath
-        if (path == "/" || path == "/mnt" || path == "/mnt/media_rw") return
-        if (path.contains("/Android/data/")) return
-        if (isPrimaryStorage(file)) return
-        found[path] = file
-    }
-
-    private fun isPrimaryStorage(candidate: File): Boolean {
+    internal fun isPrimaryStorage(candidate: File): Boolean {
         val primary = runCatching { android.os.Environment.getExternalStorageDirectory() }.getOrNull()
             ?: return false
         if (candidate.absolutePath == primary.absolutePath) return true
         return runCatching { candidate.canonicalPath == primary.canonicalPath }.getOrDefault(false)
-    }
-
-    private fun extractVolumeRoot(packageDir: File): File? {
-        val path = packageDir.absolutePath
-        val marker = "/Android/data"
-        val idx = path.indexOf(marker)
-        return if (idx > 0) File(path.substring(0, idx)) else null
     }
 }

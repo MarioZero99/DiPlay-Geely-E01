@@ -37,14 +37,13 @@ internal object DiagnosticExportStore {
         procMountsFile: File? = DiagnosticVolumeProbe.defaultProcMounts(),
     ): List<ExportFolder> {
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val usb = chooseMounts(
-            DiagnosticVolumeProbe.candidates(context, extraMountPaths, procMountsFile)
-                .filter { it.absolutePath != downloads.absolutePath },
-        ).map { dir ->
-            val label = formatVolumeLabel(context, dir, usb = true)
-            val detail = formatVolumeDetail(context, dir)
-            ExportFolder(label, dir, usb = true, detail = detail)
-        }
+        val usb = DiagnosticVolumeProbe.candidates(context, extraMountPaths, procMountsFile)
+            .filter { it.absolutePath != downloads.absolutePath }
+            .map { dir ->
+                val label = formatVolumeLabel(context, dir, usb = true)
+                val detail = formatVolumeDetail(context, dir)
+                ExportFolder(label, dir, usb = true, detail = detail)
+            }
         val internalLabel = context.getString(R.string.export_internal_storage)
         val internalDetail = formatVolumeDetail(context, downloads)
         val places = usb + ExportFolder(internalLabel, downloads, usb = false, detail = internalDetail)
@@ -64,7 +63,8 @@ internal object DiagnosticExportStore {
             for (vol in volumes) {
                 if (vol == null) continue
                 val path = vol.javaClass.getMethod("getPath").invoke(vol) as? String ?: continue
-                if (path == dir.absolutePath || path.trimEnd('/') == dir.absolutePath.trimEnd('/')) {
+                val effective = DiagnosticVolumeProbe.resolveVolumePath(File(path))
+                if (path == dir.absolutePath || effective.absolutePath == dir.absolutePath) {
                     val desc = runCatching {
                         vol.javaClass.getMethod("getDescription", Context::class.java).invoke(vol, context) as? String
                     }.getOrNull()
@@ -73,7 +73,7 @@ internal object DiagnosticExportStore {
             }
             null
         }.getOrNull()
-        if (!sysDesc.isNullOrBlank()) return "$sysDesc (${dir.name})"
+        if (!sysDesc.isNullOrBlank()) return sysDesc
 
         val nameLower = dir.name.lowercase()
         return when {
@@ -100,91 +100,10 @@ internal object DiagnosticExportStore {
         return if (spaceInfo != null) "$spaceInfo · ${dir.absolutePath}" else dir.absolutePath
     }
 
-    private fun isAccessibleDir(dir: File): Boolean =
-        dir.isDirectory || (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${dir.absolutePath}\""))
-
-    private class RootExportFile(parent: File, child: String, private val isDir: Boolean) : File(parent, child) {
-        override fun isDirectory(): Boolean = isDir
-        override fun isFile(): Boolean = !isDir
-    }
-
-    /** Directories first, then files, by lower-case name. An unreadable directory falls back to root listing or empty list. */
+    /** Directories first, then files, by lower-case name. An unreadable directory returns empty list. */
     fun children(directory: File): List<File> {
         val listed = runCatching { directory.listFiles() }.getOrNull()
-        if (!listed.isNullOrEmpty()) {
-            return listed.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-        }
-        if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-            val rootEntries = listFilesViaRoot(directory)
-            if (rootEntries.isNotEmpty()) {
-                return rootEntries.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-            }
-        }
         return listed?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })) ?: emptyList()
-    }
-
-    private fun listFilesViaRoot(directory: File): List<File> {
-        val safePath = directory.absolutePath.replace("$", "\\$")
-        // Android 5.1 toolbox 的 ls 不支持 -p 和 -1。
-        // 使用 POSIX / mksh shell 内建语法：目录加末尾 '/'，普通文件不加，单次完成无二次 stat 开销。
-        val cmd = "for f in \"$safePath\"/*; do [ -e \"\$f\" ] || continue; [ -d \"\$f\" ] && echo \"\${f##*/}/\" || echo \"\${f##*/}\"; done"
-        val (rc, body) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput(cmd, 3000L)
-        if (rc != 0 || body.isBlank()) return emptyList()
-        return parseRootDirectoryListing(directory, body)
-    }
-
-    internal fun parseRootDirectoryListing(directory: File, body: String): List<File> {
-        return body.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && !it.startsWith("ls:") && !it.startsWith("$") && !it.startsWith(".") }
-            .map { entryName ->
-                val isDir = entryName.endsWith("/")
-                val cleanName = entryName.removeSuffix("/")
-                RootExportFile(directory, cleanName, isDir)
-            }
-            .toList()
-    }
-
-    /** Keeps real directories, including ones [File.list] cannot read, then one path per stick. */
-    internal fun chooseMounts(dirs: List<File>): List<File> {
-        val accessible = dirs.filter { dir ->
-            if (!isAccessibleDir(dir)) return@filter false
-            val nameLower = dir.name.lowercase()
-            if (nameLower.contains("sdcard")) {
-                val hasSpace = runCatching {
-                    val stat = android.os.StatFs(dir.absolutePath)
-                    stat.blockCountLong > 0L
-                }.getOrDefault(false)
-                val hasFiles = runCatching { dir.list() }.getOrNull()?.isNotEmpty() == true
-                if (!hasSpace && !hasFiles) {
-                    return@filter false
-                }
-            }
-            true
-        }
-        return preferListedCopy(accessible)
-    }
-
-    /**
-     * Two paths with the same leaf are one stick. A copy the app can list beats one it cannot,
-     * so the card can show the files. Between two that list the same, or two that cannot, prefer
-     * the path that is not under `/mnt/media_rw/`. A listable raw stick is not replaced by an
-     * unlistable twin.
-     */
-    internal fun preferListedCopy(dirs: List<File>): List<File> {
-        val chosen = linkedMapOf<String, File>()
-        for (dir in dirs) {
-            val have = chosen[dir.name]
-            if (have == null || copyRank(dir) < copyRank(have)) chosen[dir.name] = dir
-        }
-        return chosen.values.toList()
-    }
-
-    /** Lower is better: listable before unlistable, then a path outside `/mnt/media_rw/`. */
-    private fun copyRank(dir: File): Int {
-        val listable = if (canList(dir)) 0 else 2
-        val raw = if (dir.path.contains("/mnt/media_rw/")) 1 else 0
-        return listable + raw
     }
 
     /**
@@ -207,28 +126,17 @@ internal object DiagnosticExportStore {
         return ExportOutcome(file.absolutePath, backup?.uri, written)
     }
 
-    private fun canList(dir: File): Boolean =
-        (dir.isDirectory && runCatching { dir.list() }.getOrNull() != null) ||
-        (com.shilapi.xcertplay.system.RootShellBridge.isAvailable() && com.shilapi.xcertplay.system.RootShellBridge.execute("test -d \"${dir.absolutePath}\""))
-
     private data class Backup(val uri: Uri?, val file: File)
 
-    /**
-     * The copy the app owns. Private storage, not the external package directory: this file exists
-     * only so the share sheet has something the FileProvider may sign, and private storage is the
-     * one place that survives a stick being pulled out or an SD card being removed.
-     */
     private fun saveInternalBackup(context: Context, fileName: String, report: String): Backup =
         saveBackupIn(context, File(context.filesDir, "diagnostic-reports"), fileName, report)
 
     private fun saveBackupIn(context: Context, directory: File, fileName: String, report: String): Backup {
         if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Report storage is unavailable")
-        // Each export has a new URI: an earlier share grant cannot read a later report.
         val file = File.createTempFile(fileName.removeSuffix(".txt") + "-", ".txt", directory)
         try {
             if (!syncWriteText(file, report)) throw IOException("Report storage is unavailable")
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostic-reports", file)
-            // Retain only the newest eight reports; never prune the export being returned.
             directory.listFiles()?.filter { it != file && it.isFile }
                 ?.sortedByDescending { it.lastModified() }?.drop(7)?.forEach { it.delete() }
             return Backup(uri, file)
@@ -238,13 +146,6 @@ internal object DiagnosticExportStore {
         }
     }
 
-    /**
-     * Writes the bytes and then asks the kernel to push them onto the stick's own hardware.
-     *
-     * A driver pulls the stick out the moment the dialog says saved. A buffered write lives in this
-     * device's page cache and is lost with the removal, so the sync has to happen inside the stream's
-     * lifetime — after the stream is closed there is no descriptor left to sync.
-     */
     private fun syncWriteText(file: File, content: String): Boolean {
         return try {
             val parent = file.parentFile
@@ -314,7 +215,6 @@ internal object DiagnosticExportStore {
         }
     }
 
-    /** Tells the media database about the new file, or a file manager shows nothing until the stick is replugged. */
     private fun announce(context: Context, paths: List<String>) {
         if (paths.isEmpty()) return
         runCatching {
