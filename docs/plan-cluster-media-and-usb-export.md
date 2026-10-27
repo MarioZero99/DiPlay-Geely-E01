@@ -35,7 +35,8 @@
 - `truncateCanString` 仍先 trim，再截到 31 个字符，空文本用一个空格。
 - `MIN_CAN_INTERVAL_MS` 仍是 2000。这是防仪表锁死，不是为了封面。
 
-封面文件删掉。`updateMedia` 不再接收 `Bitmap`，桥接层不再使用 `CoverSlotManager`。播放中的封面参数固定为非空字符串 `"carplay"`，用来避开东软对 `""` 发 `-102` 关屏。清屏才传 `""`。`decodeArtwork` 留给 MediaSession，本计划不删会话侧解码，也不为仪表写 jpg。
+封面文件删掉。`updateMedia` 不再接收 `Bitmap`，桥接层不再使用 `CoverSlotManager`。播放中的封面参数固定为 `"http://carplay"`，用来避开东软对 `""` 发 `-102` 关屏，且让东软 `MediaBean` 直接走 `str4.startsWith("http")` 分支置 `d(0)/e(0)` 免除封面图层初始化等待与异常。清屏才传 `""`。`decodeArtwork` 留给 MediaSession，本计划不删会话侧解码，也不为仪表写 jpg。
+东软 IPC 调用及队列处理全局捕获 `Throwable`（防 `RuntimeException` 异常逃逸导致 worker 静默中断退出），失败时重新绑定。
 
 ### 两秒内的暂停
 
@@ -59,7 +60,7 @@
 
 ## U 盘
 
-第一屏只来自 `StorageManager.getVolumeList()`。某一卷反射失败就跳过这一卷，不要让整份列表变成空的。
+第一屏优先来自 `StorageManager.getVolumeList()`，若该方法不存在或返回空（如 MTK Android 5.1 厂商 ROM），自动回退到 `StorageManager.getVolumePaths()` 扫描系统卷。某一卷反射失败就跳过这一卷，不要让整份列表变成空的。
 
 留下同时满足这些条件的卷：
 
