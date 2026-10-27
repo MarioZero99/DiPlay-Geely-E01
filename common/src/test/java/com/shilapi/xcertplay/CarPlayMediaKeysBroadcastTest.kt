@@ -145,6 +145,21 @@ class CarPlayMediaKeysBroadcastTest {
         assertTrue("进度为 500ms 的 '词：' 必须被识别为歌词拦截", r2_500.isLyric)
         assertEquals("七里香", r2_500.info.title)
 
+        // 扩充断言 2b: 作词： 作曲: 监制： 混音： 等前缀同样拦截
+        for (prefix in listOf("作词：", "作词:", "作曲：", "作曲:", "监制：", "混音：", "出品：")) {
+            val creditTrack = CarPlayNowPlaying(
+                title = "$prefix 某某某",
+                artist = "周杰伦",
+                album = "七里香",
+                durationMillis = 300_000L,
+                elapsedMillis = 300L,
+                playing = true,
+            )
+            val rCredit = CarPlayMediaKeys.filterLyricMetadata(creditTrack, r0.genuineTitle, r0.genuineArtist, r0.genuineAlbum, r0.durationMillis)
+            assertTrue("前缀 '$prefix' 必须被识别为歌词拦截", rCredit.isLyric)
+            assertEquals("七里香", rCredit.info.title)
+        }
+
         // 断言 3: 歌手被换成上一首歌名，即使进度为 0，也是歌词。
         val swappedKugou = CarPlayNowPlaying(
             title = "雨下整夜 我的爱溢出就像雨水",

@@ -35,6 +35,13 @@ import java.util.concurrent.Executors
  */
 internal object CarPlayMediaKeys {
     private const val TAG = "DiPlay-MediaKeys"
+    private val LYRIC_CREDIT_PREFIXES = arrayOf(
+        "词：", "词:", "作词：", "作词:",
+        "曲：", "曲:", "作曲：", "作曲:",
+        "编曲：", "编曲:",
+        "制作：", "制作:", "制作人：", "制作人:",
+        "监制：", "监制:", "混音：", "混音:", "出品：", "出品:",
+    )
     private val mainHandler = Handler(Looper.getMainLooper())
     private val backend: Backend by lazy {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) Api21Backend() else LegacyBackend()
@@ -173,15 +180,11 @@ internal object CarPlayMediaKeys {
         //    进度是 0、进度为空、总时长变了，也不能放行。
         //    - 歌手等于上一首真歌名。
         //    - 歌名以 " - " 加上一首真歌名结尾。不要用 contains。
-        //    - 歌名以这些前缀开头，中文冒号和英文冒号都算：词： 曲： 编曲： 制作： 制作人：
+        //    - 歌名以制作信息前缀开头（中英文冒号均兼容）
         val isLyricSwap = rawArtist == lastGenuineTitle
         val isLyricSuffix = !rawTitle.isNullOrBlank() && rawTitle.endsWith(" - $lastGenuineTitle")
         val isLyricCredit = !rawTitle.isNullOrBlank() &&
-            (rawTitle.startsWith("词：") || rawTitle.startsWith("词:") ||
-             rawTitle.startsWith("曲：") || rawTitle.startsWith("曲:") ||
-             rawTitle.startsWith("编曲：") || rawTitle.startsWith("编曲:") ||
-             rawTitle.startsWith("制作：") || rawTitle.startsWith("制作:") ||
-             rawTitle.startsWith("制作人：") || rawTitle.startsWith("制作人:"))
+            LYRIC_CREDIT_PREFIXES.any { rawTitle.startsWith(it) }
 
         val isLyric = isLyricSwap || isLyricSuffix || isLyricCredit
 
