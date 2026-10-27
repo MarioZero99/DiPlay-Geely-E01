@@ -281,7 +281,13 @@ internal class XingruiInstrumentBridge(context: Context) {
 
     private fun doSendActionOnly(gen: Int, isPlaying: Boolean) {
         if (released.get() || currentGeneration.get() != gen) return
-        val service = dimService ?: return
+        val service = dimServiceForTest ?: dimService
+        if (service == null) {
+            if (!isBound.get()) {
+                safeBind()
+            }
+            return
+        }
         val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
         try {
             service.onAction(if (isPlaying) 1 else 2, sourceType)
@@ -292,6 +298,7 @@ internal class XingruiInstrumentBridge(context: Context) {
             DiagLog.w(TAG, "RemoteException calling onAction, will reconnect", e)
             dimService = null
             isBound.set(false)
+            safeBind()
         }
     }
 
@@ -303,18 +310,12 @@ internal class XingruiInstrumentBridge(context: Context) {
         isPlaying: Boolean,
     ) {
         if (released.get() || currentGeneration.get() != gen) return
-        sendToken++
-        lastSentTitle = safeTitle
-        lastSentArtist = safeArtist
-        lastSentPlaying = isPlaying
-        lastSentTimeMs = SystemClock.uptimeMillis()
 
-        if (dimService == null && !isBound.get()) {
-            safeBind()
-        }
-
-        val service = dimService
+        val service = dimServiceForTest ?: dimService
         if (service == null) {
+            if (!isBound.get()) {
+                safeBind()
+            }
             DiagLog.d(TAG, "MediaService not ready yet, update cached for replay")
             return
         }
@@ -328,11 +329,21 @@ internal class XingruiInstrumentBridge(context: Context) {
             // 播放中的封面参数固定为非空字符串 "carplay"，用来避开东软对 "" 发 -102 关屏。清屏才传 ""。
             service.updateMedia(0, safeTitle, safeAlbum, safeArtist, "carplay", sourceType)
             service.onAction(if (isPlaying) 1 else 2, sourceType)
+
+            // 记号与「上次已发送」严格记录在 onSourceChanged、updateMedia、onAction 都成功之后。
+            // 失败时保持上一次真正发出去的状态，下一包相同内容还会再试，且不会误杀旧记号。
+            sendToken++
+            lastSentTitle = safeTitle
+            lastSentArtist = safeArtist
+            lastSentPlaying = isPlaying
+            lastSentTimeMs = SystemClock.uptimeMillis()
+
             DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType, gen=$gen, token=$sendToken): $safeTitle - $safeArtist (playing=$isPlaying)")
         } catch (e: RemoteException) {
             DiagLog.w(TAG, "RemoteException calling MediaService, will reconnect", e)
             dimService = null
             isBound.set(false)
+            safeBind()
         }
     }
 
@@ -354,7 +365,7 @@ internal class XingruiInstrumentBridge(context: Context) {
         executor.execute {
             if (currentGeneration.get() != gen) return@execute
             try {
-                val service = dimService ?: return@execute
+                val service = dimServiceForTest ?: dimService ?: return@execute
                 val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
                 try {
                     service.onSourceChanged(sourceType)
@@ -397,7 +408,7 @@ internal class XingruiInstrumentBridge(context: Context) {
                         return@execute
                     }
                     try {
-                        val service = dimService
+                        val service = dimServiceForTest ?: dimService
                         if (service != null) {
                             val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
                             runCatching {
@@ -434,6 +445,7 @@ internal class XingruiInstrumentBridge(context: Context) {
         DiagLog.i(TAG, "Released XingruiInstrumentBridge successfully")
     }
 
+    internal var dimServiceForTest: IDimTransListener? = null
     internal fun getCurrentGenerationForTest(): Int = currentGeneration.get()
     internal fun isReleasedForTest(): Boolean = released.get()
     internal fun hasPendingActionForTest(): Boolean = synchronized(this) { pendingRunnable != null }
@@ -442,6 +454,8 @@ internal class XingruiInstrumentBridge(context: Context) {
     }
     internal fun getSendTokenForTest(): Long = sendToken
     internal fun getLastSentPlayingForTest(): Boolean? = lastSentPlaying
+    internal fun getLastSentTitleForTest(): String? = lastSentTitle
+    internal fun getLastSentArtistForTest(): String? = lastSentArtist
     internal fun drainQueueForTest() {
         runCatching {
             executor.submit {}.get(2, java.util.concurrent.TimeUnit.SECONDS)

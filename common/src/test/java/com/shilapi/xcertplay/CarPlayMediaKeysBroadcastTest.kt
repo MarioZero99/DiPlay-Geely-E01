@@ -2,11 +2,15 @@ package com.shilapi.xcertplay
 
 import android.app.Application
 import android.media.MediaMetadata
+import android.os.RemoteException
+import com.ecarx.xui.adaptapi.diminteraction.IDimListener
+import com.ecarx.xui.adaptapi.diminteraction.IDimTransListener
 import com.shilapi.xcertplay.instrument.XingruiInstrumentBridge
 import com.shilapi.xcertplay.media.CarPlayNowPlaying
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -262,6 +266,8 @@ class CarPlayMediaKeysBroadcastTest {
     @Test
     fun pendingPauseDroppedWhenNewSongSent() {
         val bridge = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
+        val fakeService = FakeDimTransListener()
+        bridge.dimServiceForTest = fakeService
         val gen = bridge.getCurrentGenerationForTest()
         // 模拟已发出第一首「正在播放」
         bridge.simulateFullSendForTest("Song 1", "Artist 1", isPlaying = true)
@@ -280,5 +286,106 @@ class CarPlayMediaKeysBroadcastTest {
         assertTrue("新歌发送必须递增 sendToken", token2 > token1)
         assertFalse("切歌后旧暂存任务已被取消", bridge.hasPendingActionForTest())
         bridge.release()
+    }
+
+    @Test
+    fun sendFailureMaintainsLastSentStateAndRetriesOnNextIdenticalUpdate() {
+        val bridge = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
+        // 初始服务未连接 (dimService == null)
+        bridge.dimServiceForTest = null
+
+        // 尝试发送 Song 1
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", isPlaying = true)
+        bridge.drainQueueForTest()
+
+        // 验证失败未更新记号与已发送状态
+        assertEquals("服务未连上时不能递增 sendToken", 0L, bridge.getSendTokenForTest())
+        assertNull("服务未连上时不能更新 lastSentTitle", bridge.getLastSentTitleForTest())
+        assertNull("服务未连上时不能更新 lastSentArtist", bridge.getLastSentArtistForTest())
+        assertNull("服务未连上时不能更新 lastSentPlaying", bridge.getLastSentPlayingForTest())
+
+        // 连接服务
+        val fakeService = FakeDimTransListener()
+        bridge.dimServiceForTest = fakeService
+
+        // 再次传入完全相同的 Song 1（不会被误当作已发送而拦截）
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", isPlaying = true)
+        bridge.drainQueueForTest()
+
+        assertEquals("重试成功后必须递增 sendToken", 1L, bridge.getSendTokenForTest())
+        assertEquals("Song 1", bridge.getLastSentTitleForTest())
+        assertEquals("Artist 1", bridge.getLastSentArtistForTest())
+        assertEquals(true, bridge.getLastSentPlayingForTest())
+        assertEquals(1, fakeService.updateMediaCalls)
+        assertEquals(1, fakeService.onActionCalls)
+
+        // 第三次传入完全相同的 Song 1，此时已成功发送过，必须被去重拦截不再调用 IPC
+        bridge.updateMedia("Song 1", "Artist 1", "Album 1", isPlaying = true)
+        bridge.drainQueueForTest()
+
+        assertEquals("相同内容不再调用 IPC", 1, fakeService.updateMediaCalls)
+        bridge.release()
+    }
+
+    @Test
+    fun remoteExceptionMaintainsLastSentStateAndAllowsRetry() {
+        val bridge = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
+        val fakeService = FakeDimTransListener().apply { shouldThrow = true }
+        bridge.dimServiceForTest = fakeService
+
+        // 模拟先前已成功发送 Song 1
+        bridge.simulateFullSendForTest("Song 1", "Artist 1", isPlaying = true)
+        val initialToken = bridge.getSendTokenForTest()
+
+        // 尝试切到 Song 2，但 IPC 抛出 RemoteException
+        bridge.updateMedia("Song 2", "Artist 2", "Album 2", isPlaying = true)
+        bridge.drainQueueForTest()
+
+        assertEquals("抛异常时不能递增 sendToken", initialToken, bridge.getSendTokenForTest())
+        assertEquals("抛异常时保持上一次真正发出的歌名", "Song 1", bridge.getLastSentTitleForTest())
+        assertEquals("抛异常时保持上一次真正发出的歌手", "Artist 1", bridge.getLastSentArtistForTest())
+
+        // 恢复正常通信
+        fakeService.shouldThrow = false
+        bridge.dimServiceForTest = fakeService
+
+        // 再次发送 Song 2
+        bridge.updateMedia("Song 2", "Artist 2", "Album 2", isPlaying = true)
+        bridge.drainQueueForTest()
+
+        assertTrue("恢复后重发成功必须递增 sendToken", bridge.getSendTokenForTest() > initialToken)
+        assertEquals("Song 2", bridge.getLastSentTitleForTest())
+        assertEquals("Artist 2", bridge.getLastSentArtistForTest())
+        bridge.release()
+    }
+
+    private class FakeDimTransListener : IDimTransListener.Stub() {
+        var sourceChangedCalls = 0
+        var updateMediaCalls = 0
+        var onActionCalls = 0
+        var shouldThrow = false
+
+        override fun onSourceChanged(source: Int) {
+            if (shouldThrow) throw RemoteException("Simulated failure")
+            sourceChangedCalls++
+        }
+
+        override fun updateMedia(p0: Int, title: String?, album: String?, artist: String?, cover: String?, source: Int) {
+            if (shouldThrow) throw RemoteException("Simulated failure")
+            updateMediaCalls++
+        }
+
+        override fun onAction(action: Int, source: Int) {
+            if (shouldThrow) throw RemoteException("Simulated failure")
+            onActionCalls++
+        }
+
+        override fun onUpdate(p0: Int, p1: Int, p2: String?) {}
+        override fun onListChanged(p0: Int, p1: Int) {}
+        override fun onRadioListChanged(p0: Int, p1: Int) {}
+        override fun registerCallBack(p0: IDimListener?) {}
+        override fun setHighLight(p0: String?, p1: String?, p2: Int) {}
+        override fun setMode(p0: Int, p1: Int) {}
+        override fun setMute(p0: Int) {}
     }
 }
