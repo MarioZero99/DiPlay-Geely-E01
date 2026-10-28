@@ -22,6 +22,7 @@ class DiagnosticExportStoreTest {
         DiagnosticVolumeProbe.volumeListProvider = null
         DiagnosticVolumeProbe.volumePathsProvider = null
         DiagnosticVolumeProbe.volumeStateProvider = null
+        DiagnosticVolumeProbe.procMountsProvider = null
     }
 
     class TestVolume(

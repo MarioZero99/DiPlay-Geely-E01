@@ -11,7 +11,7 @@ internal object DiagnosticRedactor {
      * record was reused or a new one was made, which is the only evidence separating a stale host from
      * a phone that forgot it — while "pair_record=…" is the record itself and never leaves the device.
      */
-    private val secret = Regex("(?i)(pass(word|phrase)?|token|private.?key|certificate|pair.?record\\s*[=:]|ssid|body=|payload=|hex=)")
+    private val secret = Regex("(?i)(pass(word|phrase)?|token\\s*[=:]|private.?key|certificate|pair.?record\\s*[=:]|ssid|body=|payload=|hex=)")
     private val mac = Regex("(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])")
     private val identifier = Regex("(?i)\\b[0-9a-f]{24,}\\b|\\b[0-9a-f]{8}-[0-9a-f-]{27,}\\b")
     private val address = Regex("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![0-9])")

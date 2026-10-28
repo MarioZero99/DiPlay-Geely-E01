@@ -349,7 +349,7 @@ internal class XingruiInstrumentBridge(context: Context) {
             // 对不上就不要记：失败、或者清屏已经发生，都保持清屏留下的空记录，同一首歌还会再发。
             val token = recordFullSendIfCurrent(gen, safeTitle, safeArtist, isPlaying)
             if (token != null) {
-                DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType, gen=$gen, token=$token): $safeTitle - $safeArtist (playing=$isPlaying)")
+                DiagLog.i(TAG, "Sent to Xingrui IPK (source=$sourceType, gen=$gen, seq=$token): $safeTitle - $safeArtist (playing=$isPlaying)")
             } else {
                 DiagLog.d(TAG, "Discarded cluster send bookkeeping because generation moved during IPC (gen=$gen)")
             }

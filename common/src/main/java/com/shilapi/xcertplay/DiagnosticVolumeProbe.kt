@@ -17,6 +17,44 @@ internal object DiagnosticVolumeProbe {
     internal var volumeListProvider: ((Context) -> Array<*>?)? = null
     internal var volumePathsProvider: ((Context) -> Array<String>?)? = null
     internal var volumeStateProvider: ((String) -> String?)? = null
+    internal var procMountsProvider: (() -> String?)? = null
+
+    internal fun unescapeMountPoint(raw: String): String {
+        if (!raw.contains('\\')) return raw
+        val regex = Regex("\\\\([0-7]{3})")
+        return regex.replace(raw) { match ->
+            val octal = match.groupValues[1].toInt(8)
+            octal.toChar().toString()
+        }
+    }
+
+    internal fun parseMountPoints(mountsContent: String): List<File> {
+        val candidates = mutableListOf<File>()
+        val systemPrefixes = listOf(
+            "/system", "/data", "/dev", "/proc", "/sys", "/mnt/secure", "/mnt/asec", "/mnt/obb",
+            "/mnt/shell", "/mnt/runtime", "/cache", "/config",
+        )
+        val targetFs = setOf("vfat", "exfat", "texfat", "ntfs", "fuse", "fuseblk", "ext4", "ext3", "ext2", "f2fs")
+        for (line in mountsContent.lineSequence()) {
+            val parts = line.trim().split(Regex("\\s+"))
+            if (parts.size < 3) continue
+            val dev = parts[0]
+            val mountPoint = unescapeMountPoint(parts[1])
+            val fsType = parts[2].lowercase()
+            if (fsType !in targetFs) continue
+            if (mountPoint == "/" || mountPoint == "/mnt" || mountPoint == "/mnt/media_rw" || mountPoint.startsWith("/storage/emulated") || systemPrefixes.any { mountPoint.startsWith(it) }) continue
+            val isLikelyExternal = dev.startsWith("/dev/block/vold/") ||
+                dev.startsWith("/dev/block/sd") ||
+                mountPoint.startsWith("/storage/") ||
+                mountPoint.startsWith("/mnt/media_rw/")
+            if (!isLikelyExternal) continue
+            val file = File(mountPoint)
+            if (!isPrimaryStorage(file)) {
+                candidates.add(file)
+            }
+        }
+        return candidates
+    }
 
     /**
      * 路径只允许一种替换：
@@ -122,6 +160,40 @@ internal object DiagnosticVolumeProbe {
                     DiagLog.i("DiagnosticVolumeProbe", "Candidate from getVolumePaths: ${effectiveFile.absolutePath} (raw=$path, state=$state)")
                 }
             }
+        }
+
+        // 3. /proc/mounts 挂载点旁证（当系统服务未登记卷时兜底识别物理挂载）
+        if (found.isEmpty()) {
+            val mountsContent = procMountsProvider?.invoke() ?: runCatching {
+                File("/proc/mounts").takeIf { it.canRead() }?.readText()
+            }.getOrNull().orEmpty()
+
+            if (mountsContent.isNotEmpty()) {
+                val mountCandidates = parseMountPoints(mountsContent)
+                for (file in mountCandidates) {
+                    val effectiveFile = resolveVolumePath(file, storageRoot)
+                    found[effectiveFile.absolutePath] = effectiveFile
+                    DiagLog.i("DiagnosticVolumeProbe", "Candidate from /proc/mounts: ${effectiveFile.absolutePath} (raw=${file.absolutePath})")
+                }
+            }
+
+            // 4. MTK 物理挂载目录 /mnt/media_rw/ 直接子目录扫描兜底
+            if (found.isEmpty()) {
+                val mediaRw = File("/mnt/media_rw")
+                val children = runCatching { mediaRw.listFiles() }.getOrNull()
+                if (children != null) {
+                    for (child in children) {
+                        if (!child.isDirectory) continue
+                        val effectiveFile = resolveVolumePath(child, storageRoot)
+                        found[effectiveFile.absolutePath] = effectiveFile
+                        DiagLog.i("DiagnosticVolumeProbe", "Candidate from /mnt/media_rw: ${effectiveFile.absolutePath}")
+                    }
+                }
+            }
+        }
+
+        if (found.isEmpty()) {
+            DiagLog.w("DiagnosticVolumeProbe", "No removable volumes found from getVolumeList, getVolumePaths, mounts, or /mnt/media_rw")
         }
 
         return found.values.toList()

@@ -22,6 +22,9 @@ class DiagnosticVolumeProbeTest {
 
     @After fun tearDown() {
         DiagnosticVolumeProbe.volumeListProvider = null
+        DiagnosticVolumeProbe.volumePathsProvider = null
+        DiagnosticVolumeProbe.volumeStateProvider = null
+        DiagnosticVolumeProbe.procMountsProvider = null
     }
 
     class TestVolume(
@@ -84,5 +87,17 @@ class DiagnosticVolumeProbeTest {
 
         val found = DiagnosticVolumeProbe.candidates(context)
         assertEquals(listOf(validUsb.absolutePath), found.map { it.absolutePath })
+    }
+
+    @Test fun candidatesFallbacksToProcMountsWhenStorageManagerEmpty() {
+        val rawUsb = temp.newFolder("usbotg-sda1")
+        DiagnosticVolumeProbe.volumeListProvider = { emptyArray<Any>() }
+        DiagnosticVolumeProbe.volumePathsProvider = { emptyArray() }
+        DiagnosticVolumeProbe.procMountsProvider = {
+            "/dev/block/vold/8:1 ${rawUsb.absolutePath} vfat rw,dirsync,nosuid,nodev,noexec,relatime 0 0\n"
+        }
+
+        val found = DiagnosticVolumeProbe.candidates(context)
+        assertEquals(listOf(rawUsb.absolutePath), found.map { it.absolutePath })
     }
 }
