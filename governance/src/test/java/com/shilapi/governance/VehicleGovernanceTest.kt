@@ -35,6 +35,61 @@ class VehicleGovernanceTest {
     }
 
     @Test
+    fun carLifeIsReadableBeforeAndAfterInstallButNeverSuppressedWithoutThePackage() {
+        assertFalse("facade must answer before install", VehicleGovernance.isCarLifeInstalled())
+        assertFalse(VehicleGovernance.isCarLifeSuppressed())
+
+        VehicleGovernance.install(app, isExperimentalAllowed = true)
+
+        // Robolectric's package manager has no CarLife, which is also what a non-CarLife head unit
+        // looks like: the card says "not detected" and nothing is reported as suppressed.
+        assertFalse(VehicleGovernance.isCarLifeInstalled())
+        assertFalse(VehicleGovernance.isCarLifeSuppressed())
+    }
+
+    @Test
+    fun carLifeActionAnswersEvenOnAHeadUnitWithoutCarLife() {
+        VehicleGovernance.install(app, isExperimentalAllowed = false)
+
+        val latch = CountDownLatch(1)
+        var reported: Boolean? = null
+        VehicleGovernance.setCarLifeSuppressionEnabled(true) { success ->
+            reported = success
+            latch.countDown()
+        }
+
+        assertTrue("callback must answer rather than hang", latch.await(2, TimeUnit.SECONDS))
+        // Nothing to disable here, so the action reports "nothing to do" as success. This is also
+        // what an official package does, which is why CarLife is not behind the voice/experimental
+        // gate: the USB port it takes is the port CarPlay needs.
+        assertEquals(true, reported)
+    }
+
+    @Test
+    fun carLifeIsNotBehindTheVoiceExperimentalGate() {
+        VehicleGovernance.install(app, isExperimentalAllowed = false)
+
+        assertFalse("the voice governor is fenced off in this build", VehicleGovernance.isSupported)
+        // The controls still answer: a fenced-off voice feature must not take the CarLife buttons
+        // with it.
+        assertFalse(VehicleGovernance.isCarLifeInstalled())
+    }
+
+    @Test
+    fun theCarLifeRestoreIsNotRunOnAppExit() {
+        // The voice suppression is a loan and is given back on exit; CarLife is not. This test is
+        // about the facade's exit path staying as it was -- only the voice governor is asked to
+        // restore, so a restore the driver did not ask for cannot happen at shutdown.
+        VehicleGovernance.install(app, isExperimentalAllowed = true)
+
+        val latch = CountDownLatch(1)
+        VehicleGovernance.onAppExit { latch.countDown() }
+
+        assertTrue("exit must complete", latch.await(2, TimeUnit.SECONDS))
+        assertFalse("CarLife state on exit is read, never written", VehicleGovernance.isCarLifeSuppressed())
+    }
+
+    @Test
     fun gatesFeatureWhenExperimentalNotAllowed() {
         VehicleGovernance.install(app, isExperimentalAllowed = false)
         assertFalse("Must be unsupported when experimental is disabled", VehicleGovernance.isSupported)

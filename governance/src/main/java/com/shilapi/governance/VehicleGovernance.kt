@@ -1,6 +1,8 @@
 package com.shilapi.governance
 
 import android.app.Application
+import com.shilapi.governance.carlife.CarLifeGovernor
+import com.shilapi.governance.core.CommandQueue
 import com.shilapi.governance.core.GovernorFactory
 import com.shilapi.governance.core.IVehicleGovernor
 import com.shilapi.governance.core.NoOpGovernor
@@ -29,6 +31,19 @@ object VehicleGovernance {
 
     @Volatile
     private var persistence: GovernancePersistence? = null
+
+    /**
+     * CarLife's own governor, kept apart from [governor].
+     *
+     * [governor] is the voice service, gated on [isSupported] and put back on exit; CarLife is a
+     * standing choice made by the driver, applies on a head unit the voice one does not support, and
+     * has to survive a restart. Sharing one slot would make either build gate silence it.
+     */
+    @Volatile
+    private var carLife: CarLifeGovernor? = null
+
+    /** Serialises every privileged command the two governors issue. */
+    private val commandQueue = CommandQueue()
 
     /**
      * Optional listener to bridge governance log events to the app's diagnostic logger.
@@ -95,6 +110,10 @@ object VehicleGovernance {
             else -> GovernorFactory.create(application)
         }
 
+        // CarLife is not part of the voice/experimental gate: the USB port it takes is the port
+        // CarPlay needs, so the controls are offered even where the voice governor is fenced off.
+        carLife = CarLifeGovernor(application, commandQueue)
+
         scope.launch {
             if (isExperimentalAllowed && governor.isSupported && store.isSuppressionConfigured()) {
                 governor.applySuppression("startup-auto-suppress")
@@ -102,6 +121,11 @@ object VehicleGovernance {
                 governor.ensureSelfHealed("startup-auto-heal")
             }
         }
+
+        // Nothing to replay for CarLife. It is not a loan that has to be given back or re-taken at
+        // startup: disabling its components writes to the package state and stays written across a
+        // reboot. Re-applying on every start would be a second mechanism for something that already
+        // holds, and would quietly undo the driver's "restore" the next time the app launched.
     }
 
     /**
@@ -143,8 +167,45 @@ object VehicleGovernance {
     }
 
     /**
+     * Whether Baidu CarLife is on this head unit at all.
+     *
+     * A plain package-manager read: cheap enough to call while laying out the settings page.
+     */
+    fun isCarLifeInstalled(): Boolean = carLife?.isInstalled() ?: false
+
+    /**
+     * Whether CarLife's USB receivers and its connect service are all off right now.
+     *
+     * Read from the live component state, and that read is the only source of truth on this page:
+     * there is no saved switch beside it, because disabling the components writes to the package
+     * state and nothing has to be re-applied afterwards.
+     */
+    fun isCarLifeSuppressed(): Boolean = carLife?.isSuppressed() ?: false
+
+    /**
+     * Disables CarLife's USB components, or puts them back. One action, done once.
+     *
+     * [onComplete] runs on the IO scope the work happened on; the caller hops back to the main thread
+     * itself. It reports the state the car ended up in, which is what the buttons redraw from.
+     */
+    fun setCarLifeSuppressionEnabled(enabled: Boolean, onComplete: ((Boolean) -> Unit)? = null) {
+        val governor = carLife ?: run {
+            onComplete?.invoke(false)
+            return
+        }
+        scope.launch {
+            val ok = if (enabled) governor.applySuppression() else governor.applyRestoration()
+            onComplete?.invoke(ok)
+        }
+    }
+
+    /**
      * Called when the app is terminating (before process death).
      * Blocks synchronously with a timeout to guarantee restoration before process death.
+     *
+     * Only the voice service is put back. CarLife is not: its components stay however the driver left
+     * them, which is the point of the two buttons -- a restore is something the driver asked for, not
+     * something the app does behind their back when it closes.
      */
     fun onAppExit(timeoutMs: Long = 1500L, onComplete: (() -> Unit)? = null) {
         if (!governor.isSupported) {
@@ -167,5 +228,6 @@ object VehicleGovernance {
         installed.set(false)
         governor = NoOpGovernor
         persistence = null
+        carLife = null
     }
 }
