@@ -49,11 +49,20 @@ class DiagnosticVolumeProbeTest {
         assertEquals(storageStick.absolutePath, resolved.absolutePath)
     }
 
-    @Test fun resolveVolumePathStaysOnMediaRwWhenStorageIsEmptyDirectory() {
+    @Test fun resolveVolumePathUsesStorageWhenEmptyDirectory() {
         val raw = File("/mnt/media_rw/usbotg-sda1")
         val storage = temp.newFolder("storage")
         val storageStick = File(storage, "usbotg-sda1").apply { mkdirs() }
         // Directory exists but is completely empty (no files)
+
+        val resolved = DiagnosticVolumeProbe.resolveVolumePath(raw, storageRoot = storage)
+        assertEquals(storageStick.absolutePath, resolved.absolutePath)
+    }
+
+    @Test fun resolveVolumePathStaysOnMediaRwWhenStorageDirectoryDoesNotExist() {
+        val raw = File("/mnt/media_rw/usbotg-sda1")
+        val storage = temp.newFolder("storage")
+        // Directory does not exist under storage
 
         val resolved = DiagnosticVolumeProbe.resolveVolumePath(raw, storageRoot = storage)
         assertEquals(raw.absolutePath, resolved.absolutePath)

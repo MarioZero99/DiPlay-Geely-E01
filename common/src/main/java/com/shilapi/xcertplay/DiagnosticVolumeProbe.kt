@@ -59,8 +59,8 @@ internal object DiagnosticVolumeProbe {
     /**
      * 路径只允许一种替换：
      * getPath() 是 /mnt/media_rw/某个名字，名字里面没有斜线，
-     * 而且 /storage/同一个名字 的 listFiles() 至少返回一项。这时用 /storage 那条。
-     * 空目录不算。否则留 getPath()。禁止改写成 /storage/usbotg。
+     * 而且 /storage/同一个名字 存在且为目录。这时用 /storage 那条（无论是空目录还是已有文件）。
+     * 否则留 getPath()。禁止改写成非同名目录（例如 /storage/usbotg）。
      */
     internal fun resolveVolumePath(dir: File, storageRoot: File = File("/storage")): File {
         val path = dir.absolutePath
@@ -69,12 +69,11 @@ internal object DiagnosticVolumeProbe {
         val leaf = path.removePrefix(prefix).trim('/')
         if (leaf.isEmpty() || leaf.contains('/')) return dir
         val twin = File(storageRoot, leaf)
-        val listed = runCatching { twin.listFiles() }.getOrNull()
-        if (listed != null && listed.isNotEmpty()) {
-            DiagLog.i("DiagnosticExport", "usb $path -> ${twin.absolutePath} (has ${listed.size} files)")
+        if (twin.isDirectory) {
+            DiagLog.i("DiagnosticExport", "usb $path -> ${twin.absolutePath}")
             return twin
         }
-        DiagLog.i("DiagnosticExport", "usb $path kept (twin ${twin.absolutePath} not found or empty)")
+        DiagLog.i("DiagnosticExport", "usb $path kept (twin ${twin.absolutePath} not found)")
         return dir
     }
 
