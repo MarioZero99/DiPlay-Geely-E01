@@ -29,6 +29,8 @@ class NcmUsbBridge internal constructor(
     descriptorHostMac: ByteArray?,
     private val airPlaySessionLive: () -> Boolean = { true },
     private val writeWindow: NcmWriteWindow = NcmWriteWindow(),
+    val liveness: WiredLivenessStats = WiredLivenessStats(),
+    val faultRecorder: FirstFaultRecorder? = null,
 ) : Closeable {
     private val descriptorMac = descriptorHostMac?.copyOf()
     val hostMac: ByteArray? get() = descriptorMac?.copyOf()
@@ -105,6 +107,7 @@ class NcmUsbBridge internal constructor(
                 }
 
                 NcmWriteWindow.Verdict.EXPIRED -> throw failSession(
+                    DisconnectOrigin.NCM_WRITE_EXHAUSTED,
                     "NCM write failed while the phone never authorized CarPlay within " +
                         "${NcmWriteWindow.AUTHORIZATION_GRACE_MILLIS / MILLIS_PER_SECOND}s",
                 )
@@ -119,6 +122,7 @@ class NcmUsbBridge internal constructor(
             if (consecutiveWriteFailures >= MAX_CONSECUTIVE_WRITE_FAILURES) {
                 // USBMUX tears its whole session down for the same class of failure.
                 throw failSession(
+                    DisconnectOrigin.NCM_WRITE_EXHAUSTED,
                     "NCM write failed $consecutiveWriteFailures times while the data path was live",
                 )
             }
@@ -127,8 +131,9 @@ class NcmUsbBridge internal constructor(
         if (transferred != block.size) {
             // The phone holds a truncated NTB16 block, so this frame stream cannot be resumed in
             // place; record the failure so the read side stops alongside this writer.
-            throw failSession("NCM write transferred $transferred of ${block.size} bytes")
+            throw failSession(DisconnectOrigin.NCM_WRITE_EXHAUSTED, "NCM write transferred $transferred of ${block.size} bytes")
         }
+        liveness.noteOutbound(transferred, clockMillis())
         consecutiveWriteFailures = 0
         loggedAuthorizationWait = false
         if (loggedWriteTimeout) {
@@ -234,15 +239,15 @@ class NcmUsbBridge internal constructor(
         while (true) {
             if (bufferedSize < 12) return
             if (readU32(buffered, 0) != Ntb16Codec.NTH16_SIG) {
-                throw failSession("NCM read buffer does not begin with an NTB16 header")
+                throw failSession(DisconnectOrigin.NCM_NTB_CORRUPT, "NCM read buffer does not begin with an NTB16 header")
             }
             val blockLength = readU16(buffered, 8)
-            if (blockLength < 28) throw failSession("Invalid NTB16 block length $blockLength")
+            if (blockLength < 28) throw failSession(DisconnectOrigin.NCM_NTB_CORRUPT, "Invalid NTB16 block length $blockLength")
             val padded = blockLength % USB_PACKET_SIZE == 0
             val wireLength = blockLength + if (padded) 1 else 0
             if (bufferedSize < wireLength) return
             if (padded && buffered[blockLength].toInt() != 0) {
-                throw failSession("Invalid NTB16 short-packet pad")
+                throw failSession(DisconnectOrigin.NCM_NTB_CORRUPT, "Invalid NTB16 short-packet pad")
             }
             for (frame in Ntb16Codec.parse(buffered, 0, blockLength)) enqueueFrame(frame)
             val remaining = bufferedSize - wireLength
@@ -266,8 +271,9 @@ class NcmUsbBridge internal constructor(
     private fun enqueueFrame(frame: ByteArray) {
         // Marks the point the phone's data path is up; the write side keys its failure policy off it.
         inboundFrameSeen = true
+        liveness.noteInbound(frame.size, clockMillis())
         if (frames.size >= MAX_QUEUED_FRAMES || queuedBytes + frame.size > MAX_QUEUED_BYTES) {
-            throw failSession("NCM frame queue exceeded its bounds")
+            throw failSession(DisconnectOrigin.NCM_QUEUE_OVERFLOW, "NCM frame queue exceeded its bounds")
         }
         frames.addLast(frame)
         queuedBytes += frame.size
@@ -288,29 +294,34 @@ class NcmUsbBridge internal constructor(
                 val current = readRequest ?: UsbRequest().also {
                     if (!it.initialize(connection, inEndpoint)) {
                         it.close()
-                        throw failSession("Android could not initialize the NCM read request")
+                        throw failSession(DisconnectOrigin.NCM_READ_FAULT, "Android could not initialize the NCM read request")
                     }
                     readRequest = it
                 }
                 if (!readQueued) {
                     directReadBuffer.clear()
-                    if (!queueUsbRequest(current, directReadBuffer)) throw failSession("Android could not queue the NCM read request")
+                    if (!queueUsbRequest(current, directReadBuffer)) throw failSession(DisconnectOrigin.NCM_READ_FAULT, "Android could not queue the NCM read request")
                     readQueued = true
                 }
                 current
             }
         } catch (error: RuntimeException) {
-            throw failSession("NCM read failed", error)
+            throw failSession(DisconnectOrigin.NCM_READ_FAULT, "NCM read failed", error)
         }
         try {
+            val startWait = clockMillis()
             val completed = try {
                 waitForUsbRequest(connection, timeoutMillis)
             } catch (_: TimeoutException) {
                 // Nothing arrived yet; the request stays queued for the next call. USBMUX owns
                 // authoritative detach/failure detection for the same phone.
                 return null
-            } ?: throw failSession("Android returned no NCM read request")
-            if (completed !== request) throw failSession("Android completed an unexpected NCM request")
+            } ?: throw failSession(DisconnectOrigin.NCM_READ_FAULT, "Android returned no NCM read request")
+            val waitDuration = clockMillis() - startWait
+            if (waitDuration > 3000L) {
+                DiagLog.w(IphoneCarPlayConfiguration.TAG, "ncm read long block in requestWait: ${waitDuration}ms")
+            }
+            if (completed !== request) throw failSession(DisconnectOrigin.NCM_READ_FAULT, "Android completed an unexpected NCM request")
             readQueued = false
             val transferred = directReadBuffer.position()
             if (transferred <= 0) return null
@@ -320,11 +331,27 @@ class NcmUsbBridge internal constructor(
         } catch (error: IphoneUsbException) {
             throw error
         } catch (error: RuntimeException) {
-            throw failSession("NCM read failed", error)
+            throw failSession(DisconnectOrigin.NCM_READ_FAULT, "NCM read failed", error)
         }
     }
 
-    private fun failSession(message: String, cause: Throwable? = null): IphoneUsbException.DeviceUnavailable {
+    private fun failSession(
+        origin: DisconnectOrigin,
+        message: String,
+        cause: Throwable? = null,
+    ): IphoneUsbException.DeviceUnavailable {
+        faultRecorder?.record(origin, message, clockMillis())
+        val diag = formatFailureSummary(
+            message = message,
+            origin = origin,
+            consecutiveWriteFailures = consecutiveWriteFailures,
+            queuedFrames = frames.size,
+            queuedBytes = queuedBytes,
+            stats = liveness,
+            nowMillis = clockMillis(),
+            recorder = faultRecorder,
+        )
+        DiagLog.e(IphoneCarPlayConfiguration.TAG, diag, cause)
         val error = IphoneUsbException.DeviceUnavailable(message, cause)
         synchronized(stateLock) {
             if (failure == null) failure = error
@@ -362,10 +389,13 @@ class NcmUsbBridge internal constructor(
         private const val NANOS_PER_MILLISECOND = 1_000_000L
 
         /** Claims and activates the NCM control/data interfaces; owns the connection on success. */
-        fun open(
+        internal fun open(
             connection: UsbDeviceConnection,
             function: NcmFunctionDiscovery.NcmFunction,
             airPlaySessionLive: () -> Boolean = { true },
+            writeWindow: NcmWriteWindow = NcmWriteWindow(),
+            liveness: WiredLivenessStats = WiredLivenessStats(),
+            faultRecorder: FirstFaultRecorder? = null,
         ): NcmUsbBridge {
             val claimed = ArrayList<UsbInterface>(2)
             try {
@@ -426,6 +456,9 @@ class NcmUsbBridge internal constructor(
                     claimed,
                     descriptorHostMac,
                     airPlaySessionLive = airPlaySessionLive,
+                    writeWindow = writeWindow,
+                    liveness = liveness,
+                    faultRecorder = faultRecorder,
                 )
             } catch (error: Throwable) {
                 for (usbInterface in claimed.asReversed()) {
@@ -486,6 +519,22 @@ class NcmUsbBridge internal constructor(
 
         private fun ByteArray.macString(): String =
             joinToString(":") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+        fun formatFailureSummary(
+            message: String,
+            origin: DisconnectOrigin,
+            consecutiveWriteFailures: Int,
+            queuedFrames: Int,
+            queuedBytes: Int,
+            stats: WiredLivenessStats,
+            nowMillis: Long,
+            recorder: FirstFaultRecorder?,
+        ): String {
+            recorder?.record(origin, message, nowMillis)
+            val snap = stats.snapshot(nowMillis)
+            val recordedOrigin = recorder?.origin ?: origin
+            return "ncm-fail: $message; origin=$recordedOrigin; ${snap.summary()}; outFailures=$consecutiveWriteFailures queuedFrames=$queuedFrames queuedBytes=$queuedBytes"
+        }
 
         private const val USB_INTERFACE_DESCRIPTOR_TYPE = 0x04
         private const val USB_REQUEST_GET_DESCRIPTOR = 0x06
