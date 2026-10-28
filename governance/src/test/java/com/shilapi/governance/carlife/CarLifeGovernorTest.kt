@@ -180,22 +180,28 @@ class CarLifeGovernorTest {
      */
     @Test
     fun everyPresenceCheckAsksForDisabledComponents() {
-        val off = all.toSet()
+        installCarLife()
+        // The real enabled-setting half: all three are off, written through the API `pm` uses.
+        for (className in all) {
+            context.packageManager.setComponentEnabledSetting(
+                ComponentName(CarLifeGovernor.PACKAGE_NAME, className),
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP,
+            )
+        }
+
         val asked = mutableListOf<Int>()
         val governor = CarLifeGovernor(
             context = context,
             declared = { name, flags ->
                 asked += flags
                 name.className in all &&
-                    (name.className !in off || flags and PackageManager.GET_DISABLED_COMPONENTS != 0)
+                    (flags and PackageManager.GET_DISABLED_COMPONENTS != 0)
             },
         )
 
-        assertTrue("a component that is off still exists", governor.isSuppressed())
-        assertTrue(
-            "the lookup was never called, so nothing was proved",
-            asked.isNotEmpty(),
-        )
+        assertTrue("off must read as off, which needs the components to still exist", governor.isSuppressed())
+        assertTrue("the lookup was never called, so nothing was proved", asked.isNotEmpty())
         assertTrue(
             "every presence check must ask for disabled components, or 'off' reads as 'gone'",
             asked.all { it and PackageManager.GET_DISABLED_COMPONENTS != 0 },
