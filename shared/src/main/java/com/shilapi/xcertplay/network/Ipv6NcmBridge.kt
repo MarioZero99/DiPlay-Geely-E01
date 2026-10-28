@@ -1,8 +1,11 @@
 package com.shilapi.xcertplay.network
 
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import com.shilapi.xcertplay.DiagLog
+import com.shilapi.xcertplay.transport.DisconnectOrigin
 import com.shilapi.xcertplay.transport.EthernetIpv6Codec
+import com.shilapi.xcertplay.transport.FirstFaultRecorder
 import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.io.Closeable
 import java.io.FileInputStream
@@ -23,8 +26,15 @@ class Ipv6NcmBridge(
     private val ncm: NcmUsbBridge,
     private val tun: ParcelFileDescriptor,
     private val hostMac: ByteArray,
+    private val faultRecorder: FirstFaultRecorder? = null,
     private val onError: (Throwable) -> Unit,
 ) : Closeable {
+    constructor(
+        ncm: NcmUsbBridge,
+        tun: ParcelFileDescriptor,
+        hostMac: ByteArray,
+        onError: (Throwable) -> Unit,
+    ) : this(ncm, tun, hostMac, null, onError)
     init {
         require(hostMac.size == EthernetIpv6Codec.MAC_BYTES) { "hostMac must be 6 bytes" }
     }
@@ -82,9 +92,9 @@ class Ipv6NcmBridge(
                 output.write(frame, ipv6.payloadOffset, ipv6.payloadLength)
             }
         } catch (error: IOException) {
-            if (running.get()) onError(error)
+            dispatchError("tun-write", error)
         } catch (error: RuntimeException) {
-            if (running.get()) onError(error)
+            dispatchError("ncm-recv", error)
         }
     }
 
@@ -95,7 +105,7 @@ class Ipv6NcmBridge(
             while (running.get()) {
                 val length = input.read(buffer)
                 if (length == -1) {
-                    if (running.get()) onError(IOException("NCM IPv6 tunnel closed"))
+                    dispatchError("tun-read", IOException("NCM IPv6 tunnel closed"))
                     return
                 }
                 // Android's TUN fd may transiently report a zero-byte read while its network is
@@ -133,9 +143,17 @@ class Ipv6NcmBridge(
                 ncm.send(frame, WRITE_TIMEOUT_MILLIS)
             }
         } catch (error: IOException) {
-            if (running.get()) onError(error)
+            dispatchError("tun-read", error)
         } catch (error: RuntimeException) {
-            if (running.get()) onError(error)
+            dispatchError("ncm-send", error)
+        }
+    }
+
+    private fun dispatchError(source: String, error: Throwable) {
+        if (running.get()) {
+            classifyAndRecordFault(source, error, faultRecorder)
+            DiagLog.w(TAG, "ipv6 bridge error [$source]: ${error.message ?: error.javaClass.simpleName}", error)
+            onError(error)
         }
     }
 
@@ -170,12 +188,29 @@ class Ipv6NcmBridge(
     private fun ByteArray.u16(offset: Int): Int =
         ((this[offset].toInt() and 0xff) shl 8) or (this[offset + 1].toInt() and 0xff)
 
-    private companion object {
+    internal companion object {
         const val TAG = "xcertplay-usb"
         const val READ_TIMEOUT_MILLIS = 1_000L
         const val WRITE_TIMEOUT_MILLIS = 2_000
         const val TUN_READ_BYTES = 4_096
         const val ZERO_READ_BACKOFF_NANOS = 1_000_000L
         const val JOIN_TIMEOUT_MILLIS = 2_000L
+
+        fun classifyAndRecordFault(
+            source: String,
+            error: Throwable,
+            recorder: FirstFaultRecorder?,
+            nowMillis: Long = SystemClock.elapsedRealtime(),
+        ): DisconnectOrigin {
+            val origin = when {
+                error is IOException && error.message?.contains("tunnel closed") == true -> DisconnectOrigin.TUN_CLOSED
+                source == "tun-read" || source == "tun-write" -> DisconnectOrigin.TUN_IO_ERROR
+                source == "ncm-send" -> DisconnectOrigin.NCM_WRITE_EXHAUSTED
+                source == "ncm-recv" -> DisconnectOrigin.NCM_READ_FAULT
+                else -> DisconnectOrigin.UNKNOWN
+            }
+            recorder?.record(origin, "ipv6-bridge [$source]: ${error.message ?: error.javaClass.simpleName}", nowMillis)
+            return origin
+        }
     }
 }
