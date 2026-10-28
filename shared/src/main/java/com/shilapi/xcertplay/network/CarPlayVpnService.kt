@@ -15,6 +15,8 @@ import com.shilapi.xcertplay.airplay.AirPlaySession
 import com.shilapi.xcertplay.airplay.AirPlaySessionListener
 import com.shilapi.xcertplay.airplay.PairingStore
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
+import com.shilapi.xcertplay.transport.DisconnectOrigin
+import com.shilapi.xcertplay.transport.FirstFaultRecorder
 import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.io.IOException
 import java.net.BindException
@@ -22,6 +24,7 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -62,6 +65,7 @@ class CarPlayVpnService : VpnService() {
     private var bridge: Ipv6NcmBridge? = null
     private var tun: ParcelFileDescriptor? = null
     private var attachGeneration = 0
+    @Volatile private var faultRecorder: FirstFaultRecorder? = null
 
     override fun onBind(intent: Intent?): IBinder = binder
 
@@ -83,6 +87,7 @@ class CarPlayVpnService : VpnService() {
         }
         active.set(true)
         val generation = ++attachGeneration
+        faultRecorder = ncm.faultRecorder
         return try {
             val address = InetAddress.getByName(linkLocal)
             if (address !is Inet6Address || !address.isLinkLocalAddress) {
@@ -108,7 +113,7 @@ class CarPlayVpnService : VpnService() {
                 ?: throw IOException("VpnService.establish returned null")
             tun = tunFd
 
-            val ipv6Bridge = Ipv6NcmBridge(ncm, tunFd, hostMac) { error ->
+            val ipv6Bridge = Ipv6NcmBridge(ncm, tunFd, hostMac, ncm.faultRecorder) { error ->
                 onTransportError(generation, listener, error)
             }
             ipv6Bridge.start()
@@ -294,6 +299,7 @@ class CarPlayVpnService : VpnService() {
                             }
                         },
                         media = current.media,
+                        faultRecorder = faultRecorder,
                     ).also(::addSession)
                 }
                 session.start()
@@ -333,7 +339,14 @@ class CarPlayVpnService : VpnService() {
         error: Throwable,
     ) {
         val message = error.message ?: error.javaClass.simpleName
-        DiagLog.e(TAG, "CarPlay transport stopped: $message", error)
+        val origin = faultRecorder?.origin ?: DisconnectOrigin.UNKNOWN
+        val firstMsg = faultRecorder?.message ?: "none"
+        val sessionCount = synchronized(sessionsLock) { sessions.size }
+        DiagLog.e(
+            TAG,
+            "CarPlay transport stopped: $message (origin=$origin, firstFault=$firstMsg, activeSessions=$sessionCount)",
+            error,
+        )
         Thread(
             {
                 synchronized(this) {
@@ -355,6 +368,7 @@ class CarPlayVpnService : VpnService() {
         attachGeneration += 1
         active.set(false)
         attachment = null
+        faultRecorder = null
         serverSocket?.close()
         serverSocket = null
         additionalServers.forEach { it.close() }
@@ -375,5 +389,20 @@ class CarPlayVpnService : VpnService() {
 
         /** Returns the VPN consent intent, or null when consent is already granted. */
         fun prepare(context: Context): Intent? = VpnService.prepare(context)
+
+        fun classifySocketFault(
+            error: Throwable,
+            recorder: FirstFaultRecorder?,
+            nowMillis: Long = System.currentTimeMillis(),
+        ): DisconnectOrigin {
+            val msg = error.message.orEmpty().lowercase()
+            val origin = when {
+                msg.contains("timed out") || msg.contains("etimedout") -> DisconnectOrigin.TCP_TIMEOUT
+                msg.contains("reset by peer") || msg.contains("econnreset") || msg.contains("broken pipe") -> DisconnectOrigin.TCP_PEER_RESET
+                else -> DisconnectOrigin.UNKNOWN
+            }
+            recorder?.record(origin, "tcp-socket: ${error.message ?: error.javaClass.simpleName}", nowMillis)
+            return origin
+        }
     }
 }

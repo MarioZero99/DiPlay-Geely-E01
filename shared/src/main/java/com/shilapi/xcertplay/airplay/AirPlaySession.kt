@@ -3,7 +3,9 @@ package com.shilapi.xcertplay.airplay
 import android.util.Log
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
 import com.shilapi.xcertplay.media.TouchLatencyProbe
+import com.shilapi.xcertplay.network.CarPlayVpnService
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
+import com.shilapi.xcertplay.transport.FirstFaultRecorder
 import com.shilapi.xcertplay.transport.WiredLinkReport
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -80,6 +82,7 @@ class AirPlaySession(
     private val mfi: MfiAuthenticator?,
     private val listener: AirPlaySessionListener,
     private val media: AirPlayMediaHandler,
+    private val faultRecorder: FirstFaultRecorder? = null,
 ) : Closeable {
     internal val pairSetup = PairSetup(identity, pairings)
     internal val pairVerify = PairVerify(identity, pairings)
@@ -366,6 +369,9 @@ class AirPlaySession(
             }
         } catch (error: Exception) {
             closeReason = "control I/O failed: ${error.message ?: error.javaClass.simpleName}"
+            faultRecorder?.let { recorder ->
+                CarPlayVpnService.classifySocketFault(error, recorder)
+            }
             if (!closed.get()) Log.e(TAG, "airplay $closeReason", error)
         } finally {
             debugLog("airplay control closing reason=$closeReason activeStreams=$activeStreams")
