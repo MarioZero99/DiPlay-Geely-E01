@@ -1,5 +1,6 @@
 package com.shilapi.governance.carlife
 
+import android.content.ComponentName
 import android.content.Context
 import com.shilapi.governance.platform.E01PrivilegedBridge
 import kotlinx.coroutines.runBlocking
@@ -116,10 +117,10 @@ class CarLifeGovernorTest {
     }
 
     @Test
-    fun oneCommandPerComponentAndTheForceStopLast() = runBlocking {
+    fun oneCommandPerComponentAndTheForceStopComesFirst() = runBlocking {
         val packageState = FakePackage()
         val shell = FakeShell { command ->
-            val className = command.substringAfter('/')
+            val className = command.substringAfter('/', missingDelimiterValue = "")
             if (className.isNotEmpty()) packageState.disabled += className
             E01PrivilegedBridge.Result.Success("")
         }
@@ -128,16 +129,56 @@ class CarLifeGovernorTest {
         assertTrue(governor.applySuppression())
 
         // The 220-byte budget is per command: joining these with `;` is one line the bridge refuses,
-        // so the shape of this list is the guarantee, not a style choice.
+        // so the shape of this list is the guarantee, not a style choice. The stop comes first so the
+        // port is released before anything is disallowed, not as a side effect of the last command.
         assertEquals(
-            listOf(
+            listOf("am force-stop com.baidu.carlifevehicle") + listOf(
                 "pm disable com.baidu.carlifevehicle/com.baidu.carlifevehicle.broadcast.BroadcastActionReceiver",
                 "pm disable com.baidu.carlifevehicle/com.baidu.carlifevehicle.connect.AOAAccessoryReceiver",
                 "pm disable com.baidu.carlifevehicle/com.baidu.carlifevehicle.connect.ConnectService",
             ),
-            shell.sent.dropLast(1),
+            shell.sent,
         )
-        assertEquals("CarLife has to be stopped for a port it already holds", CarLifeGovernor.FORCE_STOP_COMMAND, shell.sent.last())
+    }
+
+    /**
+     * The shape that shipped broken, reproduced through the real lookup.
+     *
+     * On API 22 a disabled component is invisible to `getReceiverInfo`/`getServiceInfo` unless the
+     * caller passes `GET_DISABLED_COMPONENTS`; the app-side wrapper turns that into a thrown
+     * `NameNotFoundException`. So asking "does the package declare this class" *after* turning it off
+     * answered "no", a successful disable read back as "not suppressed", and a press after that
+     * concluded CarLife was not installed at all.
+     *
+     * The fake below answers the way the real service does -- and it reads the caller's flags, so a
+     * lookup that forgets them fails this test rather than agreeing with itself.
+     */
+    private fun api22Lookup(declared: List<String>, disabled: Set<String>): AndroidComponentLookup {
+        fun visible(name: ComponentName, flags: Int): Boolean =
+            name.className in declared &&
+                (name.className !in disabled || (flags and android.content.pm.PackageManager.GET_DISABLED_COMPONENTS) != 0)
+        return AndroidComponentLookup(
+            receiverDeclared = { name, flags -> visible(name, flags) && !name.className.endsWith("ConnectService") },
+            serviceDeclared = { name, flags -> visible(name, flags) && name.className.endsWith("ConnectService") },
+        )
+    }
+
+    @Test
+    fun aDisabledComponentStillExistsWhenTheLookupAsksForDisabledComponents() {
+        val lookup = api22Lookup(allPresent, disabled = allPresent.toSet())
+
+        for (className in allPresent) {
+            assertTrue(
+                "$className is off, not gone; reading it as absent is what made the card lie",
+                lookup.exists(className),
+            )
+        }
+    }
+
+    @Test
+    fun aClassThePackageDoesNotDeclareIsAbsent() {
+        val lookup = api22Lookup(allPresent, disabled = emptySet())
+        assertFalse(lookup.exists("com.baidu.carlifevehicle.broadcast.NotAComponent"))
     }
 
     @Test
@@ -184,7 +225,7 @@ class CarLifeGovernorTest {
     fun aComponentTheBuildDoesNotCarryIsSkippedAndSentNothing() = runBlocking {
         val packageState = FakePackage(present = listOf(broadcast, aoa))
         val shell = FakeShell { command ->
-            packageState.disabled += command.substringAfter('/')
+            packageState.disabled += command.substringAfter('/', missingDelimiterValue = "")
             E01PrivilegedBridge.Result.Success("")
         }
 
@@ -198,10 +239,37 @@ class CarLifeGovernorTest {
     }
 
     @Test
+    fun pressingDisableASecondTimeDoesNotClaimCarLifeIsNotInstalled() = runBlocking {
+        // The second half of the bug: once the components were off they read as absent, so the
+        // "nothing present means not installed" branch fired and reported a head unit that has
+        // CarLife as one that does not.
+        val packageState = FakePackage()
+        val shell = FakeShell { command ->
+            val className = command.substringAfter('/', missingDelimiterValue = "")
+            if (command.startsWith("pm disable ") && className.isNotEmpty()) packageState.disabled += className
+            if (command.startsWith("pm enable ") && className.isNotEmpty()) packageState.disabled -= className
+            E01PrivilegedBridge.Result.Success("")
+        }
+
+        val governor = CarLifeGovernor(packageState, shell)
+
+        assertTrue(governor.applySuppression())
+        assertTrue("CarLife is still installed", governor.isInstalled())
+
+        val sentFirstRun = shell.sent.size
+        assertTrue("a second press still reports suppressed", governor.applySuppression())
+        assertTrue("and is still installed", governor.isInstalled())
+        assertTrue(
+            "a second press asks the car again rather than short-circuiting to 'not installed'",
+            shell.sent.size > sentFirstRun,
+        )
+    }
+
+    @Test
     fun restorationTurnsTheComponentsBackOnAndDoesNotStartCarLife() = runBlocking {
         val packageState = FakePackage().apply { disabled += allPresent }
         val shell = FakeShell { command ->
-            if (command.startsWith("pm enable ")) packageState.disabled -= command.substringAfter('/')
+            if (command.startsWith("pm enable ")) packageState.disabled -= command.substringAfter('/', missingDelimiterValue = "")
             E01PrivilegedBridge.Result.Success("")
         }
 

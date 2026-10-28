@@ -35,9 +35,10 @@ object VehicleGovernance {
     /**
      * CarLife's own governor, kept apart from [governor].
      *
-     * [governor] is the voice service, gated on [isSupported] and put back on exit; CarLife is a
-     * standing choice made by the driver, applies on a head unit the voice one does not support, and
-     * has to survive a restart. Sharing one slot would make either build gate silence it.
+     * [governor] is the voice service, gated on [isSupported] and put back on exit; CarLife is a pair
+     * of one-off actions the driver runs, offered even on a head unit the voice governor does not
+     * support, and holding until the driver restores it. Sharing one slot would make either build gate
+     * silence it.
      */
     @Volatile
     private var carLife: CarLifeGovernor? = null
