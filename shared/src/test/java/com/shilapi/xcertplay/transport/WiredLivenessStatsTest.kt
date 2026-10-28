@@ -24,6 +24,39 @@ class WiredLivenessStatsTest {
     }
 
     @Test
+    fun firstFaultRecorderRejectsUnknownOrigin() {
+        val recorder = FirstFaultRecorder()
+        val recorded = recorder.record(DisconnectOrigin.UNKNOWN, "Generic error", nowMillis = 1000L)
+        assertFalse("UNKNOWN origin must be ignored", recorded)
+        assertEquals(DisconnectOrigin.UNKNOWN, recorder.origin)
+
+        // Subsequent valid fault should succeed
+        val validRecorded = recorder.record(DisconnectOrigin.NCM_READ_FAULT, "Bulk in fault", nowMillis = 1100L)
+        assertTrue("Valid fault after UNKNOWN should be accepted", validRecorded)
+        assertEquals(DisconnectOrigin.NCM_READ_FAULT, recorder.origin)
+    }
+
+    @Test
+    fun physicalDetachSupersedesSecondaryFaults() {
+        val recorder = FirstFaultRecorder()
+        // Suppose NCM read failed first due to cable disconnect race
+        val readFaultRecorded = recorder.record(DisconnectOrigin.NCM_READ_FAULT, "NCM read failed", nowMillis = 1000L)
+        assertTrue(readFaultRecorded)
+        assertEquals(DisconnectOrigin.NCM_READ_FAULT, recorder.origin)
+
+        // Broadcast arrives later with physical detach: must supersede secondary read fault
+        val detachRecorded = recorder.record(DisconnectOrigin.USB_PHYSICAL_DETACH, "Phone detached", nowMillis = 1100L)
+        assertTrue("Physical detach must upgrade secondary fault", detachRecorded)
+        assertEquals(DisconnectOrigin.USB_PHYSICAL_DETACH, recorder.origin)
+        assertEquals("Phone detached", recorder.message)
+
+        // Further secondary faults cannot overwrite physical detach
+        val writeFaultRecorded = recorder.record(DisconnectOrigin.NCM_WRITE_EXHAUSTED, "NCM write failed", nowMillis = 1200L)
+        assertFalse(writeFaultRecorded)
+        assertEquals(DisconnectOrigin.USB_PHYSICAL_DETACH, recorder.origin)
+    }
+
+    @Test
     fun livenessStatsTracksCountersAndSilenceGapsWithoutAllocation() {
         val stats = WiredLivenessStats()
         stats.noteInbound(100, nowMillis = 1000L)

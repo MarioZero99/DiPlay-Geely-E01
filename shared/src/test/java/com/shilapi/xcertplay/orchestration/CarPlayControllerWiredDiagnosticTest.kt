@@ -20,6 +20,20 @@ class CarPlayControllerWiredDiagnosticTest {
     }
 
     @Test
+    fun physicalDetachUpgradesPreexistingSecondaryFaultInWiredSession() {
+        val recorder = FirstFaultRecorder()
+        recorder.record(DisconnectOrigin.NCM_READ_FAULT, "NCM read fault", nowMillis = 1000L)
+        assertEquals(DisconnectOrigin.NCM_READ_FAULT, recorder.origin)
+
+        CarPlayController.recordWiredDetachFault(
+            isLiveSession = true,
+            recorder = recorder,
+            nowMillis = 1050L,
+        )
+        assertEquals(DisconnectOrigin.USB_PHYSICAL_DETACH, recorder.origin)
+    }
+
+    @Test
     fun fastReattachIsIdentifiedAsSupplyDipCandidate() {
         val isDip = CarPlayController.isSupplyDipReattach(
             lastDetachMillis = 1000L,

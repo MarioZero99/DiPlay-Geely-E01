@@ -209,7 +209,9 @@ class Ipv6NcmBridge(
                 source == "ncm-recv" -> DisconnectOrigin.NCM_READ_FAULT
                 else -> DisconnectOrigin.UNKNOWN
             }
-            recorder?.record(origin, "ipv6-bridge [$source]: ${error.message ?: error.javaClass.simpleName}", nowMillis)
+            if (origin != DisconnectOrigin.UNKNOWN) {
+                recorder?.record(origin, "ipv6-bridge [$source]: ${error.message ?: error.javaClass.simpleName}", nowMillis)
+            }
             return origin
         }
     }

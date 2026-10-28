@@ -2101,7 +2101,7 @@ class CarPlayController(
         WiredLinkCycles.shared.noteReattach(System.nanoTime())
         val now = SystemClock.elapsedRealtime()
         if (isSupplyDipReattach(lastWiredDetachMillis, now, wasWiredSessionActive)) {
-            debugLog("DIAG usb/power: rapid reattach detected (${now - lastWiredDetachMillis}ms gap) - high probability of VBUS supply dip!")
+            debugLog("[DIAG] usb/power: rapid reattach detected (${now - lastWiredDetachMillis}ms gap) - high probability of VBUS supply dip!")
         }
         wasWiredSessionActive = false
         when (phase) {
@@ -2358,13 +2358,19 @@ class CarPlayController(
                 onIncoming = ::onRouteFrame,
                 onProgress = { message -> debugLog("wired $message") },
             )
-            onStatus(
-                when (result.terminal) {
-                    Iap2WiredControlTerminal.TIMED_OUT -> CarPlayStatus.ControlEnded
-                    Iap2WiredControlTerminal.CHANNEL_CLOSED ->
-                        CarPlayStatus.Failed(CarPlayFailureReason.CONTROL_CHANNEL_CLOSED)
-                },
-            )
+            when (result.terminal) {
+                Iap2WiredControlTerminal.TIMED_OUT -> onStatus(CarPlayStatus.ControlEnded)
+                Iap2WiredControlTerminal.CHANNEL_CLOSED -> {
+                    wiredFaultRecorder.record(
+                        DisconnectOrigin.IAP2_CONTROL_DROP,
+                        "iAP2 wired control channel closed",
+                    )
+                    fail(
+                        IOException("iAP2 control channel closed"),
+                        CarPlayFailureReason.CONTROL_CHANNEL_CLOSED,
+                    )
+                }
+            }
         } catch (error: Throwable) {
             debugLog("wired bring-up failed", error)
             if (!ncmOwnedLocally) vpnService?.detach()
@@ -2843,7 +2849,10 @@ class CarPlayController(
             is CarPlayVpnService.AttachResult.Failed -> {
                 debugLog("wired VPN/NCM transport attach result=failed ${result.message}")
                 ncm.close()
-                onStatus(CarPlayStatus.Failed(CarPlayFailureReason.TRANSPORT_ATTACH_FAILED, result.message))
+                fail(
+                    IOException(result.message),
+                    CarPlayFailureReason.TRANSPORT_ATTACH_FAILED,
+                )
                 false
             }
         }
@@ -2917,14 +2926,14 @@ class CarPlayController(
         }
     }
 
-    private fun fail(error: Throwable) {
+    private fun fail(error: Throwable, explicitReason: CarPlayFailureReason? = null) {
         if (closed) return
         val origin = if (config.transport == CarPlayTransport.WIRED) wiredFaultRecorder.origin else DisconnectOrigin.UNKNOWN
         val baseDetail = error.message ?: error.javaClass.simpleName
         val detail = if (origin != DisconnectOrigin.UNKNOWN) "[$origin] $baseDetail" else baseDetail
         onStatus(
             CarPlayStatus.Failed(
-                failureReasonFor(error),
+                explicitReason ?: failureReasonFor(error),
                 detail,
             ),
         )
@@ -3099,7 +3108,7 @@ class CarPlayController(
         internal fun recordWiredDetachFault(
             isLiveSession: Boolean,
             recorder: FirstFaultRecorder?,
-            nowMillis: Long = System.currentTimeMillis(),
+            nowMillis: Long = SystemClock.elapsedRealtime(),
         ) {
             if (isLiveSession) {
                 recorder?.record(

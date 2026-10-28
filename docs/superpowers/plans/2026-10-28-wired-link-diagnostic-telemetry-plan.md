@@ -62,25 +62,28 @@
 | **Task 4** | `CarPlayVpnService` 与 `AirPlaySession` TCP 异常识别 | `4d42e2c0` | **DONE** | `CarPlayVpnServiceDiagnosticTest` PASS (100%) |
 | **Task 5** | `CarPlayController` 物理掉电与快速 Reattach 探测 | `22c092b5` | **DONE** | `CarPlayControllerWiredDiagnosticTest` PASS (100%) |
 | **Task 6** | 全量单元测试回归与 Release/Debug APK 构建 | - | **DONE** | 全模块单元测试 100% 通过；`automotive-debug.apk` 打包成功 |
+| **Hardening** | 物理 Detach 优先级升级、`UNKNOWN` 占坑过滤、iAP2 归因补齐与诊断日志定位修正 | `HEAD` | **DONE** | 根因抢跑竞争消除，100% 全量单测通过 |
 
 ---
 
 ## 四、 针对用户日志的排查定位指引（快速对照表）
 
-当拿到用户的诊断日志包（`diplay.log` 与 `events.jsonl`）时，只需搜索关键词 `[DIAG]` 或在 `events.jsonl` 中查看 `detail` 前缀：
+当拿到用户的诊断日志包（`/data/data/com.shilapi.diplay/files/logs/diplay.log` 或车机导出的 `DiPlay-*.txt` 报告）时，只需搜索关键词 `[DIAG]`、`ncm-fail:` 或在错误行中查看 `[$ORIGIN]` 前缀：
 
-1. **`[USB_PHYSICAL_DETACH]` 或 `rapid reattach detected (<1500ms gap)`**：
-   * **根因**：物理线缆松动、接触瞬间脱落，或车机 USB 口 VBUS 供电瞬间跌落引起 iPhone 断充复位。
-   * **特征**：断开时 NCM 与 TCP 队列正常，但总线突然触发 Detach 并迅速重新枚举。
+1. **`[USB_PHYSICAL_DETACH]` 或 `[DIAG] usb/power: rapid reattach detected (<1500ms gap)`**：
+   * **根因**：物理线缆松动、接触不良瞬间脱落，或车机 USB 口 VBUS 供电瞬间跌落引起 iPhone 断充复位。
+   * **特征**：断开时 NCM 与 TCP 队列正常，但总线触发 Detach 并迅速重新枚举。已通过原子升级机制消除底层 Bulk 读取先报 `NCM_READ_FAULT` 的竞态，确保物理脱落时稳定归因为 `USB_PHYSICAL_DETACH`。
 2. **`[NCM_WRITE_EXHAUSTED]`**：
    * **根因**：USB Bulk-Out 传输连续 3 次超时或被端点拒绝，底层 USB 控制器挂起或手机 USB 固件休眠。
    * **特征**：输出 `tx=... queued=...` 显示车机发送阻塞。
 3. **`[NCM_READ_FAULT]` / `bulkIn read timeout > 3000ms`**：
-   * **根因**：车机正常等待下行数据，但 iPhone 侧停止发送 NCM 报文超过 3 秒，底层 USB 端点无数据响应。
+   * **根因**：车机正常等待下行数据，但 iPhone 侧停止发送 NCM 报文超过 3 秒，底层 USB 端点无数据响应（且未发生物理 Detach）。
 4. **`[TUN_CLOSED]` / `[TUN_IO_ERROR]`**：
    * **根因**：Linux 内核 TUN 设备文件描述符被异常关闭或报 I/O 错误，排查 VPNService 生命周期。
 5. **`[TCP_TIMEOUT]` / `[TCP_PEER_RESET]`**：
    * **根因**：AirPlay TCP 控制/流媒体链路发生 Keep-Alive 超时或收到手机端发送的 RST 分节。此时 USB/NCM 层仍存活，问题出在应用层握手或手机侧进程崩溃。
+6. **`[IAP2_CONTROL_DROP]`**：
+   * **根因**：iAP2 物理/逻辑控制通道非预期关闭（如手机端用户主动退出 CarPlay 或 iPhone 进程意外退出）。
    不引入任何 API 24+ 的 Java 8 Stream 或 `java.time` 特性，保证在吉利星瑞车机上编译与字节码完全兼容。
 
 ---

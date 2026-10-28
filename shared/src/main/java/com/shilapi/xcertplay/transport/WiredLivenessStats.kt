@@ -34,9 +34,26 @@ class FirstFaultRecorder {
     val timestampMillis: Long
         get() = fault.get()?.timestampMillis ?: 0L
 
-    fun record(origin: DisconnectOrigin, message: String, nowMillis: Long = System.currentTimeMillis()): Boolean {
+    fun record(
+        origin: DisconnectOrigin,
+        message: String,
+        nowMillis: Long = System.currentTimeMillis(),
+    ): Boolean {
+        if (origin == DisconnectOrigin.UNKNOWN) return false
         val report = FaultReport(origin, message, nowMillis)
-        return fault.compareAndSet(null, report)
+        while (true) {
+            val current = fault.get()
+            if (current == null) {
+                if (fault.compareAndSet(null, report)) return true
+            } else {
+                // Physical detach is the root physical cause and supersedes secondary cascading I/O errors
+                if (origin == DisconnectOrigin.USB_PHYSICAL_DETACH && current.origin != DisconnectOrigin.USB_PHYSICAL_DETACH) {
+                    if (fault.compareAndSet(current, report)) return true
+                } else {
+                    return false
+                }
+            }
+        }
     }
 
     fun reset() {

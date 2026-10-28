@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Binder
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import com.shilapi.xcertplay.DiagLog
 import com.shilapi.xcertplay.airplay.AirPlayConfig
 import com.shilapi.xcertplay.airplay.AirPlayIdentity
@@ -393,7 +394,7 @@ class CarPlayVpnService : VpnService() {
         fun classifySocketFault(
             error: Throwable,
             recorder: FirstFaultRecorder?,
-            nowMillis: Long = System.currentTimeMillis(),
+            nowMillis: Long = SystemClock.elapsedRealtime(),
         ): DisconnectOrigin {
             val msg = error.message.orEmpty().lowercase()
             val origin = when {
@@ -401,7 +402,9 @@ class CarPlayVpnService : VpnService() {
                 msg.contains("reset by peer") || msg.contains("econnreset") || msg.contains("broken pipe") -> DisconnectOrigin.TCP_PEER_RESET
                 else -> DisconnectOrigin.UNKNOWN
             }
-            recorder?.record(origin, "tcp-socket: ${error.message ?: error.javaClass.simpleName}", nowMillis)
+            if (origin != DisconnectOrigin.UNKNOWN) {
+                recorder?.record(origin, "tcp-socket: ${error.message ?: error.javaClass.simpleName}", nowMillis)
+            }
             return origin
         }
     }
