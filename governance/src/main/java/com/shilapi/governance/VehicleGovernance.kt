@@ -43,7 +43,12 @@ object VehicleGovernance {
     @Volatile
     private var carLife: CarLifeGovernor? = null
 
-    /** Serialises every privileged command the two governors issue. */
+    /**
+     * Serialises CarLife's own commands.
+     *
+     * Not shared with the voice governor: that one builds its own queue inside `E01Mtk6735Governor`.
+     * What actually keeps two binder transactions apart is the lock in `E01PrivilegedBridge.execute`.
+     */
     private val commandQueue = CommandQueue()
 
     /**
@@ -188,6 +193,11 @@ object VehicleGovernance {
      *
      * [onComplete] runs on the IO scope the work happened on; the caller hops back to the main thread
      * itself. It reports the state the car ended up in, which is what the buttons redraw from.
+     *
+     * An exception is reported as failure rather than left to escape. This runs in a
+     * `SupervisorJob` scope, where an escaping throwable is swallowed and the callback never fires --
+     * which on the settings page left both buttons disabled until the app restarted. The bridge
+     * `require`s a 220-byte command, so a throw here is a real possibility, not a theoretical one.
      */
     fun setCarLifeSuppressionEnabled(enabled: Boolean, onComplete: ((Boolean) -> Unit)? = null) {
         val governor = carLife ?: run {
@@ -195,7 +205,12 @@ object VehicleGovernance {
             return
         }
         scope.launch {
-            val ok = if (enabled) governor.applySuppression() else governor.applyRestoration()
+            val ok = runCatching {
+                if (enabled) governor.applySuppression() else governor.applyRestoration()
+            }.getOrElse { error ->
+                log("VehicleGovernance", "CarLife ${if (enabled) "disable" else "restore"} failed: $error")
+                false
+            }
             onComplete?.invoke(ok)
         }
     }

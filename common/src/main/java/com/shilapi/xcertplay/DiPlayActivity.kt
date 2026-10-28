@@ -1077,9 +1077,18 @@ class DiPlayActivity : ComponentActivity() {
         }
     }
 
-    /** A button that can be disabled while its action is in flight, so it cannot be run twice. */
+    /**
+     * A button that also shows it is unavailable while an action is in flight.
+     *
+     * Disabled alone is not enough to see: `button()` only changes colours, and a disabled Holo button
+     * looks almost like a live one, so a press followed by 300 ms of nothing reads as a dead page. The
+     * audio-card row dims its buttons the same way.
+     */
     private fun carLifeActionButton(title: String, primary: Boolean, click: () -> Unit) =
-        button(title, primary) { click() }.apply { isEnabled = !carLifeInProgress }
+        button(title, primary) { click() }.apply {
+            isEnabled = !carLifeInProgress
+            alpha = if (carLifeInProgress) 0.4f else 1f
+        }
 
     private fun confirmCarLifeAction(disable: Boolean) {
         if (carLifeInProgress) return
