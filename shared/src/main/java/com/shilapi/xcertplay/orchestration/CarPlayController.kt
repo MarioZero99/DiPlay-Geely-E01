@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.shilapi.xcertplay.DiagLog
 import com.shilapi.xcertplay.PerfTrace
@@ -81,6 +82,9 @@ import com.shilapi.xcertplay.transport.IphoneUsbException
 import com.shilapi.xcertplay.transport.IphoneUsbHost
 import com.shilapi.xcertplay.transport.IphoneUsbMatcher
 import com.shilapi.xcertplay.transport.UsbBusSnapshot
+import com.shilapi.xcertplay.transport.DisconnectOrigin
+import com.shilapi.xcertplay.transport.FirstFaultRecorder
+import com.shilapi.xcertplay.transport.WiredLivenessStats
 import com.shilapi.xcertplay.transport.WiredLinkAssessment
 import com.shilapi.xcertplay.transport.WiredLinkCycles
 import com.shilapi.xcertplay.transport.WiredLinkFinding
@@ -389,6 +393,10 @@ class CarPlayController(
     // The wired-link diagnosis. [startIphone] resets `wiredEmptyPolls` rather than every phase change,
     // because a re-enumeration detaches the phone by design. The re-plug rounds outlive even this
     // controller: they live in [WiredLinkCycles.shared].
+    val wiredFaultRecorder = FirstFaultRecorder()
+    val wiredLivenessStats = WiredLivenessStats()
+    @Volatile private var lastWiredDetachMillis: Long = 0L
+    @Volatile private var wasWiredSessionActive: Boolean = false
     private var wiredEmptyPolls = 0
     private var lastWiredFinding: WiredLinkFinding? = null
 
@@ -2091,6 +2099,11 @@ class CarPlayController(
         // The returning half of a re-plug. The attach that ends a re-enumeration is not one: nothing
         // armed a detach for it, and an unarmed reattach is ignored.
         WiredLinkCycles.shared.noteReattach(System.nanoTime())
+        val now = SystemClock.elapsedRealtime()
+        if (isSupplyDipReattach(lastWiredDetachMillis, now, wasWiredSessionActive)) {
+            debugLog("DIAG usb/power: rapid reattach detected (${now - lastWiredDetachMillis}ms gap) - high probability of VBUS supply dip!")
+        }
+        wasWiredSessionActive = false
         when (phase) {
             Phase.REENUMERATION, Phase.IPHONE -> {
                 availabilityPollGeneration.incrementAndGet()
@@ -2120,6 +2133,12 @@ class CarPlayController(
             }
             Phase.DATAPATHS, Phase.CONTROL -> {
                 WiredLinkCycles.shared.noteDetach(System.nanoTime())
+                lastWiredDetachMillis = SystemClock.elapsedRealtime()
+                wasWiredSessionActive = true
+                recordWiredDetachFault(
+                    isLiveSession = true,
+                    recorder = wiredFaultRecorder,
+                )
                 // A session was up. The read that is about to fail would blame the USB layer; name the
                 // cable instead. Reconnecting is the existing failure path's job.
                 fail(IphoneUsbException.DeviceUnavailable("The iPhone was unplugged"))
@@ -2192,6 +2211,8 @@ class CarPlayController(
     }
 
     private fun openDataPaths(device: UsbDevice) {
+        wiredFaultRecorder.reset()
+        wiredLivenessStats.reset()
         phase = Phase.DATAPATHS
         debugLog("wired opening iPhone USB data paths")
         onStatus(CarPlayStatus.SelectingConfiguration)
@@ -2231,6 +2252,8 @@ class CarPlayController(
             connection,
             function,
             airPlaySessionLive = { activeSession != null },
+            liveness = wiredLivenessStats,
+            faultRecorder = wiredFaultRecorder,
         )
     }
 
@@ -2896,10 +2919,13 @@ class CarPlayController(
 
     private fun fail(error: Throwable) {
         if (closed) return
+        val origin = if (config.transport == CarPlayTransport.WIRED) wiredFaultRecorder.origin else DisconnectOrigin.UNKNOWN
+        val baseDetail = error.message ?: error.javaClass.simpleName
+        val detail = if (origin != DisconnectOrigin.UNKNOWN) "[$origin] $baseDetail" else baseDetail
         onStatus(
             CarPlayStatus.Failed(
                 failureReasonFor(error),
-                error.message ?: error.javaClass.simpleName,
+                detail,
             ),
         )
     }
@@ -3069,5 +3095,29 @@ class CarPlayController(
         private const val REENUMERATION_WATCHDOG_MILLIS = 10_000L
         private const val EXECUTOR_CLOSE_TIMEOUT_MILLIS = 2_000L
         private const val ADAPTER_ADDRESS_PLACEHOLDER = "02:00:00:00:00:00"
+
+        internal fun recordWiredDetachFault(
+            isLiveSession: Boolean,
+            recorder: FirstFaultRecorder?,
+            nowMillis: Long = System.currentTimeMillis(),
+        ) {
+            if (isLiveSession) {
+                recorder?.record(
+                    DisconnectOrigin.USB_PHYSICAL_DETACH,
+                    "iPhone USB physical detach detected during active session",
+                    nowMillis,
+                )
+            }
+        }
+
+        internal fun isSupplyDipReattach(
+            lastDetachMillis: Long,
+            attachMillis: Long,
+            wasSessionActive: Boolean,
+        ): Boolean {
+            if (!wasSessionActive || lastDetachMillis <= 0L) return false
+            val gap = attachMillis - lastDetachMillis
+            return gap in 0..1500L
+        }
     }
 }

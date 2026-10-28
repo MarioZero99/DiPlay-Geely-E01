@@ -64,6 +64,15 @@ class WiredLivenessStats {
         outboundBytes += bytes
     }
 
+    fun reset() {
+        lastInboundTimeMs = 0L
+        lastOutboundTimeMs = 0L
+        inboundPackets = 0L
+        inboundBytes = 0L
+        outboundPackets = 0L
+        outboundBytes = 0L
+    }
+
     fun snapshot(nowMillis: Long): Snapshot {
         val lastIn = lastInboundTimeMs
         val lastOut = lastOutboundTimeMs
