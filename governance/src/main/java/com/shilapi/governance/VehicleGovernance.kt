@@ -118,7 +118,7 @@ object VehicleGovernance {
 
         // CarLife is not part of the voice/experimental gate: the USB port it takes is the port
         // CarPlay needs, so the controls are offered even where the voice governor is fenced off.
-        carLife = CarLifeGovernor(application, commandQueue)
+        carLife = CarLifeGovernor(application, queue = commandQueue)
 
         scope.launch {
             if (isExperimentalAllowed && governor.isSupported && store.isSuppressionConfigured()) {

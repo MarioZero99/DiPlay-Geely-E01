@@ -1,24 +1,29 @@
 package com.shilapi.governance.carlife
 
 import android.content.ComponentName
-import android.content.Context
 import android.content.pm.PackageManager
 import com.shilapi.governance.platform.E01PrivilegedBridge
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 
 /**
  * What CarLife governance sends to the head unit, and what it reports afterwards.
  *
+ * Package state runs through Robolectric's real `PackageManager` (its shadow implements
+ * `set/getComponentEnabledSetting`), so `isSuppressed()` is exercised against the API the car uses.
+ * Only the shell is faked -- that is the one thing a desk cannot do.
+ *
  * The three component names are literals on purpose: they come from CarLife's own
- * `AndroidManifest.xml` (`com.baidu.carlifevehicle`), not from [CarLifeGovernor]'s constants. Reading
- * the constants back would let one typo pass on both sides of the assertion.
+ * `AndroidManifest.xml`, not from [CarLifeGovernor]'s constants. Reading the constants back would let
+ * one typo pass on both sides of the assertion.
  */
 @RunWith(RobolectricTestRunner::class)
 class CarLifeGovernorTest {
@@ -28,33 +33,51 @@ class CarLifeGovernorTest {
     private val connect = "com.baidu.carlifevehicle.connect.ConnectService"
     private val all = listOf(broadcast, aoa, connect)
 
-    /** A device whose package state and shell answer the way the real ones do. */
-    private inner class FakeCarLife(
-        private val present: List<String> = all,
-        private val refuse: String? = null,
-    ) : CarLifeSystem {
-        val off = mutableSetOf<String>()
-        val sent = mutableListOf<String>()
-        var alive = true
+    private val context = RuntimeEnvironment.getApplication()
+    private val sent = mutableListOf<String>()
 
-        override fun installed() = present.isNotEmpty()
-
-        override fun components() = CarLifeGovernor.COMPONENTS.map { className ->
-            CarLifeComponentState(exists = className in present, disabled = className in off)
+    /** Puts the package on the shadow package manager with [present] declared as receivers. */
+    private fun installCarLife(present: List<String> = all) {
+        shadowOf(context.packageManager).installPackage(
+            android.content.pm.PackageInfo().apply { packageName = CarLifeGovernor.PACKAGE_NAME },
+        )
+        for (className in present) {
+            shadowOf(context.packageManager).addOrUpdateReceiver(
+                android.content.pm.ActivityInfo().apply {
+                    packageName = CarLifeGovernor.PACKAGE_NAME
+                    name = className
+                },
+            )
         }
+    }
 
-        override fun run(command: String): E01PrivilegedBridge.Result {
+    /** A shell that writes the package state the way `pm disable` would. */
+    private fun governor(refuse: String? = null) = CarLifeGovernor(
+        context = context,
+        runCommand = { command ->
             sent += command
-            if (command == CarLifeGovernor.FORCE_STOP_COMMAND) {
-                alive = false
-                return E01PrivilegedBridge.Result.Success("")
-            }
             val className = command.substringAfter('/', missingDelimiterValue = "")
-            if (className == refuse) return E01PrivilegedBridge.Result.CommandFailed(1, "does not exist")
-            if (command.startsWith("pm disable ")) off += className
-            if (command.startsWith("pm enable ")) off -= className
-            return E01PrivilegedBridge.Result.Success("")
-        }
+            if (className.isNotEmpty()) {
+                if (className == refuse) return@CarLifeGovernor E01PrivilegedBridge.Result.CommandFailed(1, "does not exist")
+                val state = if (command.startsWith("pm enable ")) {
+                    PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+                } else {
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                }
+                // The real API `pm` writes through, which the shadow implements.
+                context.packageManager.setComponentEnabledSetting(
+                    ComponentName(CarLifeGovernor.PACKAGE_NAME, className),
+                    state,
+                    PackageManager.DONT_KILL_APP,
+                )
+            }
+            E01PrivilegedBridge.Result.Success("")
+        },
+    )
+
+    @Before
+    fun setUp() {
+        sent.clear()
     }
 
     @Test
@@ -69,12 +92,12 @@ class CarLifeGovernorTest {
 
     @Test
     fun stopsCarLifeFirstThenDisablesEachComponentSeparately() = runBlocking {
-        val device = FakeCarLife()
+        installCarLife()
 
-        assertTrue(CarLifeGovernor(device).applySuppression())
+        assertTrue(governor().applySuppression())
 
-        // Not one joined line: the bridge carries 220 bytes per command. And the stop comes first, so
-        // the port is released before anything is disallowed.
+        // Not one joined line: the bridge carries 220 bytes per command. Stop first, so the port is
+        // released before anything is disallowed.
         assertEquals(
             listOf(
                 "am force-stop com.baidu.carlifevehicle",
@@ -82,102 +105,111 @@ class CarLifeGovernorTest {
                 "pm disable com.baidu.carlifevehicle/com.baidu.carlifevehicle.connect.AOAAccessoryReceiver",
                 "pm disable com.baidu.carlifevehicle/com.baidu.carlifevehicle.connect.ConnectService",
             ),
-            device.sent,
+            sent,
         )
     }
 
     @Test
     fun oneRefusalDoesNotLeaveTheRestEnabled() = runBlocking {
-        val device = FakeCarLife(refuse = aoa)
+        installCarLife()
 
-        val off = CarLifeGovernor(device).applySuppression()
+        val off = governor(refuse = aoa).applySuppression()
 
-        assertTrue("the component after the refusal was still attempted", device.sent.last().contains(connect))
+        assertTrue("the component after the refusal was still attempted", sent.last().contains(connect))
         assertFalse("one component is still on, so this is not off", off)
     }
 
     @Test
     fun aComponentTheBuildDoesNotCarryIsSkipped() = runBlocking {
-        val device = FakeCarLife(present = listOf(broadcast, aoa))
+        installCarLife(present = listOf(broadcast, aoa))
 
-        val off = CarLifeGovernor(device).applySuppression()
-
-        assertTrue(off)
-        assertFalse("nothing was sent at a class this build does not have", device.sent.any { it.contains(connect) })
+        assertTrue(governor().applySuppression())
+        assertFalse("nothing was sent at a class this build does not have", sent.any { it.contains(connect) })
     }
 
     @Test
     fun aHeadUnitWithoutCarLifeIsNotAnErrorAndGetsNoCommands() = runBlocking {
-        val device = FakeCarLife(present = emptyList())
-        val governor = CarLifeGovernor(device)
+        val governor = governor()
 
         assertFalse(governor.isInstalled())
         assertTrue(governor.applySuppression())
         assertTrue(governor.applyRestoration())
-        assertEquals(emptyList<String>(), device.sent)
+        assertEquals(emptyList<String>(), sent)
     }
 
     @Test
     fun restoringTurnsThemBackOnAndDoesNotStartCarLife() = runBlocking {
-        val device = FakeCarLife().apply { off += all }
-        val governor = CarLifeGovernor(device)
-
+        installCarLife()
+        val governor = governor()
+        assertTrue(governor.applySuppression())
         assertTrue(governor.isSuppressed())
+        sent.clear()
+
         assertTrue(governor.applyRestoration())
         assertFalse(governor.isSuppressed())
-        assertFalse("restoring is not a reason to start CarLife", device.sent.contains(CarLifeGovernor.FORCE_STOP_COMMAND))
-    }
-
-    @Test
-    fun aDisabledComponentStillExistsSoTheCardCanSaySo() {
-        // The bug this guards: on API 22 a disabled component is invisible unless
-        // GET_DISABLED_COMPONENTS is passed, so a successful disable read back as "no such component"
-        // and the card stayed on "still takes the port" for ever.
-        val disabled = all.toSet()
-        val lookup = AndroidCarLifeSystem(
-            RuntimeEnvironment.getApplication(),
-            declared = { name, flags ->
-                name.className in all &&
-                    (name.className !in disabled || flags and PackageManager.GET_DISABLED_COMPONENTS != 0)
-            },
-        )
-
-        assertTrue(
-            "off is not gone",
-            lookup.components().all { it.exists },
-        )
-        // And with the flag dropped the same lookup would call them absent -- which is what the
-        // production call site must never do.
-        assertFalse(CarLifeGovernor.isOff(emptyList()))
-    }
-
-    @Test
-    fun aPackageWithoutCarLifeReportsNothingInstalled() {
-        val system: CarLifeSystem = AndroidCarLifeSystem(RuntimeEnvironment.getApplication() as Context)
-        assertFalse(system.installed())
-    }
-
-    @Test
-    fun oneComponentStillOnIsNotOff() {
-        fun state(exists: Boolean, disabled: Boolean) = CarLifeComponentState(exists, disabled)
-        assertTrue(CarLifeGovernor.isOff(listOf(state(true, true), state(true, true), state(true, true))))
-        assertTrue("a build with only two of the names", CarLifeGovernor.isOff(listOf(state(true, true), state(true, true), state(false, false))))
-        assertFalse(CarLifeGovernor.isOff(listOf(state(true, true), state(true, false), state(true, true))))
-        assertFalse("nothing present is not everything off", CarLifeGovernor.isOff(listOf(state(false, false))))
+        assertFalse("restoring is not a reason to start CarLife", sent.contains(CarLifeGovernor.FORCE_STOP_COMMAND))
     }
 
     @Test
     fun askingTwiceAsksTheCarTwiceRatherThanDecidingItIsGone() = runBlocking {
-        val device = FakeCarLife()
-        val governor = CarLifeGovernor(device)
+        installCarLife()
+        val governor = governor()
 
         assertTrue(governor.applySuppression())
-        val afterFirst = device.sent.size
+        val afterFirst = sent.size
 
-        // The second half of the same bug: once off, the components read as absent and the governor
-        // concluded CarLife was not installed, so it stopped talking to the car at all.
+        // The bug this guards: once off, the components read as absent, so the governor concluded
+        // CarLife was not installed and stopped talking to the car at all.
         assertTrue(governor.applySuppression())
         assertTrue("still installed", governor.isInstalled())
-        assertTrue("still talks to the car", device.sent.size > afterFirst)
+        assertTrue("still talks to the car", sent.size > afterFirst)
+    }
+
+    /**
+     * The guard for the one bug that inverts this feature.
+     *
+     * On API 22 `getReceiverInfo` returns null for a disabled component unless
+     * `GET_DISABLED_COMPONENTS` is passed, and the app wrapper turns that into
+     * `NameNotFoundException`. Without the flag, a successful disable reads back as "no such
+     * component": the card stays on "still takes the port" for ever.
+     *
+     * Robolectric's package manager ignores the flags argument (verified by disassembling
+     * `ShadowApplicationPackageManager.getComponentInfo`, which never reads it), so this has to drive
+     * the lookup itself. The fake below answers the way the real service does -- it reads the flags,
+     * so a call site that forgets them fails here rather than agreeing with itself.
+     */
+    @Test
+    fun everyPresenceCheckAsksForDisabledComponents() {
+        val off = all.toSet()
+        val asked = mutableListOf<Int>()
+        val governor = CarLifeGovernor(
+            context = context,
+            declared = { name, flags ->
+                asked += flags
+                name.className in all &&
+                    (name.className !in off || flags and PackageManager.GET_DISABLED_COMPONENTS != 0)
+            },
+        )
+
+        assertTrue("a component that is off still exists", governor.isSuppressed())
+        assertTrue(
+            "the lookup was never called, so nothing was proved",
+            asked.isNotEmpty(),
+        )
+        assertTrue(
+            "every presence check must ask for disabled components, or 'off' reads as 'gone'",
+            asked.all { it and PackageManager.GET_DISABLED_COMPONENTS != 0 },
+        )
+    }
+
+    @Test
+    fun aDisabledComponentStillReadsAsOff() = runBlocking {
+        // The other half: the enabled setting itself comes from the real PackageManager, so this
+        // exercises the API the car uses rather than a fake of it.
+        installCarLife()
+        val governor = governor()
+
+        assertTrue(governor.applySuppression())
+        assertTrue("off is not gone", governor.isSuppressed())
     }
 }
