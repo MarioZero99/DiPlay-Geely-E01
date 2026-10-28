@@ -163,6 +163,25 @@ class DiPlayActivity : ComponentActivity() {
 
     /** The session and the gaps, held for the length of one redraw. See [pageState]. */
     private var cachedPageState: WirelessPageState? = null
+
+    /**
+     * CarLife's installed/suppressed pair, held for the length of one redraw.
+     *
+     * Both are plain package-manager reads, but a redraw calls into the card more than once and the
+     * suppression verdict walks three components each time; one look per redraw keeps a whole page
+     * layout at three reads instead of six or nine.
+     */
+    private var cachedCarLifeState: Pair<Boolean, Boolean>? = null
+
+    /**
+     * True between a confirmed CarLife action and the shell answering.
+     *
+     * Both buttons are redrawn disabled while it is set, and the actions are one-shot commands rather
+     * than a switch, so this is what keeps a second press from queueing a second batch behind the
+     * first. It is not saved anywhere: nothing survives the process, because the components' own state
+     * is the record.
+     */
+    private var carLifeInProgress = false
     private var initialLaunch = true
     private var notificationTransport = true
     private var exportInProgress = false
@@ -477,6 +496,7 @@ class DiPlayActivity : ComponentActivity() {
         cachedReport = null
         cachedHotspot = null
         cachedPageState = null
+        cachedCarLifeState = null
         invalidateNetworkCache()
         // A route that no longer exists — "wireless" and "wired" were pages once — lands on the home
         // page rather than on a header with nothing under it.
@@ -997,9 +1017,103 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun vehicleGovernanceCards(columns: CardColumns) {
+        carLifeGovernanceCard(columns)
         voiceGovernanceCard(columns)
         diagnosticsCard(columns)
     }
+
+    /**
+     * CarLife's two actions, as two buttons rather than a switch.
+     *
+     * A switch says "this state is on or off and stays that way because the app keeps it that way".
+     * Neither is true here. Each button is one act: disabling writes the components' state into the
+     * package manager and comes back off after a reboot only if someone turns it back on; restoring is
+     * something the driver does, not something a switch does on their behalf. The two are not mirror
+     * images of one setting, so they are not drawn as one.
+     *
+     * What the card reports is the live component state, read from the package manager -- not a saved
+     * preference. There is no saved preference: see [CarLifeGovernor].
+     *
+     * Either button is available in either state. Disabling twice is harmless (the second run finds
+     * them already off), and making the "wrong" button unclickable would leave a driver looking at
+     * CarLife taking the port with no visible way to fix it.
+     */
+    private fun carLifeGovernanceCard(columns: CardColumns) {
+        val (installed, suppressed) = carLifeState()
+        columns.card(R.string.carlife_governance_title, R.drawable.ic_dp_permissions) { card ->
+            if (!installed) {
+                card.addView(label(getString(R.string.carlife_not_installed_desc), 14, MUTED))
+                return@card
+            }
+
+            val description = if (suppressed) {
+                getString(R.string.carlife_installed_suppressed_desc)
+            } else {
+                getString(R.string.carlife_installed_active_desc)
+            }
+            card.addView(label(description, 14, MUTED).apply { setPadding(0, 0, 0, dp(4)) })
+            card.addView(
+                label(
+                    getString(if (suppressed) R.string.carlife_status_suppressed else R.string.carlife_status_active),
+                    13,
+                    if (suppressed) ACCENT else WARNING,
+                ).apply { setPadding(0, 0, 0, dp(12)) },
+            )
+
+            val buttons = row()
+            buttons.addView(
+                carLifeActionButton(getString(R.string.carlife_btn_disable), primary = !suppressed) {
+                    confirmCarLifeAction(disable = true)
+                },
+                LinearLayout.LayoutParams(0, dp(60), 1f).apply { marginEnd = dp(10) },
+            )
+            buttons.addView(
+                carLifeActionButton(getString(R.string.carlife_btn_restore), primary = suppressed) {
+                    confirmCarLifeAction(disable = false)
+                },
+                LinearLayout.LayoutParams(0, dp(60), 1f),
+            )
+            card.addView(buttons)
+        }
+    }
+
+    /** A button that can be disabled while its action is in flight, so it cannot be run twice. */
+    private fun carLifeActionButton(title: String, primary: Boolean, click: () -> Unit) =
+        button(title, primary) { click() }.apply { isEnabled = !carLifeInProgress }
+
+    private fun confirmCarLifeAction(disable: Boolean) {
+        if (carLifeInProgress) return
+        // Put back before the dialog: clicking outside it leaves the buttons exactly as they were, so
+        // there is nothing to undo and nothing to redraw.
+        carLifeInProgress = true
+        render()
+        fun settle() {
+            carLifeInProgress = false
+            cachedCarLifeState = null
+            render()
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.carlife_governance_title))
+            .setMessage(getString(if (disable) R.string.carlife_confirm_disable_body else R.string.carlife_confirm_restore_body))
+            .setNegativeButton(getString(R.string.cancel)) { _, _ -> settle() }
+            .setOnCancelListener { settle() }
+            .setPositiveButton(getString(R.string.maintenance_continue)) { _, _ ->
+                VehicleGovernance.setCarLifeSuppressionEnabled(disable) { success ->
+                    if (!success) {
+                        VehicleGovernance.log("CarLifeGovernance", "CarLife ${if (disable) "disable" else "restore"} did not take effect on the car")
+                    }
+                    runOnUiThread { settle() }
+                }
+            }
+            .show()
+    }
+
+    /**
+     * One probe per redraw, for the reason [cachedReport] is held: the card is built while the page is
+     * laid out, and each read walks CarLife's component table.
+     */
+    private fun carLifeState(): Pair<Boolean, Boolean> = cachedCarLifeState
+        ?: (VehicleGovernance.isCarLifeInstalled() to VehicleGovernance.isCarLifeSuppressed()).also { cachedCarLifeState = it }
 
     private fun diagnosticsCard(columns: CardColumns) {
         columns.card(R.string.diagnostics, R.drawable.ic_dp_diagnostics) { card ->

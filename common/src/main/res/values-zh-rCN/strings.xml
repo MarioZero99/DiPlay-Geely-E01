@@ -19,6 +19,16 @@
     <string name="suppress_native_voice_title">抑制后台语音 (natp + 晓咖)</string>
     <string name="suppress_native_voice_desc" formatted="false">释放 320MB 物理内存与 40% CPU，退出应用或熄火自动恢复</string>
     <string name="suppress_native_voice_confirm_body">开启后将临时停用原车语音交互（如语音开关空调、车窗），麦克风将由 CarPlay 独占。退出本应用后将自动恢复原厂状态。确定开启吗？</string>
+    <string name="carlife_governance_title">百度 CarLife</string>
+    <string name="carlife_not_installed_desc">车机未安装 CarLife，它不会抢占 CarPlay 的 USB 通道，这里无需设置。</string>
+    <string name="carlife_installed_active_desc">车机装有 CarLife，插上 iPhone 时它仍会自动启动，可能在 CarPlay 握手完成前占住 USB 通道。</string>
+    <string name="carlife_installed_suppressed_desc">CarLife 的 USB 监听已关闭，插入 iPhone 会直接连上 CarPlay。桌面图标保留，可手动打开。</string>
+    <string name="carlife_status_active">CarLife 仍会占用 USB 通道</string>
+    <string name="carlife_status_suppressed">CarLife 不再占用 USB 通道</string>
+    <string name="carlife_btn_disable">关闭 CarLife 占用 USB</string>
+    <string name="carlife_btn_restore">恢复 CarLife</string>
+    <string name="carlife_confirm_disable_body">将关闭 CarLife 的 USB 插拔监听与后台连接服务，插上 iPhone 后不再由 CarLife 抢先启动。这是一次性操作：重启后仍保持关闭，直到你点“恢复 CarLife”。桌面图标保留，手动打开仍可用。设置后需要重新连接 CarPlay 才生效。确定关闭吗？</string>
+    <string name="carlife_confirm_restore_body">将重新开启 CarLife 的 USB 插拔监听与连接服务，插上 iPhone 时它会再次自动启动。这是一次性操作，不会自动变回关闭。确定恢复吗？</string>
     <string name="hotspot_hint_manual">车载热点 · 保持车载热点、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
     <string name="hotspot_hint_local">打开“连接设置”以保存车载热点信息。</string>
     <string name="hotspot_hint_existing">同一网络 · 在车机设置里把车机和 iPhone 连到同一张 Wi-Fi，并保持蓝牙开启。</string>

@@ -19,6 +19,16 @@
     <string name="suppress_native_voice_title">Suppress background voice (natp + xiaoka)</string>
     <string name="suppress_native_voice_desc" formatted="false">Reclaims 320MB+ RAM and 40% CPU. Automatically restores on exit or reboot.</string>
     <string name="suppress_native_voice_confirm_body">Enabling will temporarily disable the car’s native voice assistant. The microphone will be exclusively used by CarPlay. Native voice will be restored when exiting the app. Proceed?</string>
+    <string name="carlife_governance_title">Baidu CarLife</string>
+    <string name="carlife_not_installed_desc">CarLife is not on this head unit, so it cannot take the USB port from CarPlay. Nothing to do here.</string>
+    <string name="carlife_installed_active_desc">CarLife is on this head unit and still starts when the iPhone is plugged in. It can take the USB port before CarPlay finishes connecting.</string>
+    <string name="carlife_installed_suppressed_desc">CarLife’s USB listeners are off. Plugging the iPhone in goes straight to CarPlay. The CarLife icon stays on the launcher for manual use.</string>
+    <string name="carlife_status_active">CarLife can still take the USB port</string>
+    <string name="carlife_status_suppressed">CarLife cannot take the USB port</string>
+    <string name="carlife_btn_disable">Turn CarLife USB off</string>
+    <string name="carlife_btn_restore">Restore CarLife</string>
+    <string name="carlife_confirm_disable_body">Turns off CarLife’s USB receivers and its connect service, so plugging the iPhone in no longer starts CarLife first. This is a one-off change: it stays after a reboot until you press Restore. The icon stays on the launcher and opening it by hand still works. CarPlay has to be reconnected afterwards. Proceed?</string>
+    <string name="carlife_confirm_restore_body">Turns CarLife’s USB receivers and connect service back on, so it starts again whenever the iPhone is plugged in. This is a one-off change; nothing puts it back to off by itself. Proceed?</string>
     <string name="hotspot_hint_manual">Built-in car hotspot · Keep the car hotspot, Bluetooth and your iPhone’s Wi-Fi on.</string>
     <string name="hotspot_hint_local">Open Connection setup to save your built-in car hotspot details.</string>
     <string name="hotspot_hint_existing">Same Wi-Fi network · Connect the car and the iPhone to one Wi-Fi network in the car’s settings, and keep Bluetooth on.</string>
