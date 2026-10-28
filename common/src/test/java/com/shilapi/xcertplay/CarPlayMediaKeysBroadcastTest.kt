@@ -86,12 +86,12 @@ class CarPlayMediaKeysBroadcastTest {
     }
 
     @Test
-    fun clusterMediaSourceDefaultsToUsb() {
-        assertEquals("Cluster media source should default to 0 (USB)", 0, AirPlayPersistence.loadClusterMediaSource(context))
+    fun clusterMediaSourceDefaultsToBluetooth() {
+        assertEquals("Cluster media source should default to 2 (Bluetooth)", 2, AirPlayPersistence.loadClusterMediaSource(context))
         AirPlayPersistence.saveClusterMediaSource(context, 6)
         assertEquals("Cluster media source can be saved as 6 (Online)", 6, AirPlayPersistence.loadClusterMediaSource(context))
-        AirPlayPersistence.saveClusterMediaSource(context, 2)
-        assertEquals("Bluetooth (2) must auto-migrate to USB (0)", 0, AirPlayPersistence.loadClusterMediaSource(context))
+        AirPlayPersistence.saveClusterMediaSource(context, 0)
+        assertEquals("Legacy USB (0) must auto-migrate to Bluetooth (2)", 2, AirPlayPersistence.loadClusterMediaSource(context))
     }
 
     @Test

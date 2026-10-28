@@ -101,6 +101,9 @@ internal class XingruiInstrumentBridge(context: Context) {
             }
             dimService = IDimTransListener.Stub.asInterface(service)
 
+            // 预热并自愈东软蓝牙媒体门禁
+            BTAudioGuard.ensureConnected(appContext)
+
             if (released.get()) return
             val cached = lastCachedMedia ?: return
             val gen = currentGeneration.get()
@@ -301,6 +304,9 @@ internal class XingruiInstrumentBridge(context: Context) {
             return
         }
         val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
+        if (sourceType == AirPlayPersistence.SOURCE_BLUETOOTH) {
+            BTAudioGuard.ensureConnected(appContext)
+        }
         try {
             service.onAction(if (isPlaying) 1 else 2, sourceType)
             if (recordActionIfCurrent(gen, isPlaying)) {
@@ -335,6 +341,9 @@ internal class XingruiInstrumentBridge(context: Context) {
         }
 
         val sourceType = AirPlayPersistence.loadClusterMediaSource(appContext)
+        if (sourceType == AirPlayPersistence.SOURCE_BLUETOOTH) {
+            BTAudioGuard.ensureConnected(appContext)
+        }
 
         try {
             DiagLog.i(TAG, "Sending to Xingrui IPK (source=$sourceType, gen=$gen): $safeTitle - $safeArtist (playing=$isPlaying)")

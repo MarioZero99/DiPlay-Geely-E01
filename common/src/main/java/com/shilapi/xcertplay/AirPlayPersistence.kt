@@ -659,12 +659,12 @@ object AirPlayPersistence {
 
     fun loadClusterMediaSource(context: Context): Int {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val source = sp.getInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_USB)
-        // Neusoft IPKServer MediaBean line 171 intercepts Bluetooth (2) when A2DP is disconnected (which CarPlay causes).
-        // Auto-migrate SOURCE_BLUETOOTH to SOURCE_USB (0) so cluster displays media properly.
-        if (source == SOURCE_BLUETOOTH) {
-            sp.edit().putInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_USB).apply()
-            return SOURCE_USB
+        val source = sp.getInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_BLUETOOTH)
+        // With BTAudioGuard unlocking IPKServer's A2DP check, SOURCE_BLUETOOTH (2)
+        // is the verified cluster external stream channel. Automatically migrate legacy SOURCE_USB back to SOURCE_BLUETOOTH.
+        if (source == SOURCE_USB) {
+            sp.edit().putInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_BLUETOOTH).apply()
+            return SOURCE_BLUETOOTH
         }
         return source
     }
