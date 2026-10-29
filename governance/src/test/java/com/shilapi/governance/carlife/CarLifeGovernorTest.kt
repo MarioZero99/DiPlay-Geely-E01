@@ -36,18 +36,27 @@ class CarLifeGovernorTest {
     private val context = RuntimeEnvironment.getApplication()
     private val sent = mutableListOf<String>()
 
-    /** Puts the package on the shadow package manager with [present] declared as receivers. */
+    /** Puts the package on the shadow package manager with [present] declared as receivers or services. */
     private fun installCarLife(present: List<String> = all) {
         shadowOf(context.packageManager).installPackage(
             android.content.pm.PackageInfo().apply { packageName = CarLifeGovernor.PACKAGE_NAME },
         )
         for (className in present) {
-            shadowOf(context.packageManager).addOrUpdateReceiver(
-                android.content.pm.ActivityInfo().apply {
-                    packageName = CarLifeGovernor.PACKAGE_NAME
-                    name = className
-                },
-            )
+            if (className == connect) {
+                shadowOf(context.packageManager).addOrUpdateService(
+                    android.content.pm.ServiceInfo().apply {
+                        packageName = CarLifeGovernor.PACKAGE_NAME
+                        name = className
+                    },
+                )
+            } else {
+                shadowOf(context.packageManager).addOrUpdateReceiver(
+                    android.content.pm.ActivityInfo().apply {
+                        packageName = CarLifeGovernor.PACKAGE_NAME
+                        name = className
+                    },
+                )
+            }
         }
     }
 
@@ -193,7 +202,7 @@ class CarLifeGovernorTest {
         val asked = mutableListOf<Int>()
         val governor = CarLifeGovernor(
             context = context,
-            declared = { name, flags ->
+            declared = { name, flags, _ ->
                 asked += flags
                 name.className in all &&
                     (flags and PackageManager.GET_DISABLED_COMPONENTS != 0)
@@ -217,5 +226,49 @@ class CarLifeGovernorTest {
 
         assertTrue(governor.applySuppression())
         assertTrue("off is not gone", governor.isSuppressed())
+    }
+
+    @Test
+    fun preciseComponentLookupAvoidsMisdirectedServiceQueries() {
+        installCarLife()
+        val queryLog = mutableListOf<Pair<String, Boolean>>() // Pair<className, isService>
+        val governor = CarLifeGovernor(
+            context = context,
+            declared = { name, flags, isService ->
+                queryLog += (name.className to isService)
+                true
+            },
+        )
+        governor.isSuppressed()
+
+        val serviceQueries = queryLog.filter { it.second }
+        val receiverQueries = queryLog.filter { !it.second }
+
+        assertEquals(1, serviceQueries.size)
+        assertEquals("com.baidu.carlifevehicle.connect.ConnectService", serviceQueries.first().first)
+        assertEquals(2, receiverQueries.size)
+    }
+
+    @Test
+    fun buildWithNoVulnerableComponentsReportsSuppressedRatherThanDeadlocking() {
+        // CarLife is installed, but carries none of the 3 vulnerable components (e.g., custom stripped build)
+        installCarLife(present = emptyList())
+        val governor = CarLifeGovernor(
+            context = context,
+            declared = { _, _, _ -> false },
+        )
+        assertTrue("CarLife with no vulnerable entrypoints is inherently safe", governor.isSuppressed())
+    }
+
+    @Test
+    fun processRunningDetectionIdentifiesActiveCarLifeProcess() {
+        var running = false
+        val governor = CarLifeGovernor(
+            context = context,
+            processRunningProbe = { running },
+        )
+        assertFalse(governor.isProcessRunning())
+        running = true
+        assertTrue(governor.isProcessRunning())
     }
 }

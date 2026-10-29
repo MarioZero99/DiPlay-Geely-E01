@@ -8,6 +8,8 @@ import com.shilapi.governance.VehicleGovernance
 import com.shilapi.governance.core.CommandQueue
 import com.shilapi.governance.platform.E01PrivilegedBridge
 
+data class ComponentSpec(val className: String, val isService: Boolean = false)
+
 /**
  * Keeps Baidu CarLife off the USB port CarPlay needs.
  *
@@ -21,14 +23,16 @@ import com.shilapi.governance.platform.E01PrivilegedBridge
  *
  * One `pm` call per component: the bridge carries a whole command in 220 bytes.
  *
- * [runCommand] and [declared] are the only injected things, both with production defaults.
+ * [runCommand], [declared], and [processRunningProbe] are injected with production defaults.
  *
  * - The shell: a desk has no vendor service, so `pm disable` cannot be run. Without this the whole
  *   feature is untestable off the car.
  * - [declared]: Robolectric's package manager ignores the `flags` argument entirely, so a test built
  *   on it cannot tell whether `GET_DISABLED_COMPONENTS` was passed -- and forgetting that flag is the
  *   one bug that makes this feature report the opposite of what it did. One parameter is a smaller
- *   price than losing the only guard.
+ *   price than losing the only guard. Dispatches directly between receiver and service to eliminate
+ *   spurious NameNotFoundException IPC overhead.
+ * - [processRunningProbe]: In-memory process status check via ActivityManager.
  *
  * Reading the enabled state needs no seam: `getComponentEnabledSetting` is a plain call the shadow
  * implements faithfully.
@@ -36,17 +40,24 @@ import com.shilapi.governance.platform.E01PrivilegedBridge
 class CarLifeGovernor(
     private val context: Context,
     private val runCommand: (String) -> E01PrivilegedBridge.Result = E01PrivilegedBridge::execute,
-    private val declared: (ComponentName, Int) -> Boolean = { name, flags ->
+    private val declared: (ComponentName, Int, Boolean) -> Boolean = { name, flags, isService ->
         try {
-            context.packageManager.getReceiverInfo(name, flags)
-            true
-        } catch (_: PackageManager.NameNotFoundException) {
-            try {
+            if (isService) {
                 context.packageManager.getServiceInfo(name, flags)
-                true
-            } catch (_: Throwable) {
-                false
+            } else {
+                context.packageManager.getReceiverInfo(name, flags)
             }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    },
+    private val processRunningProbe: () -> Boolean = {
+        try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            am?.runningAppProcesses?.any {
+                it.processName == PACKAGE_NAME || it.processName.startsWith("$PACKAGE_NAME:")
+            } ?: false
         } catch (_: Throwable) {
             false
         }
@@ -68,7 +79,13 @@ class CarLifeGovernor(
          * media-button receiver and the recording service are left alone, so opening CarLife by hand
          * and the car's media keys still work.
          */
-        val COMPONENTS = listOf(RECEIVER_BROADCAST, RECEIVER_AOA, SERVICE_CONNECT)
+        val TARGET_COMPONENTS = listOf(
+            ComponentSpec(RECEIVER_BROADCAST, isService = false),
+            ComponentSpec(RECEIVER_AOA, isService = false),
+            ComponentSpec(SERVICE_CONNECT, isService = true),
+        )
+
+        val COMPONENTS = TARGET_COMPONENTS.map { it.className }
 
         const val FORCE_STOP_COMMAND = "am force-stop $PACKAGE_NAME"
 
@@ -87,6 +104,11 @@ class CarLifeGovernor(
     }
 
     /**
+     * Checks if CarLife process is currently alive in memory.
+     */
+    fun isProcessRunning(): Boolean = processRunningProbe()
+
+    /**
      * Whether every component this CarLife build carries is switched off.
      *
      * The flag matters. On API 22 a disabled component is invisible to `getReceiverInfo` unless
@@ -98,25 +120,35 @@ class CarLifeGovernor(
      * for "nobody has touched it" and for "there is no such component".
      *
      * A name the build does not carry is skipped: `pm disable` exits non-zero for it, and demanding
-     * all three would report "not off" for ever on such a build. A component that is present and
-     * still on makes this false even when the others are off.
+     * all three would report "not off" for ever on such a build. If the build carries none of the
+     * vulnerable components at all (e.g. customized stripped ROM), it is treated as inherently safe
+     * (suppressed) rather than stuck unsuppressed forever.
      */
     fun isSuppressed(): Boolean {
-        val present = COMPONENTS.mapNotNull { className ->
-            val name = ComponentName(PACKAGE_NAME, className)
-            if (!declared(name, PackageManager.GET_DISABLED_COMPONENTS)) return@mapNotNull null
+        if (!isInstalled()) return false
+
+        val declaredList = TARGET_COMPONENTS.filter { target ->
+            val name = ComponentName(PACKAGE_NAME, target.className)
+            declared(name, PackageManager.GET_DISABLED_COMPONENTS, target.isService)
+        }
+        if (declaredList.isEmpty()) {
+            return true
+        }
+
+        return declaredList.all { target ->
+            val name = ComponentName(PACKAGE_NAME, target.className)
             isOff(try {
                 context.packageManager.getComponentEnabledSetting(name)
             } catch (_: Throwable) {
                 PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
             })
         }
-        return present.isNotEmpty() && present.all { it }
     }
 
     private fun isOff(setting: Int) =
         setting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
-            setting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER
+            setting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER ||
+            setting == 4 // COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED
 
     /**
      * Stops CarLife first, then disables what would bring it back.
@@ -145,7 +177,7 @@ class CarLifeGovernor(
 
         // The state the commands landed in, not the fact that they were sent.
         val off = isSuppressed()
-        VehicleGovernance.log(TAG, "Suppression finished, off=$off")
+        VehicleGovernance.log(TAG, "Suppression finished, off=$off, processRunning=${isProcessRunning()}")
         off
     }
 
@@ -164,8 +196,9 @@ class CarLifeGovernor(
 
     /** Sends one command per component the package carries, carrying on past a refusal. */
     private fun eachCarried(what: String, deadline: Long, command: (String) -> String) {
-        for (className in COMPONENTS) {
-            if (!declared(ComponentName(PACKAGE_NAME, className), PackageManager.GET_DISABLED_COMPONENTS)) {
+        for (target in TARGET_COMPONENTS) {
+            val className = target.className
+            if (!declared(ComponentName(PACKAGE_NAME, className), PackageManager.GET_DISABLED_COMPONENTS, target.isService)) {
                 VehicleGovernance.log(TAG, "This CarLife build has no $className, skipping it")
                 continue
             }
