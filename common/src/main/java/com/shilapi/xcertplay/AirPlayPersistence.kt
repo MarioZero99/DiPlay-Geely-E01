@@ -659,12 +659,12 @@ object AirPlayPersistence {
 
     fun loadClusterMediaSource(context: Context): Int {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val source = sp.getInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_BLUETOOTH)
-        // With BTAudioGuard unlocking IPKServer's A2DP check, SOURCE_BLUETOOTH (2)
-        // is the verified cluster external stream channel. Automatically migrate legacy SOURCE_USB back to SOURCE_BLUETOOTH.
-        if (source == SOURCE_USB) {
-            sp.edit().putInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_BLUETOOTH).apply()
-            return SOURCE_BLUETOOTH
+        val source = sp.getInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_ONLINE)
+        // Auto-migrate legacy USB (0) and Bluetooth (2) to Online (6).
+        // In Geely Xingrui, Online (6) is a pure software stream requiring no physical USB or A2DP hardware handshake.
+        if (source == SOURCE_USB || source == SOURCE_BLUETOOTH) {
+            sp.edit().putInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_ONLINE).apply()
+            return SOURCE_ONLINE
         }
         return source
     }
