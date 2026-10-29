@@ -189,6 +189,13 @@ object VehicleGovernance {
     fun isCarLifeSuppressed(): Boolean = carLife?.isSuppressed() ?: false
 
     /**
+     * Whether Baidu CarLife's process is currently alive in memory.
+     *
+     * In-memory process probe via ActivityManager: zero IPC cost, non-blocking.
+     */
+    fun isCarLifeProcessRunning(): Boolean = carLife?.isProcessRunning() ?: false
+
+    /**
      * Disables CarLife's USB components, or puts them back. One action, done once.
      *
      * [onComplete] runs on the IO scope the work happened on; the caller hops back to the main thread
