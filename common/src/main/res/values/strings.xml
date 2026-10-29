@@ -25,6 +25,8 @@
     <string name="carlife_installed_suppressed_desc">CarLife’s USB listeners are off. Plugging the iPhone in goes straight to CarPlay. The CarLife icon stays on the launcher for manual use.</string>
     <string name="carlife_status_active">CarLife can still take the USB port</string>
     <string name="carlife_status_suppressed">CarLife cannot take the USB port</string>
+    <string name="carlife_status_suppressed_running">Interception Active · Running in Background</string>
+    <string name="carlife_installed_suppressed_running_desc">Auto-start intercepted, but CarLife process is running in background. Tap Turn CarLife USB off to force stop if conflicts occur.</string>
     <string name="carlife_btn_disable">Turn CarLife USB off</string>
     <string name="carlife_btn_restore">Restore CarLife</string>
     <string name="carlife_confirm_disable_body">Turns off CarLife’s USB receivers and its connect service, so plugging the iPhone in no longer starts CarLife first. This is a one-off change: it stays after a reboot until you press Restore. The icon stays on the launcher and opening it by hand still works. CarPlay has to be reconnected afterwards. Proceed?</string>

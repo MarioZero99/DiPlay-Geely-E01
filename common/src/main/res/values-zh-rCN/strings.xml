@@ -25,6 +25,8 @@
     <string name="carlife_installed_suppressed_desc">CarLife 的 USB 监听已关闭，插入 iPhone 会直接连上 CarPlay。桌面图标保留，可手动打开。</string>
     <string name="carlife_status_active">CarLife 仍会占用 USB 通道</string>
     <string name="carlife_status_suppressed">CarLife 不再占用 USB 通道</string>
+    <string name="carlife_status_suppressed_running">开机拦截已生效 · 后台运行中</string>
+    <string name="carlife_installed_suppressed_running_desc">CarLife 开机与插线自启已被拦截，但当前进程仍在运行（可能来自手动打开）。若遇音频或连接冲突，可点击【关闭 CarLife 占用 USB】强行停止进程。</string>
     <string name="carlife_btn_disable">关闭 CarLife 占用 USB</string>
     <string name="carlife_btn_restore">恢复 CarLife</string>
     <string name="carlife_confirm_disable_body">将关闭 CarLife 的 USB 插拔监听与后台连接服务，插上 iPhone 后不再由 CarLife 抢先启动。这是一次性操作：重启后仍保持关闭，直到你点“恢复 CarLife”。桌面图标保留，手动打开仍可用。设置后需要重新连接 CarPlay 才生效。确定关闭吗？</string>

@@ -171,7 +171,8 @@ class DiPlayActivity : ComponentActivity() {
      * suppression verdict walks three components each time; one look per redraw keeps a whole page
      * layout at three reads instead of six or nine.
      */
-    private var cachedCarLifeState: Pair<Boolean, Boolean>? = null
+    data class CarLifeUiState(val installed: Boolean, val suppressed: Boolean, val running: Boolean)
+    private var cachedCarLifeState: CarLifeUiState? = null
 
     /**
      * True between a confirmed CarLife action and the shell answering.
@@ -1039,36 +1040,45 @@ class DiPlayActivity : ComponentActivity() {
      * CarLife taking the port with no visible way to fix it.
      */
     private fun carLifeGovernanceCard(columns: CardColumns) {
-        val (installed, suppressed) = carLifeState()
+        val (installed, suppressed, running) = carLifeState()
         columns.card(R.string.carlife_governance_title, R.drawable.ic_dp_permissions) { card ->
             if (!installed) {
                 card.addView(label(getString(R.string.carlife_not_installed_desc), 14, MUTED))
                 return@card
             }
 
-            val description = if (suppressed) {
-                getString(R.string.carlife_installed_suppressed_desc)
-            } else {
-                getString(R.string.carlife_installed_active_desc)
+            val description = when {
+                suppressed && running -> getString(R.string.carlife_installed_suppressed_running_desc)
+                suppressed -> getString(R.string.carlife_installed_suppressed_desc)
+                else -> getString(R.string.carlife_installed_active_desc)
             }
             card.addView(label(description, 14, MUTED).apply { setPadding(0, 0, 0, dp(4)) })
+
+            val statusText = when {
+                suppressed && running -> getString(R.string.carlife_status_suppressed_running)
+                suppressed -> getString(R.string.carlife_status_suppressed)
+                else -> getString(R.string.carlife_status_active)
+            }
+            val statusColor = if (suppressed && !running) ACCENT else WARNING
+
             card.addView(
                 label(
-                    getString(if (suppressed) R.string.carlife_status_suppressed else R.string.carlife_status_active),
+                    statusText,
                     13,
-                    if (suppressed) ACCENT else WARNING,
+                    statusColor,
                 ).apply { setPadding(0, 0, 0, dp(12)) },
             )
 
             val buttons = row()
+            val disablePrimary = !suppressed || running
             buttons.addView(
-                carLifeActionButton(getString(R.string.carlife_btn_disable), primary = !suppressed) {
+                carLifeActionButton(getString(R.string.carlife_btn_disable), primary = disablePrimary) {
                     confirmCarLifeAction(disable = true)
                 },
                 LinearLayout.LayoutParams(0, dp(60), 1f).apply { marginEnd = dp(10) },
             )
             buttons.addView(
-                carLifeActionButton(getString(R.string.carlife_btn_restore), primary = suppressed) {
+                carLifeActionButton(getString(R.string.carlife_btn_restore), primary = !disablePrimary) {
                     confirmCarLifeAction(disable = false)
                 },
                 LinearLayout.LayoutParams(0, dp(60), 1f),
@@ -1121,8 +1131,12 @@ class DiPlayActivity : ComponentActivity() {
      * One probe per redraw, for the reason [cachedReport] is held: the card is built while the page is
      * laid out, and each read walks CarLife's component table.
      */
-    private fun carLifeState(): Pair<Boolean, Boolean> = cachedCarLifeState
-        ?: (VehicleGovernance.isCarLifeInstalled() to VehicleGovernance.isCarLifeSuppressed()).also { cachedCarLifeState = it }
+    private fun carLifeState(): CarLifeUiState = cachedCarLifeState
+        ?: CarLifeUiState(
+            installed = VehicleGovernance.isCarLifeInstalled(),
+            suppressed = VehicleGovernance.isCarLifeSuppressed(),
+            running = VehicleGovernance.isCarLifeProcessRunning(),
+        ).also { cachedCarLifeState = it }
 
     private fun diagnosticsCard(columns: CardColumns) {
         columns.card(R.string.diagnostics, R.drawable.ic_dp_diagnostics) { card ->
