@@ -72,7 +72,6 @@ import com.shilapi.xcertplay.transport.Iap2WiredControlClient
 import com.shilapi.xcertplay.transport.Iap2WiredControlTerminal
 import com.shilapi.xcertplay.transport.Iap2WirelessCarPlayEndpoint
 import com.shilapi.xcertplay.transport.Iap2WirelessControlClient
-import com.shilapi.xcertplay.transport.Iap2WirelessControlStage
 import com.shilapi.xcertplay.transport.Iap2WirelessControlTerminal
 import com.shilapi.xcertplay.transport.Iap2WirelessIdentification
 import com.shilapi.xcertplay.transport.WirelessBluetoothHop
@@ -1673,22 +1672,42 @@ class CarPlayController(
 
                 onStatus(CarPlayStatus.RunningWireless)
                 debugLog("wireless Bluetooth iAP2 control starting")
-                val result = Iap2WirelessControlClient(
-                    session = channel,
-                    mfi = Iap2MfiAuthenticationClient(mfi),
-                ).run(
-                    identification = identification,
-                    endpoint = endpoint,
-                    timeoutMillis = controlLoopTimeoutMillis(),
-                    locationProvider = locationProvider,
-                    vehicleStatusProvider = vehicleStatusProvider,
-                    onCarPlayStartSessionSent = { firstTcpWatchdog.startSessionSent() },
-                    onIncoming = ::onRouteFrame,
-                    onProgress = { message ->
-                        diagnostics.controlProgress(message)
-                        debugLog(message)
-                    },
-                )
+                val result = try {
+                    Iap2WirelessControlClient(
+                        session = channel,
+                        mfi = Iap2MfiAuthenticationClient(mfi),
+                    ).run(
+                        identification = identification,
+                        endpoint = endpoint,
+                        timeoutMillis = controlLoopTimeoutMillis(),
+                        negotiationTimeoutMillis = rfcommNegotiationTimeout(rfcommBootstrapStart),
+                        locationProvider = locationProvider,
+                        vehicleStatusProvider = vehicleStatusProvider,
+                        onCarPlayStartSessionSent = { firstTcpWatchdog.startSessionSent() },
+                        onIncoming = ::onRouteFrame,
+                        onProgress = { message ->
+                            diagnostics.controlProgress(message)
+                            debugLog(message)
+                        },
+                    )
+                } catch (failure: IphoneUsbException.TimedOut) {
+                    // identify() throws this when the socket closes, or when nobody answers, before
+                    // identification is accepted. That is earlier than any stage the result can name.
+                    ownStream = null
+                    dropRfcommAttempt(channel, stream)
+                    if (rfcommRetryFits(rfcommBootstrapStart) && !isStaleWirelessRun(generation)) {
+                        val elapsed = SystemClock.elapsedRealtime() - rfcommBootstrapStart
+                        debugLog(
+                            "wireless iAP2 negotiation failed before identification " +
+                                "(${failure.message}); retrying within " +
+                                "${WIRELESS_RFCOMM_RETRY_BUDGET_MILLIS}ms budget " +
+                                "(elapsed=${elapsed}ms attempt=$rfcommAttempt)",
+                        )
+                        pauseBeforeRfcommRetry("negotiation")
+                        continue
+                    }
+                    throw failure
+                }
                 if (isStaleWirelessRun(generation)) {
                     closeWirelessStack()
                     return
@@ -1705,31 +1724,6 @@ class CarPlayController(
                                 "tunnelReady=${wirelessTunnelReady.get()} " +
                                 "wirelessActive=${wirelessActiveReported.get()}",
                         )
-                        val elapsed = SystemClock.elapsedRealtime() - rfcommBootstrapStart
-                        if (
-                            !wirelessActiveReported.get() &&
-                            result.stage == Iap2WirelessControlStage.IDENTIFIED &&
-                            elapsed + WIRELESS_RFCOMM_RETRY_DELAY_MILLIS < WIRELESS_RFCOMM_RETRY_BUDGET_MILLIS &&
-                            !isStaleWirelessRun(generation)
-                        ) {
-                            debugLog(
-                                "wireless RFCOMM closed during IDENTIFIED stage before authentication; " +
-                                    "retrying within ${WIRELESS_RFCOMM_RETRY_BUDGET_MILLIS}ms budget " +
-                                    "(elapsed=${elapsed}ms attempt=$rfcommAttempt)",
-                            )
-                            csm = null
-                            bluetoothStream = null
-                            ownStream = null
-                            closeBestEffort("stale iAP2 CSM session") { channel.close() }
-                            closeBestEffort("superseded Bluetooth link") { stream.close() }
-                            try {
-                                Thread.sleep(WIRELESS_RFCOMM_RETRY_DELAY_MILLIS)
-                            } catch (interrupted: InterruptedException) {
-                                Thread.currentThread().interrupt()
-                                throw IOException("Interrupted while waiting to retry RFCOMM bootstrap", interrupted)
-                            }
-                            continue
-                        }
                         if (!wirelessActiveReported.get()) {
                             val handoffInProgress = isWirelessHandoffInProgress(
                                 handoffRequested = wirelessHandoffRequested.get(),
@@ -2886,6 +2880,33 @@ class CarPlayController(
         return peers
     }
 
+    /** Identification must answer inside one detect cycle, and inside whatever retry budget is left. */
+    private fun rfcommNegotiationTimeout(startedAt: Long): Long {
+        val remaining = WIRELESS_RFCOMM_RETRY_BUDGET_MILLIS - (SystemClock.elapsedRealtime() - startedAt)
+        return remaining.coerceIn(1L, WIRELESS_RFCOMM_NEGOTIATION_TIMEOUT_MILLIS)
+    }
+
+    private fun rfcommRetryFits(startedAt: Long): Boolean {
+        val elapsed = SystemClock.elapsedRealtime() - startedAt
+        return elapsed + WIRELESS_RFCOMM_RETRY_DELAY_MILLIS < WIRELESS_RFCOMM_RETRY_BUDGET_MILLIS
+    }
+
+    private fun dropRfcommAttempt(channel: Iap2Session, stream: BlockingDuplexByteStream) {
+        csm = null
+        bluetoothStream = null
+        closeBestEffort("stale iAP2 CSM session") { channel.close() }
+        closeBestEffort("superseded Bluetooth link") { stream.close() }
+    }
+
+    private fun pauseBeforeRfcommRetry(step: String) {
+        try {
+            Thread.sleep(WIRELESS_RFCOMM_RETRY_DELAY_MILLIS)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IOException("Interrupted while waiting to retry RFCOMM $step", interrupted)
+        }
+    }
+
     private fun closeBestEffort(name: String, close: () -> Unit) {
         try {
             close()
@@ -3169,6 +3190,7 @@ class CarPlayController(
         private const val WIRELESS_HANDOFF_TIMEOUT_MILLIS = 45_000L
         private const val WIRELESS_RFCOMM_RETRY_BUDGET_MILLIS = 8_000L
         private const val WIRELESS_RFCOMM_RETRY_DELAY_MILLIS = 500L
+        private const val WIRELESS_RFCOMM_NEGOTIATION_TIMEOUT_MILLIS = 2_000L
         private const val MAXIMUM_REENUMERATION_ATTEMPTS = 2
 
         /**

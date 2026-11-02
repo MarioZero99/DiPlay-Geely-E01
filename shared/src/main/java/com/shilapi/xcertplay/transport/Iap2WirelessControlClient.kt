@@ -24,6 +24,14 @@ class Iap2WirelessControlClient(
         identification: Iap2IdentificationConfig,
         endpoint: Iap2WirelessCarPlayEndpoint,
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
+        /**
+         * How long [Iap2IdentificationClient.identify] may wait. Null keeps the control-loop deadline.
+         *
+         * The Bluetooth bring-up uses a short value: a socket the daemon has accepted but not attached
+         * stays open and silent, and the control loop's own deadline is minutes. After identification
+         * is accepted the rest of [run] still uses [timeoutMillis].
+         */
+        negotiationTimeoutMillis: Long? = null,
         locationProvider: Iap2LocationProvider? = null,
         vehicleStatusProvider: VehicleStatusProvider? = null,
         onReady: () -> Unit = {},
@@ -60,7 +68,10 @@ class Iap2WirelessControlClient(
         if (identified.vehicleStatusEnabled != identification.vehicleStatusEnabled) {
             onProgress("iap2 no battery reading: not declaring an electric vehicle")
         }
-        Iap2IdentificationClient(session).identify(identified, requireRemaining(deadlineNanos))
+        val identifyTimeout = negotiationTimeoutMillis?.let { budget ->
+            min(requireRemaining(deadlineNanos), budget.coerceAtLeast(1L))
+        } ?: requireRemaining(deadlineNanos)
+        Iap2IdentificationClient(session).identify(identified, identifyTimeout)
         onProgress("iap2 identification accepted")
         var stage = Iap2WirelessControlStage.IDENTIFIED
 
