@@ -1,200 +1,135 @@
-# 蓝牙断开重连后无线CarPlay自动恢复与自愈 实施计划
+# 蓝牙断开重连后无线连接排查与精准修复计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 彻底解决用户反馈的“蓝牙断开后重新连上，就再也无法无线连接”问题。消除 ECARX 双协议严格交集阻塞，引入蓝牙 ACL/Profile 重连事件主动唤醒与退避重置机制，保障无线 CarPlay 在蓝牙恢复后自动并高可靠地重连。
+**Goal:** 基于实车真实证据定位并解决“蓝牙断开后重新连上，就再也无法无线连接”的真正根因。先通过诊断日志明确断连重连后车机 ECARX HFP / A2DP 双 Profile 的真实状态，再依据实车数据实施针对性修复。
 
 **Architecture:**
-1. **ECARX 蓝牙已连设备判定解绑**：重构 `EcarxConnectedIphoneLookup`，摒弃原有的“必须同时连接 HFP 和 A2DP（严格交集）”逻辑，改为以 HFP/免提为主、A2DP 互补的并集策略，解决 iOS/车机重连时因 A2DP 未连导致判定设备为 0 的假离线陷阱。
-2. **蓝牙重连主动感知与自愈唤醒**：在 `CarPlayHostActivity` 中注册动态 `BroadcastReceiver`（监听 `BluetoothDevice.ACTION_ACL_CONNECTED`、`BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED` 以及亿咖通蓝牙连接广播）。一旦检测到目标 iPhone 蓝牙重新接入，立即重置退避计数器并取消死等定时器，秒级主动唤醒重拉无线流程。
-3. **GOC SPP 套接字与 Controller 端口快速释放与自愈**：优化蓝牙断开与重连时 `GocSppTransport` 的释放与复位，并在会话清理中彻底释放 AirPlay 7000 端口，杜绝端口冲突与残留状态干扰。
+1. **可观测性先行（Observability First）**：改造 `EcarxConnectedIphoneLookup`，当判定设备为空时，分别打印 HFP 和 A2DP 各自解析出的设备数量与详情（MAC 与名称），消除当前日志无法区分 `hfp>0, a2dp=0` 与 `hfp=0, a2dp=0` 的盲区。
+2. **实车数据定性分流**：根据蓝牙断开重连后的现场日志判定具体分支：
+   - **分支 A（HFP 有手机，A2DP 为空）**：验证 `gocsdk` 在只有 HFP 链路时完成 `goc_spp` 握手的可行性；若可行，将门禁调整为以 HFP 为基准（严格排除纯 A2DP 设备，避免多设备崩溃）。
+   - **分支 B（HFP 和 A2DP 皆为空）**：排查车机 ECARX 蓝牙底层服务在重连后的状态同步机制（Binder 连接刷新、重新 bindProfile 等）。
+3. **真实广播与安全取消（若需主动唤醒）**：从已解包的 `XCBTService.apk` / `com.nforetek.bt` 中提取真实广播 Action，并在 `CarPlayHostActivity` 中显式持有 `reconnectRunnable` 实例进行精准取消。
 
-**Tech Stack:** Kotlin, Android Bluetooth SDK, ECARX Vendor Binder APIs, Robolectric & JUnit 4.
+**Tech Stack:** Kotlin, Android (API 22 / Lollipop MR1), ECARX Vendor Binder, JUnit 4 (Robolectric / Host via `-PvendorHopDir`).
 
 **Spec:** `docs/superpowers/plans/2026-11-02-bluetooth-reconnect-wireless-recovery-plan.md`
 
 ## Global Constraints
 
-- **兼容性要求**：严禁破坏原生 AOSP 蓝牙链路（`AndroidIap2BluetoothLink`）与 Actions USB 适配器链路。
-- **只使用单设备时信任当前连接**：保持 10-14 拍板的原则（若车机只报一台设备，即便地址与历史存档不一致，也以当前连接为准，不强退设置页）。
-- **TDD 驱动开发**：每一个 Task 必须先写红测试再写实现，最后绿测试回归。
+- **严禁无实据推测**：不提前将“交集为空”定性为“HFP 独活”，必须依靠日志字段证实。
+- **不得破坏单手机路径与门禁防御**：不无脑改并集，绝不接纳纯 A2DP 设备成为候选，防止触发 `Multiple connected iPhones` 破坏既有逻辑。
+- **不依赖不存在的 AOSP 广播**：吉利 E01 蓝牙射频属 ECARX 独占，若需事件唤醒必须使用真实逆向出的车机 Action。
+- **精确 Runnable 管理**：取消延迟任务必须针对特定 Runnable，严禁使用会误杀其他 UI 任务的清空调用。
+- **单测环境约束**：`diplay-vendor-hop` 无独立 Gradle 工程，测试须在 DiPlay 主工程带 `-PvendorHopDir` 参数下执行。
 
 ---
 
 ## 阶段与任务分解
 
-### Task 1: 消除 ECARX 蓝牙已连设备的双 Profile 严格交集门禁
+### Task 1: 增强 `EcarxConnectedIphoneLookup` 诊断输出（区分 HFP 与 A2DP 真实状态）
 
 **Files:**
 - Modify: `/Users/g/Documents/project/diplay-vendor-hop/src/com/shilapi/xcertplay/network/EcarxConnectedIphoneLookup.kt`
 - Test: `/Users/g/Documents/project/diplay-vendor-hop/test/com/shilapi/xcertplay/network/EcarxConnectedIphoneLookupTest.kt`
 
 **Interfaces:**
-- Consumes: `queryConnectedDevices(api, label, onDiagnostic)`
-- Produces: `connectedDevicesFromProfileApis(hfpApi, a2dpApi, resolveRemoteName, onDiagnostic): List<CarBluetoothPhone>`（返回 HFP 与 A2DP 并集设备，HFP 优先级高于 A2DP）
+- Consumes: `queryConnectedDevices(hfpApi, "hfp", onDiagnostic)`, `queryConnectedDevices(a2dpApi, "a2dp", onDiagnostic)`
+- Produces: `connectedDevicesFromProfileApis` 保持返回类型 `List<CarBluetoothPhone>` 不变，但在 `intersect` 为空时，通过 `onDiagnostic` 详细输出两个 profile 各自的设备数与列表。
 
-- [ ] **Step 1: 编写红测试（验证 HFP 单独连接时依然被判定为有效设备）**
-  修改 `EcarxConnectedIphoneLookupTest.kt`：
-  - 更新测试用例 `onlyDevicesConnectedOnBothProfilesCount` 为 `devicesConnectedOnHandsFreeAloneCountWhenMediaIsDisconnected`，断言当 iPhone 仅在 HFP（免提）上连接而 A2DP（媒体）未连接时，依然能正确返回该手机。
-  - 增加测试用例 `deviceConnectedOnMediaAloneAlsoCounts`，验证仅 A2DP 连上时也保留为候选。
+- [ ] **Step 1: 编写单元测试验证诊断明细输出**
+  在 `EcarxConnectedIphoneLookupTest.kt` 中添加测试用例：
+  - 当 HFP 有设备而 A2DP 无设备时，断言返回值仍为 emptyList（保持原有防御不变），但捕获的诊断日志必须明确包含 `hfp=[CC:60:23:D7:2F:5B]` 和 `a2dp=[]`。
+  - 当两者皆无设备时，诊断日志必须明确包含 `hfp=[]` 和 `a2dp=[]`。
 
-- [ ] **Step 2: 运行测试确保失败**
-  运行 Gradle 单元测试，确认断言失败（旧代码因为 `intersect` 会返回空列表）。
+- [ ] **Step 2: 在 DiPlay 主工程下带 `-PvendorHopDir` 运行测试确保失败**
+  运行命令：
+  ```bash
+  ./gradlew testDebugUnitTest -PvendorHopDir=/Users/g/Documents/project/diplay-vendor-hop --tests "com.shilapi.xcertplay.network.EcarxConnectedIphoneLookupTest"
+  ```
+  确认断言失败（因旧代码只输出通用的一句话 `the car reports no phone connected on both profiles`）。
 
-- [ ] **Step 3: 修改 `EcarxConnectedIphoneLookup.kt` 实现并集策略**
-  - 将 `handsFree.keys.intersect(media.keys)` 调整为并集合并：
-    ```kotlin
-    val allAddresses = handsFree.keys + media.keys
-    return allAddresses.map { address ->
-        val name = handsFree[address]?.name?.ifBlank { null }
-            ?: media[address]?.name?.ifBlank { null }
-            ?: resolveRemoteName(address).orEmpty().trim()
-        CarBluetoothPhone(address, name)
-    }.sortedWith(compareBy({ it.name.lowercase(Locale.US) }, { it.address }))
-    ```
-  - 调整诊断日志：仅当 HFP 和 A2DP 均无任何设备连接时，才输出 `the car reports no phone connected on any profile`。
+- [ ] **Step 3: 修改 `EcarxConnectedIphoneLookup.kt` 细化诊断日志**
+  在 `connectedDevicesFromProfileApis` 中：
+  ```kotlin
+  val handsFree = queryConnectedDevices(hfpApi, "hfp", onDiagnostic).associateBy { it.address }
+  val media = queryConnectedDevices(a2dpApi, "a2dp", onDiagnostic).associateBy { it.address }
+  val common = handsFree.keys.intersect(media.keys)
+  if (common.isEmpty()) {
+      val hfpDesc = if (handsFree.isEmpty()) "none" else handsFree.values.joinToString { "${it.address}(${it.name})" }
+      val a2dpDesc = if (media.isEmpty()) "none" else media.values.joinToString { "${it.address}(${it.name})" }
+      onDiagnostic("ecarx no phone on both profiles: hfp=[$hfpDesc] a2dp=[$a2dpDesc]")
+  }
+  return common.map { address -> ... }
+  ```
+  同时去掉 `connectedDevices()` 里重复且信息量较弱的旧日志行。
 
 - [ ] **Step 4: 运行测试确保全部通过**
-  执行 `gradle testDebugUnitTest`，确认 `EcarxConnectedIphoneLookupTest` 6 个用例全部绿色。
+  再次执行 `./gradlew testDebugUnitTest -PvendorHopDir=...`，确保现有用例和新加用例全部通过。
 
-- [ ] **Step 5: 提交代码**
+- [ ] **Step 5: 提交改动**
   ```bash
-  git commit -m "fix(vendor-hop): resolve phone when connected on HFP alone without requiring A2DP"
+  git commit -m "feat(vendor-hop): log detailed HFP and A2DP device states when intersection is empty"
   ```
 
 ---
 
-### Task 2: 增加蓝牙重连事件监听与主动自愈唤醒器（BluetoothReconnectWatcher）
+### Task 2: 实车复现与现场日志抓取
 
-**Files:**
-- Create: `common/src/main/java/com/shilapi/xcertplay/BluetoothReconnectWatcher.kt`
-- Test: `common/src/test/java/com/shilapi/xcertplay/BluetoothReconnectWatcherTest.kt`
-
-**Interfaces:**
-- Produces:
-  ```kotlin
-  class BluetoothReconnectWatcher(
-      private val context: Context,
-      private val isWirelessMode: () -> Boolean,
-      private val onBluetoothReconnected: (deviceAddress: String?, deviceName: String?) -> Unit,
-  ) {
-      fun start()
-      fun stop()
-  }
-  ```
-
-- [ ] **Step 1: 编写单元测试验证广播捕获与事件回调触发**
-  编写 `BluetoothReconnectWatcherTest.kt`：
-  - 模拟收到 `BluetoothDevice.ACTION_ACL_CONNECTED` 广播，断言 `onBluetoothReconnected` 能够被调用，且携带设备 MAC 与 Name。
-  - 模拟收到 `BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED` 状态为 `STATE_CONNECTED`，断言触发回调。
-  - 模拟收到吉利亿咖通蓝牙连接广播 `ecarx.intent.action.BLUETOOTH_DEVICE_CONNECTED`，断言触发回调。
-  - 验证当处于有线 USB 模式（`isWirelessMode() == false`）时，过滤忽略该事件。
-  - 验证调用 `stop()` 后广播解注册，不再响应事件。
-
-- [ ] **Step 2: 运行测试确保红灯**
-  运行 Gradle 单元测试，确认因类不存在或未实现而失败。
-
-- [ ] **Step 3: 实现 `BluetoothReconnectWatcher`**
-  - 动态注册 `BroadcastReceiver`，监听：
-    - `BluetoothDevice.ACTION_ACL_CONNECTED`
-    - `BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED`
-    - `ecarx.intent.action.BLUETOOTH_DEVICE_CONNECTED`
-  - 内部加入轻量防抖（例如 1.5 秒内同一设备的重复连接事件去重），避免协议栈多 profile 连接瞬间触发连环风暴。
-
-- [ ] **Step 4: 运行测试确保绿灯**
-  执行 `BluetoothReconnectWatcherTest`，验证全部通过。
-
-- [ ] **Step 5: 提交代码**
-  ```bash
-  git commit -m "feat(bluetooth): introduce BluetoothReconnectWatcher for active reconnection sensing"
-  ```
+- [ ] **Step 1: 打包并安装最新 APK 到实车**
+  使用带详细诊断日志的构建安装到吉利 E01 车机。
+- [ ] **Step 2: 复现“蓝牙断开后重新连上”流程**
+  1. 手机连上蓝牙，启动无线 CarPlay。
+  2. 手机关闭蓝牙或断开连接，等待无线 CarPlay 断开。
+  3. 手机重新打开蓝牙并连上车机。
+  4. 观察 DiPlay 界面并导出现场日志。
+- [ ] **Step 3: 分析现场日志判明根因类型**
+  - **现象 1（HFP 存活，A2DP 丢失）**：日志显示 `hfp=[CC:60:...], a2dp=[none]`。说明确实是 A2DP 未随蓝牙重连建立，触发了严格交集拦截。进入 **Task 3A**。
+  - **现象 2（双协议皆空）**：日志显示 `hfp=[none], a2dp=[none]`。说明重连后车机 ECARX 服务未向 Binder 同步已连接列表，或 Binder 连接需刷新。进入 **Task 3B**。
+  - **现象 3（地址或名称变化）**：日志显示 MAC 地址变化导致与配置比对失败。针对性处理地址匹配。
 
 ---
 
-### Task 3: 在 `CarPlayHostActivity` 接入主动唤醒与退避重置逻辑
+### Task 3A: （若证实为 HFP 存活 A2DP 丢失）以 HFP 为基准的门禁改造与 GOC SPP 验证
 
 **Files:**
+- Modify: `/Users/g/Documents/project/diplay-vendor-hop/src/com/shilapi/xcertplay/network/EcarxConnectedIphoneLookup.kt`
+- Test: `/Users/g/Documents/project/diplay-vendor-hop/test/com/shilapi/xcertplay/network/EcarxConnectedIphoneLookupTest.kt`
+
+- [ ] **Step 1: 验证 GOC SPP 握手在仅有 HFP 时是否可行**
+  确认底层 `gocsdk` 是否仅依赖底层 ACL 连接即可通过 `LocalSocket("goc_spp")` 与 iPhone 建立 iAP2 通道。
+- [ ] **Step 2: 改造门禁为“以 HFP 为基准，严格排除纯 A2DP 设备”**
+  - 设备候选集以 `handsFree.values` 为主，A2DP 仅用于补充/校正名称，不把只有 A2DP 的设备纳入候选集，杜绝多设备混淆崩溃。
+- [ ] **Step 3: 更新单测并验证**
+  确保纯 HFP 设备能够成功返回，纯 A2DP 设备被安全忽略。
+
+---
+
+### Task 3B: （若证实为双协议皆空）排查 ECARX 服务重连刷新机制
+
+**Files:**
+- Modify: `/Users/g/Documents/project/diplay-vendor-hop/src/com/shilapi/xcertplay/network/EcarxConnectedIphoneLookup.kt`
+
+- [ ] **Step 1: 检查 Binder 存活状态与重新绑定**
+  若 Binder 服务在蓝牙重连后返回旧缓存，在每次查询超时或重试时执行 unbindService + 重新 bindService，强制触发底层 AIDL 重新建立。
+- [ ] **Step 2: 验证实车是否能刷新出已连接列表**。
+
+---
+
+### Task 4: 逆向车机真实广播与安全取消 Runnable 改造（若需主动唤醒）
+
+**Files:**
+- Inspect: `extracted_apks/jadx_xcbtservice_full/`
 - Modify: `common/src/main/java/com/shilapi/xcertplay/CarPlayHostActivity.kt`
-- Test: `common/src/test/java/com/shilapi/xcertplay/CarPlayHostActivityBluetoothReconnectTest.kt`
 
-**Interfaces:**
-- Consumes: `BluetoothReconnectWatcher`
-- Modifies: `CarPlayHostActivity.reconnectAfterLoss`, `CarPlayHostActivity.onBluetoothReconnected`
-
-- [ ] **Step 1: 编写集成测试模拟退避中断与重连提速**
-  编写 `CarPlayHostActivityBluetoothReconnectTest.kt`：
-  - 模拟前次连接失败，进入 `reconnectScheduled = true` 且等待 30 秒的场景。
-  - 发送蓝牙已连接广播，断言：
-    1. 正在排队的 30 秒延迟任务被立即取消（`mainHandler.removeCallbacks`）；
-    2. `reconnectAttempts` 重置为 0；
-    3. `restartCarPlay` 立即被触发（reason="Bluetooth reconnected"）。
-
-- [ ] **Step 2: 运行测试确保失败**
-  运行单元测试确认当前 Activity 无法对蓝牙重连做出反应。
-
-- [ ] **Step 3: 在 `CarPlayHostActivity` 中集成 `BluetoothReconnectWatcher`**
-  - 在 `onCreate` / `onStart` 中启动 `BluetoothReconnectWatcher`，在 `onDestroy` / `onStop` 中停止。
-  - 在回调函数中增加处理：
+- [ ] **Step 1: 从 `XCBTService.apk` / `com.nforetek.bt` 逆向代码中提取真实连接 Action**
+  检索车机广播发送点（如 `nforetek` 状态变化广播），记录准确的 Action 字符串。
+- [ ] **Step 2: 改造 `CarPlayHostActivity` 延迟退避管理**
+  - 显式声明 `private var pendingReconnectRunnable: Runnable? = null`。
+  - 在 `reconnectAfterLoss` 中：
     ```kotlin
-    private fun onBluetoothDeviceReconnected(deviceAddress: String?, deviceName: String?) {
-        if (!wirelessEnabled || shuttingDown.get()) return
-        Log.i(TAG, "Bluetooth reconnected address=$deviceAddress name=$deviceName; breaking reconnect backoff")
-        appendLog("Bluetooth device reconnected: ${deviceName ?: deviceAddress ?: "unknown"}; triggering fast reconnect")
-        // 取消正在退避排队的重试
-        reconnectAttempts = 0
-        if (reconnectScheduled) {
-            reconnectScheduled = false
-            mainHandler.removeCallbacksAndMessages(RECONNECT_TOKEN)
-        }
-        if (!handshakeResetInProgress && controller == null) {
-            restartCarPlay("Bluetooth reconnected")
-        }
-    }
+    val runnable = Runnable { ... }
+    pendingReconnectRunnable = runnable
+    mainHandler.postDelayed(runnable, delayMillis)
     ```
-
-- [ ] **Step 4: 运行测试验证功能与时序**
-  跑通 `CarPlayHostActivityBluetoothReconnectTest` 及所有回归用例。
-
-- [ ] **Step 5: 提交代码**
-  ```bash
-  git commit -m "feat(host): fast-recover wireless CarPlay when Bluetooth reconnects"
-  ```
-
----
-
-### Task 4: 完善 GOC SPP 套接字与断连自愈清理
-
-**Files:**
-- Modify: `/Users/g/Documents/project/diplay-vendor-hop/src/com/shilapi/xcertplay/transport/GocSppTransport.kt`
-- Modify: `/Users/g/Documents/project/diplay-vendor-hop/src/com/shilapi/xcertplay/transport/GocIap2BluetoothLink.kt`
-- Test: `/Users/g/Documents/project/diplay-vendor-hop/test/com/shilapi/xcertplay/transport/GocSppTransportTest.kt`
-
-**Interfaces:**
-- Consumes: `LocalSocket`
-- Produces: `GocSppTransport.connect(bluetoothAddress): GocSppTransport`
-
-- [ ] **Step 1: 编写测试覆盖旧连接断开后再次调用 `connect` 的场景**
-  验证当发生 EOF / 链路断开时，套接字被完全销毁，下次调用 `connect` 能够干净重新发起握手。
-
-- [ ] **Step 2: 审查并修复 `GocSppTransport` 异常关闭细节**
-  确保在 `failAndClose` 中关闭 `socket` 时，若底层因系统资源暂时忙碌未完全释放，捕获并在重连时重试最多 3 次，间隔 200ms。
-
-- [ ] **Step 3: 运行回归测试**
-  运行 `GocSppTransportTest` 与 `GocIap2BluetoothLinkTest`，保证 100% 通过。
-
-- [ ] **Step 4: 提交代码**
-  ```bash
-  git commit -m "fix(vendor-hop): ensure clean reset of GocSppTransport on disconnect"
-  ```
-
----
-
-### Task 5: 全链路端到端回归验证
-
-- [ ] **Step 1: 运行全量单元测试**
-  - 在 `DiPlay-Legacy-Android-Geely` 执行 `./gradlew testDebugUnitTest`
-  - 在 `diplay-vendor-hop` 执行 `./gradlew test`
-  - 确认所有测试全部 Green。
-
-- [ ] **Step 2: 验证 APK 编译**
-  执行 `./gradlew assembleDebug`，确认无编译错误且打包正常。
+  - 取消时仅调用 `mainHandler.removeCallbacks(it)`，安全释放单点任务，杜绝批量清空副作用。
