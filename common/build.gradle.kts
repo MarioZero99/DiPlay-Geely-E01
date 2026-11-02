@@ -78,6 +78,7 @@ dependencies {
     api(project(":shared"))
     api(project(":governance"))
     api(project(":performance"))
+    api(libs.libaums.core)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)

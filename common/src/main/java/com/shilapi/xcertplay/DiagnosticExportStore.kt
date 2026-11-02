@@ -3,20 +3,42 @@ package com.shilapi.xcertplay
 import android.content.Context
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import androidx.core.content.FileProvider
 import com.shilapi.xcertplay.host.R
+import me.jahnen.libaums.core.UsbMassStorageDevice
+import me.jahnen.libaums.core.fs.UsbFile
+import me.jahnen.libaums.core.fs.UsbFileOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 
-/** One folder the export card can open. [usb] is false only for the head unit's own Download directory. */
+/**
+ * One folder or USB storage target the export card can open.
+ * Supports both local filesystems (internal storage/SD card) and direct USB Host Mass Storage devices.
+ */
 internal data class ExportFolder(
     val label: String,
-    val directory: File,
-    val usb: Boolean,
+    val directory: File? = null,
+    val usb: Boolean = false,
     val detail: String? = null,
-)
+    val usbDevice: UsbMassStorageDevice? = null,
+) {
+    val displayPath: String
+        get() = when {
+            usbDevice != null -> "USB: /"
+            directory != null -> directory.absolutePath
+            else -> ""
+        }
+
+    val saveDestinationHint: String
+        get() = when {
+            usbDevice != null -> "USB: /DiPlay"
+            directory != null -> File(directory, "DiPlay").absolutePath
+            else -> ""
+        }
+}
 
 /**
  * Where the report went. [primaryPath] is the file under the folder the user confirmed.
@@ -32,23 +54,70 @@ internal data class ExportOutcome(
 /** Saves one diagnostic report into the folder the user confirmed, plus a private copy for sharing. */
 internal object DiagnosticExportStore {
     fun folders(context: Context): List<ExportFolder> {
+        val result = mutableListOf<ExportFolder>()
+
+        // 1. Physical USB devices via USB Host (libaums SCSI/FAT32, exact match with CX File Explorer)
+        val usbDevices = UsbMassStorageManager.getDevices(context)
+        for (device in usbDevices) {
+            val detail = formatUsbDeviceDetail(context, device)
+            val label = formatUsbDeviceLabel(device)
+            result.add(ExportFolder(label, usb = true, detail = detail, usbDevice = device))
+        }
+
+        // 2. Genuine system-mounted removable volumes (e.g. system SD cards)
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val usb = DiagnosticVolumeProbe.candidates(context)
+        val sysVolumes = DiagnosticVolumeProbe.candidates(context)
             .filter { it.absolutePath != downloads.absolutePath }
+            .filter { candidate ->
+                // If a physical USB Host device is already listed, don't duplicate usbotg
+                if (usbDevices.isNotEmpty()) {
+                    val leaf = candidate.name.lowercase()
+                    !leaf.contains("usbotg") && !leaf.contains("usb")
+                } else true
+            }
             .map { dir ->
                 val label = formatVolumeLabel(context, dir, usb = true)
                 val detail = formatVolumeDetail(context, dir)
-                ExportFolder(label, dir, usb = true, detail = detail)
+                ExportFolder(label, directory = dir, usb = true, detail = detail)
             }
+        result.addAll(sysVolumes)
+
+        // 3. Internal storage (Downloads)
         val internalLabel = context.getString(R.string.export_internal_storage)
         val internalDetail = formatVolumeDetail(context, downloads)
-        val places = usb + ExportFolder(internalLabel, downloads, usb = false, detail = internalDetail)
-        DiagLog.i("DiagnosticExport", places.joinToString(" | ") { folder ->
-            val dir = folder.directory
-            val listed = runCatching { dir.list() }.getOrNull()
-            "${dir.absolutePath} usb=${folder.usb} dir=${dir.isDirectory} list=${listed?.size ?: "null"} write=${dir.canWrite()}"
+        result.add(ExportFolder(internalLabel, directory = downloads, usb = false, detail = internalDetail))
+
+        DiagLog.i("DiagnosticExport", result.joinToString(" | ") { folder ->
+            "${folder.label} [${folder.displayPath}] usb=${folder.usb}"
         }.ifEmpty { "places empty" })
-        return places
+        return result
+    }
+
+    internal fun formatUsbDeviceLabel(device: UsbMassStorageDevice): String {
+        val labelFromFs = runCatching {
+            val partitions = runCatching { device.partitions }.getOrNull() ?: emptyList()
+            partitions.mapNotNull { runCatching { it.fileSystem }.getOrNull() }
+                .firstOrNull { it.volumeLabel.isNotBlank() }?.volumeLabel
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+        if (labelFromFs != null) return "U 盘 ($labelFromFs)"
+
+        val productName = runCatching { device.usbDevice.productName }.getOrNull()?.takeIf { it.isNotBlank() }
+        return if (productName != null) "U 盘 ($productName)" else "U 盘 (USB 存储)"
+    }
+
+    internal fun formatUsbDeviceDetail(context: Context, device: UsbMassStorageDevice): String {
+        if (UsbMassStorageManager.hasPermission(context, device)) {
+            val fs = UsbMassStorageManager.openFileSystem(device)
+            val cap = fs?.capacity ?: UsbMassStorageManager.getCachedCapacity()
+            val free = fs?.freeSpace ?: UsbMassStorageManager.getCachedFreeSpace()
+            if (cap > 0L) {
+                val freeStr = android.text.format.Formatter.formatFileSize(context, free)
+                val capStr = android.text.format.Formatter.formatFileSize(context, cap)
+                return context.getString(R.string.export_storage_space, freeStr, capStr) + " · USB"
+            }
+            return "USB 存储设备"
+        }
+        return "USB 存储设备 (点击授权)"
     }
 
     internal fun formatVolumeLabel(context: Context, dir: File, usb: Boolean): String {
@@ -61,8 +130,7 @@ internal object DiagnosticExportStore {
             for (vol in volumes) {
                 if (vol == null) continue
                 val path = vol.javaClass.getMethod("getPath").invoke(vol) as? String ?: continue
-                val effective = DiagnosticVolumeProbe.resolveVolumePath(File(path))
-                if (path == dir.absolutePath || effective.absolutePath == dir.absolutePath) {
+                if (path == dir.absolutePath) {
                     val desc = runCatching {
                         vol.javaClass.getMethod("getDescription", Context::class.java).invoke(vol, context) as? String
                     }.getOrNull()
@@ -98,8 +166,55 @@ internal object DiagnosticExportStore {
         return if (spaceInfo != null) "$spaceInfo · ${dir.absolutePath}" else dir.absolutePath
     }
 
-    /** Directories first, then files, by lower-case name. An unreadable directory returns empty list. */
+    /**
+     * In-memory representation of a file or directory discovered via RootShellBridge.
+     */
+    open class VirtualFile(
+        parent: File,
+        name: String,
+        private val isDir: Boolean,
+        private val fileLength: Long = 0L,
+    ) : File(parent, name) {
+        override fun isDirectory(): Boolean = isDir
+        override fun isFile(): Boolean = !isDir
+        override fun length(): Long = fileLength
+    }
+
+    fun isReadable(directory: File): Boolean {
+        if (runCatching { directory.listFiles() }.getOrNull() != null) return true
+        if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+            val (rc, _) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("ls -d \"${directory.absolutePath}\"")
+            return rc == 0
+        }
+        return false
+    }
+
+    /** Directories first, then files, by lower-case name. Falls back to RootShellBridge if normal File API is blocked. */
     fun children(directory: File): List<File> {
+        val listed = runCatching { directory.listFiles() }.getOrNull()
+        if (listed != null) {
+            return listed.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        }
+        if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+            val (rc, output) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("ls -1p \"${directory.absolutePath}\"")
+            if (rc == 0 && output.isNotBlank()) {
+                return output.lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .map { name ->
+                        val isDir = name.endsWith("/")
+                        val cleanName = name.removeSuffix("/")
+                        VirtualFile(directory, cleanName, isDir)
+                    }
+                    .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                    .toList()
+            }
+        }
+        return emptyList()
+    }
+
+    /** Directories first, then files, for USB Mass Storage. */
+    fun usbChildren(directory: UsbFile): List<UsbFile> {
         val listed = runCatching { directory.listFiles() }.getOrNull()
         return listed?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })) ?: emptyList()
     }
@@ -112,16 +227,71 @@ internal object DiagnosticExportStore {
     fun save(context: Context, directory: File, fileName: String, report: String): ExportOutcome {
         val file = File(directory, "DiPlay/$fileName")
         DiagLog.i("DiagnosticExport", "save ${file.absolutePath} chars=${report.length}")
-        val direct = syncWriteText(file, report)
-        val written = direct || exportViaRoot(file, report, context.cacheDir)
+        var direct = syncWriteText(file, report)
+        if (!direct) {
+            direct = exportViaRoot(file, report, context.cacheDir)
+        }
         val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrElse { error ->
             DiagLog.w("DiagnosticExport", "private copy failed", error)
             null
         }
-        DiagLog.i("DiagnosticExport", "save done direct=$direct written=$written backup=${backup != null} ${file.absolutePath}")
+        DiagLog.i("DiagnosticExport", "save done direct=$direct backup=${backup != null} ${file.absolutePath}")
+        if (!direct && backup == null) throw IOException("Report storage is unavailable")
+        if (direct) announce(context, listOf(file.absolutePath))
+        return ExportOutcome(file.absolutePath, backup?.uri, direct)
+    }
+
+    /**
+     * Saves the report onto a USB mass-storage device through libaums (FAT32 sectors).
+     * There is no root or mount-path fallback: MTK shell directories such as
+     * /mnt/media_rw/usbotg are not the stick. [ExportOutcome.written] is false when the
+     * stick did not take the file. The private copy is still made for sharing.
+     */
+    fun saveToUsb(
+        context: Context,
+        device: UsbMassStorageDevice,
+        fileName: String,
+        report: String,
+    ): ExportOutcome {
+        val deviceName = runCatching { device.usbDevice.deviceName }.getOrDefault("unknown")
+        DiagLog.i("DiagnosticExport", "saveToUsb device=$deviceName fileName=$fileName chars=${report.length}")
+        val primaryPath = "USB: /DiPlay/$fileName"
+        var written = false
+        try {
+            val fs = UsbMassStorageManager.openFileSystem(device)
+            if (fs == null) {
+                DiagLog.w("DiagnosticExport", "saveToUsb: libaums returned no filesystem")
+            } else {
+                val root = fs.rootDirectory
+                val diplayDir = root.search("DiPlay") ?: root.createDirectory("DiPlay")
+                if (!diplayDir.isDirectory) {
+                    throw IOException("Target DiPlay path exists but is not a directory")
+                }
+                val targetFile = diplayDir.search(fileName) ?: diplayDir.createFile(fileName)
+                val bytes = report.toByteArray(Charsets.UTF_8)
+                UsbFileOutputStream(targetFile).use { out ->
+                    out.write(bytes)
+                    out.flush()
+                }
+                written = targetFile.length == bytes.size.toLong()
+                if (written) {
+                    DiagLog.i("DiagnosticExport", "saveToUsb success via libaums: $primaryPath bytes=${bytes.size}")
+                } else {
+                    DiagLog.w("DiagnosticExport", "saveToUsb length mismatch path=$primaryPath expected=${bytes.size} actual=${targetFile.length}")
+                }
+            }
+        } catch (e: Exception) {
+            DiagLog.w("DiagnosticExport", "saveToUsb via libaums failed", e)
+            written = false
+        }
+
+        val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrElse { error ->
+            DiagLog.w("DiagnosticExport", "private copy failed", error)
+            null
+        }
+        DiagLog.i("DiagnosticExport", "saveToUsb complete: written=$written primaryPath=$primaryPath backup=${backup != null}")
         if (!written && backup == null) throw IOException("Report storage is unavailable")
-        if (written) announce(context, listOf(file.absolutePath))
-        return ExportOutcome(file.absolutePath, backup?.uri, written)
+        return ExportOutcome(primaryPath, backup?.uri, written = written)
     }
 
     private data class Backup(val uri: Uri?, val file: File)

@@ -165,7 +165,11 @@ internal object DiagnosticVolumeProbe {
         if (found.isEmpty()) {
             val mountsContent = procMountsProvider?.invoke() ?: runCatching {
                 File("/proc/mounts").takeIf { it.canRead() }?.readText()
-            }.getOrNull().orEmpty()
+            }.getOrNull().orEmpty().ifEmpty {
+                if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+                    com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("cat /proc/mounts").second
+                } else ""
+            }
 
             if (mountsContent.isNotEmpty()) {
                 val mountCandidates = parseMountPoints(mountsContent)
@@ -176,13 +180,15 @@ internal object DiagnosticVolumeProbe {
                 }
             }
 
-            // 4. MTK 物理挂载目录 /mnt/media_rw/ 直接子目录扫描兜底
+            // 4. MTK 物理挂载目录 /mnt/media_rw/ 直接子目录扫描兜底（排除未插入的空 SD 卡槽等虚拟节点）
             if (found.isEmpty()) {
                 val mediaRw = File("/mnt/media_rw")
                 val children = runCatching { mediaRw.listFiles() }.getOrNull()
                 if (children != null) {
                     for (child in children) {
                         if (!child.isDirectory) continue
+                        val name = child.name.lowercase()
+                        if (name.contains("sdcard") && child.totalSpace <= 0L) continue
                         val effectiveFile = resolveVolumePath(child, storageRoot)
                         found[effectiveFile.absolutePath] = effectiveFile
                         DiagLog.i("DiagnosticVolumeProbe", "Candidate from /mnt/media_rw: ${effectiveFile.absolutePath}")
@@ -192,7 +198,7 @@ internal object DiagnosticVolumeProbe {
         }
 
         if (found.isEmpty()) {
-            DiagLog.w("DiagnosticVolumeProbe", "No removable volumes found from getVolumeList, getVolumePaths, mounts, or /mnt/media_rw")
+            DiagLog.i("DiagnosticVolumeProbe", "No removable volumes found from getVolumeList, getVolumePaths, mounts, or /mnt/media_rw")
         }
 
         return found.values.toList()

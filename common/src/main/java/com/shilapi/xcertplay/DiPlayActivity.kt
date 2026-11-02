@@ -469,6 +469,7 @@ class DiPlayActivity : ComponentActivity() {
         exportSheet?.removeImmediately()
         exportSheet = null
         exportRoots = emptyList()
+        UsbMassStorageManager.close()
         super.onDestroy()
     }
 
@@ -3343,6 +3344,7 @@ class DiPlayActivity : ComponentActivity() {
             browseRequest++
             exportSheet = null
             exportRoots = emptyList()
+            UsbMassStorageManager.close()
         }
         exportSheet = sheet
         host.addView(sheet, FrameLayout.LayoutParams(-1, -1))
@@ -3364,8 +3366,22 @@ class DiPlayActivity : ComponentActivity() {
         if (exportInProgress) return
         val sheet = exportSheet ?: return
         val rows = exportRoots.map { folder ->
-            ExportFolderSheet.Choice(folder.label, folder.detail ?: folder.directory.absolutePath, clickable = true) {
-                openDirectory(folder.directory, folder.directory)
+            val label = if (folder.usbDevice != null) {
+                DiagnosticExportStore.formatUsbDeviceLabel(folder.usbDevice)
+            } else {
+                folder.label
+            }
+            val detail = if (folder.usbDevice != null) {
+                DiagnosticExportStore.formatUsbDeviceDetail(applicationContext, folder.usbDevice)
+            } else {
+                folder.detail ?: folder.displayPath
+            }
+            ExportFolderSheet.Choice(label, detail, clickable = true) {
+                if (folder.usbDevice != null) {
+                    openUsbRoot(folder)
+                } else if (folder.directory != null) {
+                    openDirectory(folder.directory, folder.directory)
+                }
             }
         }
         sheet.showChoices(
@@ -3378,14 +3394,194 @@ class DiPlayActivity : ComponentActivity() {
         )
     }
 
+    private fun openUsbRoot(folder: ExportFolder) {
+        val device = folder.usbDevice ?: return
+        if (exportInProgress) return
+        val sheet = exportSheet ?: return
+
+        if (!UsbMassStorageManager.hasPermission(this, device)) {
+            sheet.showLoading(folder.label, getString(R.string.export_loading))
+            UsbMassStorageManager.requestPermission(this, device) { granted ->
+                if (granted) {
+                    initAndOpenUsb(folder, device)
+                } else {
+                    sheet.showChoices(
+                        folder.label,
+                        "未获得 USB 设备访问权限",
+                        listOf(ExportFolderSheet.Choice(getString(R.string.export_up), null, clickable = true) { showMountList() }),
+                        saveLabel = null,
+                        onSave = null,
+                        closeLabel = getString(R.string.close),
+                    )
+                }
+            }
+        } else {
+            initAndOpenUsb(folder, device)
+        }
+    }
+
+    private fun initAndOpenUsb(folder: ExportFolder, device: me.jahnen.libaums.core.UsbMassStorageDevice) {
+        val sheet = exportSheet ?: return
+        val generation = browseGeneration
+        val request = ++browseRequest
+        sheet.showLoading(folder.label, getString(R.string.export_loading))
+        Thread({
+            val fs = UsbMassStorageManager.openFileSystem(device)
+            val rootDir = fs?.rootDirectory
+            runOnUiThread {
+                if (!browseAlive(generation, request)) return@runOnUiThread
+                if (rootDir == null) {
+                    DiagLog.w("DiagnosticExport", "libaums returned no filesystem; not writing a mount-point shell")
+                    sheet.showChoices(
+                        folder.label,
+                        "USB: /DiPlay",
+                        listOf(
+                            ExportFolderSheet.Choice(getString(R.string.export_up), null, clickable = true) { showMountList() },
+                            ExportFolderSheet.Choice(getString(R.string.export_unreadable), null, clickable = false, onClick = null),
+                        ),
+                        saveLabel = null,
+                        onSave = null,
+                        closeLabel = getString(R.string.close),
+                    )
+                } else {
+                    openUsbDirectory(folder, device, rootDir, rootDir)
+                }
+            }
+        }, "diplay-export-usb-init").start()
+    }
+
+    private fun openUsbDirectory(
+        folder: ExportFolder,
+        device: me.jahnen.libaums.core.UsbMassStorageDevice,
+        directory: me.jahnen.libaums.core.fs.UsbFile,
+        rootDir: me.jahnen.libaums.core.fs.UsbFile,
+    ) {
+        if (exportInProgress) return
+        val sheet = exportSheet ?: return
+        val generation = browseGeneration
+        val request = ++browseRequest
+        val title = if (directory.isRoot) folder.label else directory.name
+        sheet.showLoading(title, getString(R.string.export_loading))
+        Thread({
+            val entries = runCatching { DiagnosticExportStore.usbChildren(directory) }.getOrElse { emptyList() }
+            runOnUiThread {
+                if (!browseAlive(generation, request)) return@runOnUiThread
+                showUsbDirectory(folder, device, directory, rootDir, entries)
+            }
+        }, "diplay-export-usb-list").start()
+    }
+
+    private fun showUsbDirectory(
+        folder: ExportFolder,
+        device: me.jahnen.libaums.core.UsbMassStorageDevice,
+        directory: me.jahnen.libaums.core.fs.UsbFile,
+        rootDir: me.jahnen.libaums.core.fs.UsbFile,
+        entries: List<me.jahnen.libaums.core.fs.UsbFile>,
+    ) {
+        val sheet = exportSheet ?: return
+        val rows = mutableListOf<ExportFolderSheet.Choice>()
+        rows += ExportFolderSheet.Choice(getString(R.string.export_up), null, clickable = true) {
+            if (directory.isRoot) {
+                showMountList()
+            } else {
+                openUsbDirectory(folder, device, directory.parent ?: rootDir, rootDir)
+            }
+        }
+        if (entries.isEmpty()) {
+            rows += ExportFolderSheet.Choice(getString(R.string.export_empty), null, clickable = false, onClick = null)
+        } else {
+            for (entry in entries) {
+                if (entry.isDirectory) {
+                    rows += ExportFolderSheet.Choice(entry.name + "/", null, clickable = true) {
+                        openUsbDirectory(folder, device, entry, rootDir)
+                    }
+                } else {
+                    val fileLength = runCatching { entry.length }.getOrDefault(0L)
+                    val sizeDetail = if (fileLength > 0L) {
+                        android.text.format.Formatter.formatFileSize(applicationContext, fileLength)
+                    } else null
+                    rows += ExportFolderSheet.Choice(entry.name, sizeDetail, clickable = false, onClick = null)
+                }
+            }
+        }
+        val currentTitle = if (directory.isRoot) folder.label else directory.name
+        val currentSubtitle = if (directory.isRoot) "USB: /DiPlay" else "USB: /${directory.name} · 保存至 /DiPlay"
+        sheet.showChoices(
+            currentTitle,
+            currentSubtitle,
+            rows,
+            saveLabel = getString(R.string.export_save_to_disk),
+            onSave = { exportToUsb(device) },
+            closeLabel = getString(R.string.close),
+        )
+    }
+
+    private fun exportToUsb(device: me.jahnen.libaums.core.UsbMassStorageDevice) {
+        if (exportInProgress) return
+        val sheet = exportSheet ?: return
+        exportInProgress = true
+        exportButton?.apply { isEnabled = false; text = getString(R.string.saving_report) }
+        sheet.setSaving(getString(R.string.saving_report))
+        val appContext = applicationContext
+        val fileName = reportFileName()
+        val generation = browseGeneration
+        Thread({
+            val result = runCatching {
+                val report = buildCompleteReport(appContext)
+                DiagnosticExportStore.saveToUsb(appContext, device, fileName, report) to report
+            }
+            runOnUiThread {
+                exportInProgress = false
+                if (!isFinishing && !isDestroyed) {
+                    exportButton?.apply { isEnabled = true; text = getString(R.string.save_diagnostic_report) }
+                }
+                if (generation != browseGeneration || isFinishing || isDestroyed || exportSheet == null) return@runOnUiThread
+                result.fold(
+                    onSuccess = { (outcome, report) ->
+                        val card = exportSheet ?: return@runOnUiThread
+                        if (outcome.written) {
+                            card.showSaved(
+                                title = getString(R.string.diagnostic_report_saved),
+                                body = getString(R.string.export_saved_to, outcome.primaryPath),
+                                viewLabel = getString(R.string.view_diagnostic_report),
+                                onView = { showDiagnosticReport(report) },
+                                shareLabel = outcome.shareableUri?.let { getString(R.string.share) },
+                                onShare = outcome.shareableUri?.let { uri -> { shareReport(uri, report) } },
+                                doneLabel = getString(R.string.done),
+                            )
+                        } else {
+                            showUsbKeptFailure(card, device, report, outcome.shareableUri)
+                        }
+                    },
+                    onFailure = { error ->
+                        DiagLog.w("DiagnosticExport", "USB export failed", error)
+                        exportSheet?.showFailed(
+                            title = getString(R.string.could_not_save_the_report),
+                            body = getString(R.string.diagnostic_report_save_failed_body),
+                            viewLabel = null,
+                            onView = null,
+                            shareLabel = null,
+                            onShare = null,
+                            alternateLabel = null,
+                            onAlternate = null,
+                            retryLabel = getString(R.string.retry),
+                            onRetry = { exportToUsb(device) },
+                            closeLabel = getString(R.string.close),
+                        )
+                    },
+                )
+            }
+        }, "diplay-export-usb-save").start()
+    }
+
     private fun openDirectory(directory: File, mountRoot: File) {
         if (exportInProgress) return
         val sheet = exportSheet ?: return
         val generation = browseGeneration
         val request = ++browseRequest
-        sheet.showLoading(directory.name, getString(R.string.export_loading))
+        sheet.showLoading(directory.name.ifBlank { mountRoot.name }, getString(R.string.export_loading))
         Thread({
-            val readable = runCatching { directory.listFiles() }.getOrNull() != null
+            val readable = DiagnosticExportStore.isReadable(directory)
             val entries = if (readable) DiagnosticExportStore.children(directory) else emptyList()
             runOnUiThread {
                 if (!browseAlive(generation, request)) return@runOnUiThread
@@ -3425,8 +3621,12 @@ class DiPlayActivity : ComponentActivity() {
             directory.name.ifBlank { mountRoot.name },
             File(mountRoot, "DiPlay").absolutePath,
             rows,
-            saveLabel = getString(R.string.export_save_to_disk),
-            onSave = { exportHere(mountRoot) },
+            saveLabel = if (readable) getString(R.string.export_save_to_disk) else null,
+            onSave = if (readable) {
+                { exportHere(mountRoot) }
+            } else {
+                null
+            },
             closeLabel = getString(R.string.close),
         )
     }
@@ -3497,6 +3697,29 @@ class DiPlayActivity : ComponentActivity() {
         generation == browseGeneration && request == browseRequest && exportSheet != null && !isFinishing && !isDestroyed
 
     private fun sameFile(left: File, right: File) = left.absolutePath == right.absolutePath
+
+    /** The stick did not take the file. Root is not used to invent a file on an MTK shell path. */
+    private fun showUsbKeptFailure(
+        sheet: ExportFolderSheet,
+        device: me.jahnen.libaums.core.UsbMassStorageDevice,
+        report: String,
+        uri: Uri?,
+    ) {
+        val downloads = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        sheet.showFailed(
+            title = getString(R.string.could_not_save_the_report),
+            body = getString(R.string.export_failed_kept),
+            viewLabel = uri?.let { getString(R.string.view_diagnostic_report) },
+            onView = uri?.let { { showDiagnosticReport(report) } },
+            shareLabel = uri?.let { getString(R.string.share) },
+            onShare = uri?.let { shareUri -> { shareReport(shareUri, report) } },
+            alternateLabel = getString(R.string.export_save_to_phone),
+            onAlternate = { exportHere(downloads) },
+            retryLabel = getString(R.string.retry),
+            onRetry = { exportToUsb(device) },
+            closeLabel = getString(R.string.close),
+        )
+    }
 
     /**
      * The chosen folder did not take the file, and the private copy did. This is still a failure:

@@ -17,6 +17,7 @@
          itself: the installer draws its confirmation and the driver presses it. The permission is
          unknown below API 26, where nothing asks for it and this app was installed by hand anyway. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <application>
         <provider
             android:name="com.shilapi.xcertplay.DiagnosticReportProvider"
