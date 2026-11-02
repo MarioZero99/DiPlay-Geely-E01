@@ -87,43 +87,39 @@ DiPlay 现在只在 `LocalSocket` 还没在听时重试：`ENOENT` / `ECONNREFUS
 
 ---
 
-### Task 2: `goc_spp` 在 SPP 尚未就绪时重试
+### Task 2: RFCOMM 与 iAP2 控制通道在 IDENTIFIED 阶段支持 8 秒预算重试
 
 **Files:**
 
-- Modify: `/Users/g/Documents/project/diplay-vendor-hop/src/com/shilapi/xcertplay/transport/GocSppTransport.kt`
-- Test: `/Users/g/Documents/project/diplay-vendor-hop/test/com/shilapi/xcertplay/transport/GocSppTransportTest.kt`
+- Modify: `/Users/g/Documents/project/xr/DiPlay-Legacy-Android-Geely/shared/src/main/java/com/shilapi/xcertplay/orchestration/CarPlayController.kt`
 
-Daemon 在套接字 accept 之后才判断 SPP 是否 init。现在的 3×200ms 只覆盖 “socket 文件还不在”。握手写完 12 位地址后，对端立刻关掉，应用必须再连，并且先关掉上一只 socket。
+Daemon 在套接字 accept 之后才判断 SPP 是否 init。健康连接时 gocsdk 不主动下发字节，等待 DiPlay 发送 iAP2 detect，因此不可在底层的 `GocSppTransport` 做短读探测（会导致每次连接空等，且无法捕捉 50ms 之后的断开）。
 
-- [x] **Step 1: 先写失败测试**
+正确的重试位置在上层 `CarPlayController`：
+- Hotspot 与 Bonjour 保持运行不动；
+- 在 `Iap2WirelessControlClient` 返回 `CHANNEL_CLOSED` 且 `stage == Iap2WirelessControlStage.IDENTIFIED`（此时尚无认证进度，属 daemon 异步丢弃套接字）时；
+- 或 `link.open()` / `Iap2Session.openWireless` 抛出 `IOException` 时；
+- 在 8 秒总预算内，关闭当前 RFCOMM 流与 CSM 会话，间隔 500ms 重新执行 `link.open()` 与 `openWireless`；
+- 超出预算才抛出原有异常或进入退避。若 `stage >= AUTHENTICATED` 后发生 EOF，属于会话中途断开，不进入此重试循环。
 
-  - 第一次 `connectReserved` 成功，`writeHandshake` 之后第一次读立刻 EOF。断言会再 `connectReserved` 一次，第二次读到字节后才返回。
-  - 第一次 `connectReserved` 抛 `IOException("ENOENT")` 时，现有 200ms 重试仍然在，不要拉长到整段 SPP 等待。
-  - 重试前上一只 socket 的 `close()` 被调用过。
+- [x] **Step 1: 实现**
 
-- [x] **Step 2: 跑红**
+  在 `CarPlayController.kt` 的 `runWireless(generation: Int)` 中：
+  - 将 Bonjour 与 AirPlay 广播保持单次启动并常驻；
+  - 包装 RFCOMM 建连、CSM 打开与 `Iap2WirelessControlClient.run(...)` 为预算 8 秒、重试间隔 500ms 的循环；
+  - 遇到 `IOException` 或 `terminal == CHANNEL_CLOSED` 且 `stage == IDENTIFIED` 时，安全关闭旧 `channel` 和 `stream`，清空 `csm`/`bluetoothStream`/`ownStream`，延时 500ms 重试；
+  - 超过 8 秒或 `isStaleWirelessRun` 时抛出原有异常或退出。
+
+- [x] **Step 2: 单元测试与回归验证**
 
   ```bash
-  /Users/g/Documents/project/xr/DiPlay-Legacy-Android-Geely/gradlew -p /Users/g/Documents/project/xr/DiPlay-Legacy-Android-Geely :shared:testDebugUnitTest -PvendorHopDir=/Users/g/Documents/project/diplay-vendor-hop --tests "com.shilapi.xcertplay.transport.GocSppTransportTest"
+  /Users/g/Documents/project/xr/DiPlay-Legacy-Android-Geely/gradlew -p /Users/g/Documents/project/xr/DiPlay-Legacy-Android-Geely :shared:testDebugUnitTest -PvendorHopDir=/Users/g/Documents/project/diplay-vendor-hop
   ```
 
-- [x] **Step 3: 实现**
-
-  `connect()` 在写出地址之后，用一次短读确认这条流还活着。立刻 EOF 或写地址时被断开：关掉这只 socket，再连。
-
-  这一段的预算是 8 秒、间隔 500ms。8 秒盖住 daemon 那句 “not inited, wait” 和 iPhone A2DP 的 2 秒，又短于现有 15 秒等手机的窗口。`ENOENT` / `ECONNREFUSED` 仍走原来的 3×200ms，不要让“套接字根本没在听”也空等 8 秒。
-
-  每次失败都 `close()` 当前 socket，再创建下一只。不要把上一只留在 `all clients are connected` 那个名额上。
-
-- [x] **Step 4: 跑绿**
-
-  再跑 `GocSppTransportTest` 和 `GocIap2BluetoothLinkTest`。
-
-- [x] **Step 5: 提交**
+- [x] **Step 3: 提交**
 
   ```bash
-  git -C /Users/g/Documents/project/diplay-vendor-hop commit -am "fix(vendor-hop): retry goc_spp when the daemon accepts then drops the new client"
+  git -C /Users/g/Documents/project/xr/DiPlay-Legacy-Android-Geely commit -am "fix(orchestration): retry RFCOMM and iAP2 control within 8s budget on premature IDENTIFIED EOF"
   ```
 
 ---
