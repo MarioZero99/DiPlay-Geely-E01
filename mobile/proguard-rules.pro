@@ -49,3 +49,19 @@
 -dontwarn javax.naming.**
 -dontwarn java.awt.**
 -dontwarn org.conscrypt.**
+
+# --- libaums reflection for non-standard FAT32 and raw Superfloppy volumes -----------------------
+#
+# RobustFat32FileSystemCreator and UsbMassStorageManager access internal constructors and fields
+# of libaums via reflection to support non-standard FAT32 headers (omitted "FAT32   " magic at
+# offset 82) and raw partitioned Superfloppy sticks.
+-keep class me.jahnen.libaums.core.fs.fat32.Fat32FileSystem {
+    <init>(me.jahnen.libaums.core.driver.BlockDeviceDriver, java.nio.ByteBuffer);
+}
+-keepclassmembers class me.jahnen.libaums.core.UsbMassStorageDevice {
+    private me.jahnen.libaums.core.usb.UsbCommunication usbCommunication;
+}
+-keepclassmembers class me.jahnen.libaums.core.partition.Partition {
+    private me.jahnen.libaums.core.fs.FileSystem fileSystem;
+}
+

@@ -3409,8 +3409,8 @@ class DiPlayActivity : ComponentActivity() {
                         folder.label,
                         "未获得 USB 设备访问权限",
                         listOf(ExportFolderSheet.Choice(getString(R.string.export_up), null, clickable = true) { showMountList() }),
-                        saveLabel = null,
-                        onSave = null,
+                        saveLabel = getString(R.string.retry),
+                        onSave = { openUsbRoot(folder) },
                         closeLabel = getString(R.string.close),
                     )
                 }
@@ -3431,7 +3431,7 @@ class DiPlayActivity : ComponentActivity() {
             runOnUiThread {
                 if (!browseAlive(generation, request)) return@runOnUiThread
                 if (rootDir == null) {
-                    DiagLog.w("DiagnosticExport", "libaums returned no filesystem; not writing a mount-point shell")
+                    DiagLog.w("DiagnosticExport", "libaums returned no filesystem; keeping save button active")
                     sheet.showChoices(
                         folder.label,
                         "USB: /DiPlay",
@@ -3439,8 +3439,11 @@ class DiPlayActivity : ComponentActivity() {
                             ExportFolderSheet.Choice(getString(R.string.export_up), null, clickable = true) { showMountList() },
                             ExportFolderSheet.Choice(getString(R.string.export_unreadable), null, clickable = false, onClick = null),
                         ),
-                        saveLabel = null,
-                        onSave = null,
+                        saveLabel = getString(R.string.export_save_to_disk),
+                        onSave = {
+                            DiagLog.i("DiagnosticExport", "User clicked save while rootDir unready; executing exportToUsb")
+                            exportToUsb(device)
+                        },
                         closeLabel = getString(R.string.close),
                     )
                 } else {

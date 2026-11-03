@@ -10,7 +10,66 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import me.jahnen.libaums.core.UsbMassStorageDevice
+import me.jahnen.libaums.core.driver.BlockDeviceDriver
 import me.jahnen.libaums.core.fs.FileSystem
+import me.jahnen.libaums.core.fs.FileSystemCreator
+import me.jahnen.libaums.core.fs.FileSystemFactory
+import me.jahnen.libaums.core.fs.fat32.Fat32FileSystem
+import me.jahnen.libaums.core.partition.Partition
+import me.jahnen.libaums.core.partition.PartitionTableEntry
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+/**
+ * Robust FAT32 filesystem creator that adheres to the Microsoft FAT32 specification.
+ * Does not strictly enforce ASCII "FAT32   " at offset 82..89, accommodating USB sticks
+ * formatted by various third-party tools, macOS, or Linux mkfs.vfat.
+ */
+internal object RobustFat32FileSystemCreator : FileSystemCreator {
+    override fun read(entry: PartitionTableEntry, blockDevice: BlockDeviceDriver): FileSystem? {
+        val defaultFs = runCatching { Fat32FileSystem.read(blockDevice) }.getOrNull()
+        if (defaultFs != null) return defaultFs
+
+        return runCatching {
+            val buffer = ByteBuffer.allocate(512)
+            blockDevice.read(0L, buffer)
+            buffer.flip()
+
+            val sig0 = buffer.get(510).toInt() and 0xFF
+            val sig1 = buffer.get(511).toInt() and 0xFF
+            if (sig0 != 0x55 || sig1 != 0xAA) {
+                return null
+            }
+
+            buffer.order(ByteOrder.LITTLE_ENDIAN)
+            val bytesPerSector = buffer.getShort(11).toInt() and 0xFFFF
+            val sectorsPerCluster = buffer.get(13).toInt() and 0xFF
+            val reservedSectors = buffer.getShort(14).toInt() and 0xFFFF
+            val fatCount = buffer.get(16).toInt() and 0xFF
+            val totalSectors32 = buffer.getInt(32).toLong() and 0xFFFFFFFFL
+            val sectorsPerFat32 = buffer.getInt(36).toLong() and 0xFFFFFFFFL
+            val rootDirStartCluster = buffer.getInt(44).toLong() and 0xFFFFFFFFL
+
+            if (bytesPerSector !in listOf(512, 1024, 2048, 4096) ||
+                sectorsPerCluster !in listOf(1, 2, 4, 8, 16, 32, 64, 128) ||
+                reservedSectors == 0 || fatCount == 0 ||
+                totalSectors32 == 0L || sectorsPerFat32 == 0L || rootDirStartCluster == 0L
+            ) {
+                return null
+            }
+
+            DiagLog.i("UsbMassStorage", "RobustFat32: Bypassing strict offset 82 magic check, instantiating Fat32FileSystem via reflection")
+            val constructor = Fat32FileSystem::class.java.getDeclaredConstructor(
+                BlockDeviceDriver::class.java,
+                ByteBuffer::class.java,
+            )
+            constructor.isAccessible = true
+            constructor.newInstance(blockDevice, buffer) as FileSystem
+        }.onFailure { e ->
+            DiagLog.w("UsbMassStorage", "RobustFat32FileSystemCreator error", e)
+        }.getOrNull()
+    }
+}
 
 /**
  * Manages USB Mass Storage devices in user space via libaums (SCSI/FAT32 over USB Host),
@@ -19,6 +78,14 @@ import me.jahnen.libaums.core.fs.FileSystem
  */
 internal object UsbMassStorageManager {
     const val ACTION_USB_PERMISSION = "com.shilapi.xcertplay.USB_PERMISSION"
+
+    init {
+        runCatching {
+            FileSystemFactory.registerFileSystem(RobustFat32FileSystemCreator, 10)
+        }.onFailure {
+            DiagLog.w("UsbMassStorage", "Failed to register RobustFat32FileSystemCreator", it)
+        }
+    }
 
     /** Test injection hooks for unit tests. */
     internal var deviceListProvider: ((Context) -> List<UsbMassStorageDevice>)? = null
@@ -143,14 +210,42 @@ internal object UsbMassStorageManager {
             return try {
                 device.init()
                 currentDevice = device
-                val partitions = device.partitions
-                val primaryFs = partitions.mapNotNull { runCatching { it.fileSystem }.getOrNull() }
-                    .maxByOrNull { it.capacity }
+                var partitions = runCatching { device.partitions }.getOrElse { emptyList() }
+                if (partitions.isEmpty()) {
+                    DiagLog.w("UsbMassStorage", "device.partitions is empty, attempting Superfloppy / raw block fallback")
+                    val rawDevice = runCatching {
+                        val commField = UsbMassStorageDevice::class.java.getDeclaredField("usbCommunication").apply { isAccessible = true }
+                        val comm = commField.get(device) as? me.jahnen.libaums.core.usb.UsbCommunication
+                        if (comm != null) {
+                            me.jahnen.libaums.core.driver.BlockDeviceDriverFactory.createBlockDevice(comm, 0.toByte()).apply { init() }
+                        } else null
+                    }.getOrNull()
+                    if (rawDevice != null) {
+                        val entry = PartitionTableEntry(0, 0L, 0L)
+                        val fs = RobustFat32FileSystemCreator.read(entry, rawDevice)
+                            ?: runCatching { FileSystemFactory.createFileSystem(entry, rawDevice) }.getOrNull()
+                        if (fs != null) {
+                            val partition = Partition(rawDevice, entry)
+                            val fsField = Partition::class.java.getDeclaredField("fileSystem").apply { isAccessible = true }
+                            fsField.set(partition, fs)
+                            partitions = listOf(partition)
+                            device.partitions = partitions
+                            DiagLog.i("UsbMassStorage", "Successfully mounted raw Superfloppy FAT32 volume")
+                        }
+                    }
+                }
+                val primaryFs = partitions.mapNotNull { part ->
+                    runCatching { part.fileSystem }.onFailure { e ->
+                        DiagLog.w("UsbMassStorage", "Failed to retrieve filesystem from partition", e)
+                    }.getOrNull()
+                }.maxByOrNull { it.capacity }
                 currentFs = primaryFs
                 if (primaryFs != null) {
                     cachedCapacity = primaryFs.capacity
                     cachedFreeSpace = primaryFs.freeSpace
+                    DiagLog.i("UsbMassStorage", "USB mounted: label='${primaryFs.volumeLabel}', capacity=${primaryFs.capacity}, free=${primaryFs.freeSpace}")
                 } else {
+                    DiagLog.w("UsbMassStorage", "USB device initialized but no valid filesystem found")
                     close()
                 }
                 primaryFs

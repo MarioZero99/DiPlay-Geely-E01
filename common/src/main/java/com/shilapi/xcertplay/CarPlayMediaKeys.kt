@@ -369,6 +369,7 @@ internal object CarPlayMediaKeys {
                     lastPublishedNowPlaying?.artist,
                     lastPublishedNowPlaying?.album,
                     playing,
+                    currentArtwork,
                 )
             }
         }
@@ -596,6 +597,7 @@ internal object CarPlayMediaKeys {
                     nowPlaying?.artist,
                     nowPlaying?.album,
                     isPlaying,
+                    artwork,
                 )
                 DiagLog.d(TAG, "cluster metadata published: title=${nowPlaying?.title} artist=${nowPlaying?.artist} hasArt=${artwork != null}")
             }.onFailure { e ->
