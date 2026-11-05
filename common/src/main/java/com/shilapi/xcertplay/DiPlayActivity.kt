@@ -43,6 +43,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.shilapi.governance.VehicleGovernance
+import com.shilapi.xcertplay.system.RootShellBridge
 import com.shilapi.xcertplay.airplay.AirPlayDisplaySettings
 import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeBasis
 import com.shilapi.xcertplay.airplay.CarPlayClusterDisplay
@@ -183,6 +184,7 @@ class DiPlayActivity : ComponentActivity() {
      * is the record.
      */
     private var carLifeInProgress = false
+    private var bluetoothRestartInProgress = false
     private var initialLaunch = true
     private var notificationTransport = true
     private var exportInProgress = false
@@ -1021,6 +1023,7 @@ class DiPlayActivity : ComponentActivity() {
     private fun vehicleGovernanceCards(columns: CardColumns) {
         carLifeGovernanceCard(columns)
         voiceGovernanceCard(columns)
+        bluetoothGovernanceCard(columns)
         diagnosticsCard(columns)
     }
 
@@ -1248,6 +1251,74 @@ class DiPlayActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun bluetoothGovernanceCard(columns: CardColumns) {
+        val sessionLive = CarPlayBackgroundSession.hasSession()
+        columns.card(R.string.bluetooth_governance_title, R.drawable.ic_dp_permissions) { card ->
+            card.addView(label(getString(R.string.bluetooth_governance_desc), 14, MUTED).apply { setPadding(0, 0, 0, dp(6)) })
+            if (sessionLive) {
+                card.addView(
+                    label(getString(R.string.bluetooth_disabled_during_session), 14, WARNING)
+                        .apply { setPadding(0, 0, 0, dp(6)) },
+                )
+            }
+            val btn = button(
+                if (bluetoothRestartInProgress) getString(R.string.bluetooth_restarting) else getString(R.string.bluetooth_restart_action),
+                false,
+            ) {
+                confirmBluetoothRestart()
+            }.apply {
+                isEnabled = !bluetoothRestartInProgress && !sessionLive
+                alpha = if (bluetoothRestartInProgress || sessionLive) 0.4f else 1f
+            }
+            card.addView(btn, matchButton(10, 60))
+        }
+    }
+
+    private fun confirmBluetoothRestart() {
+        if (bluetoothRestartInProgress || CarPlayBackgroundSession.hasSession()) return
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.bluetooth_governance_title))
+            .setMessage(getString(R.string.bluetooth_restart_confirm_body))
+            .setNegativeButton(getString(R.string.cancel), null)
+            .setPositiveButton(getString(R.string.maintenance_continue)) { _, _ ->
+                runBluetoothRestart()
+            }
+            .show()
+    }
+
+    private fun runBluetoothRestart() {
+        if (bluetoothRestartInProgress || CarPlayBackgroundSession.hasSession()) return
+        bluetoothRestartInProgress = true
+        render()
+        Thread({
+            val hop = vendorHop(this)
+            val success = try {
+                if (hop != null) {
+                    val result = hop.performMaintenance(this, "payload")
+                    DiagLog.i("BluetoothGovernance", "Hop restart result: $result")
+                    !result.contains("没做成") && !result.contains("Not done")
+                } else if (RootShellBridge.isAvailable()) {
+                    val ok = RootShellBridge.execute("/system/bin/stop gocsdk; sleep 1; /system/bin/start gocsdk")
+                    DiagLog.i("BluetoothGovernance", "RootShellBridge restart: $ok")
+                    ok
+                } else {
+                    DiagLog.w("BluetoothGovernance", "Neither hop nor RootShellBridge is available")
+                    false
+                }
+            } catch (t: Throwable) {
+                DiagLog.e("BluetoothGovernance", "Failed to restart bluetooth daemon", t)
+                false
+            }
+            runOnUiThread {
+                bluetoothRestartInProgress = false
+                if (isFinishing) return@runOnUiThread
+                toast(getString(if (success) R.string.bluetooth_restart_success_toast else R.string.bluetooth_restart_failed_toast))
+                hop?.let { refreshHopMaintenance(it) }
+                render()
+            }
+        }, "car-bluetooth-restart").apply { isDaemon = true }.start()
     }
 
     /**

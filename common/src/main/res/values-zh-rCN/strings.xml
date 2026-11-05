@@ -31,6 +31,14 @@
     <string name="carlife_btn_restore">恢复 CarLife</string>
     <string name="carlife_confirm_disable_body">将关闭 CarLife 的 USB 插拔监听与后台连接服务，插上 iPhone 后不再由 CarLife 抢先启动。这是一次性操作：重启后仍保持关闭，直到你点“恢复 CarLife”。桌面图标保留，手动打开仍可用。设置后需要重新连接 CarPlay 才生效。确定关闭吗？</string>
     <string name="carlife_confirm_restore_body">将重新开启 CarLife 的 USB 插拔监听与连接服务，插上 iPhone 时它会再次自动启动。这是一次性操作，不会自动变回关闭。确定恢复吗？</string>
+    <string name="bluetooth_governance_title">原车蓝牙</string>
+    <string name="bluetooth_governance_desc">重置车机底层 gocsdk 蓝牙守护进程。当蓝牙断开后再也连不上、或开关蓝牙无效时使用（耗时约 3~5 秒）。</string>
+    <string name="bluetooth_restart_action">重启底层蓝牙服务</string>
+    <string name="bluetooth_restarting">正在重启蓝牙服务…</string>
+    <string name="bluetooth_restart_confirm_body">确定重启车机底层蓝牙守护进程吗？无需重启整车机，大约耗时 3~5 秒，可清除占死或假死的蓝牙连接通道。确定重启吗？</string>
+    <string name="bluetooth_restart_success_toast">底层蓝牙服务已重启，请重新连接</string>
+    <string name="bluetooth_restart_failed_toast">重启蓝牙服务失败</string>
+    <string name="bluetooth_disabled_during_session">CarPlay 会话运行中，无法重启蓝牙</string>
     <string name="hotspot_hint_manual">车载热点 · 保持车载热点、蓝牙和 iPhone 的 Wi-Fi 开启。</string>
     <string name="hotspot_hint_local">打开“连接设置”以保存车载热点信息。</string>
     <string name="hotspot_hint_existing">同一网络 · 在车机设置里把车机和 iPhone 连到同一张 Wi-Fi，并保持蓝牙开启。</string>
