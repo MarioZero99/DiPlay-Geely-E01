@@ -246,6 +246,7 @@
     <string name="export_empty">(This folder is empty)</string>
     <string name="export_internal_storage">Phone storage</string>
     <string name="export_usb_storage">USB storage (%1$s)</string>
+    <string name="export_usb_direct_detail">Write to USB /DiPlay</string>
     <string name="export_sdcard_storage">SD card (%1$s)</string>
     <string name="export_storage_space">%1$s free of %2$s</string>
     <string name="export_loading">Reading…</string>

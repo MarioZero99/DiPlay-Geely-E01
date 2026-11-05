@@ -2,6 +2,7 @@ package com.shilapi.xcertplay
 
 import android.content.Context
 import android.os.Environment
+import com.shilapi.xcertplay.host.R
 import org.junit.After
 import me.jahnen.libaums.core.UsbMassStorageDevice
 import org.junit.Assert.assertEquals
@@ -85,6 +86,78 @@ class DiagnosticExportStoreTest {
         val folders = DiagnosticExportStore.folders(context)
         assertEquals(1, folders.size)
         assertFalse(folders.first().usb)
+    }
+
+    @Test fun foldersPreferMountedVolumeOverLibaums() {
+        val raw = File(context.cacheDir, "mnt/media_rw/usbotg-sda1").apply { mkdirs() }
+        File(raw, "song.mp3").writeText("a")
+        DiagnosticVolumeProbe.volumeListProvider = { arrayOf(TestVolume(raw.absolutePath)) }
+        UsbMassStorageManager.deviceListProvider = { listOf(blankUsbDevice()) }
+        var opens = 0
+        UsbMassStorageManager.openFileSystemProvider = { opens += 1; null }
+        UsbMassStorageManager.hasPermissionProvider = { _, _ -> true }
+
+        val folders = DiagnosticExportStore.folders(context)
+        val usb = folders.filter { it.usb }
+        assertEquals(1, usb.size)
+        assertEquals(raw.absolutePath, usb.single().directory?.absolutePath)
+        assertTrue(usb.single().usbDevice == null)
+        assertEquals(0, opens)
+    }
+
+    @Test fun foldersListsLibaumsDeviceWithoutOpeningWhenNothingIsMounted() {
+        var opens = 0
+        UsbMassStorageManager.deviceListProvider = { listOf(blankUsbDevice()) }
+        UsbMassStorageManager.openFileSystemProvider = { opens += 1; null }
+        UsbMassStorageManager.hasPermissionProvider = { _, _ -> true }
+        DiagnosticVolumeProbe.volumeListProvider = { emptyArray<Any>() }
+        DiagnosticVolumeProbe.volumePathsProvider = { emptyArray() }
+        DiagnosticVolumeProbe.procMountsProvider = { "" }
+
+        val folders = DiagnosticExportStore.folders(context)
+        val usb = folders.filter { it.usbDevice != null }
+        assertEquals(1, usb.size)
+        assertEquals("U 盘 (USB 存储)", usb.single().label)
+        assertEquals(context.getString(R.string.export_usb_direct_detail), usb.single().detail)
+        assertEquals("USB: /", usb.single().displayPath)
+        assertEquals(0, opens)
+        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        assertEquals(downloads.absolutePath, folders.last().directory?.absolutePath)
+        assertFalse(folders.last().usb)
+    }
+
+    @Test fun foldersRejectShellsEvenWhenTheProbeReturnsThem() {
+        val shell = File(context.cacheDir, "storage/usbotg").apply { mkdirs() }
+        File(shell, "song.mp3").writeText("a")
+        val sd = File(context.cacheDir, "storage/sdcard1").apply { mkdirs() }
+        File(sd, "song.mp3").writeText("a")
+        DiagnosticVolumeProbe.volumeListProvider = {
+            arrayOf(TestVolume(shell.absolutePath), TestVolume(sd.absolutePath, description = "SD"))
+        }
+        UsbMassStorageManager.deviceListProvider = { listOf(blankUsbDevice()) }
+        var opens = 0
+        UsbMassStorageManager.openFileSystemProvider = { opens += 1; null }
+
+        val folders = DiagnosticExportStore.folders(context)
+        assertTrue(folders.none { it.directory?.absolutePath == shell.absolutePath })
+        assertTrue(folders.none { it.directory?.absolutePath == sd.absolutePath })
+        assertEquals(1, folders.count { it.usbDevice != null })
+        assertEquals(0, opens)
+    }
+
+    @Test fun isRealMountedStickRejectsTheKnownShells() {
+        assertFalse(DiagnosticExportStore.isRealMountedStick(File("/storage/usbotg")))
+        assertFalse(DiagnosticExportStore.isRealMountedStick(File("/storage/udisk")))
+        assertFalse(DiagnosticExportStore.isRealMountedStick(File("/storage/sdcard1")))
+        assertFalse(DiagnosticExportStore.isRealMountedStick(File("/mnt/media_rw/sdcard2")))
+        assertTrue(DiagnosticExportStore.isRealMountedStick(File("/storage/usbotg/usbotg-sda1")))
+        assertTrue(DiagnosticExportStore.isRealMountedStick(File("/mnt/media_rw/udisk1")))
+    }
+
+    @Test fun lengthFromLsReadsTheSizeBeforeTheDate() {
+        assertEquals(1234L, DiagnosticExportStore.lengthFromLs("-rw-r--r-- 1 root root 1234 2026-11-04 10:17 report.txt"))
+        assertEquals(12L, DiagnosticExportStore.lengthFromLs("-rw-r--r-- root root 12 10:17 report.txt"))
+        assertEquals(null, DiagnosticExportStore.lengthFromLs("ls: report.txt: No such file"))
     }
 
     @Test fun formatVolumeLabelFormatsUsbDriveFriendlyName() {
