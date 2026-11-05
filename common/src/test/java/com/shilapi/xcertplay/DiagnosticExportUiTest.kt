@@ -22,6 +22,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.util.ReflectionHelpers
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "en", shadows = [FileProviderPathTestShadow::class])
@@ -138,6 +140,46 @@ class DiagnosticExportUiTest {
             assertEquals(1, opens)
             assertTrue(texts(activity).none { it.text?.contains("readme.txt") == true })
         } finally {
+            UsbMassStorageManager.deviceListProvider = null
+            UsbMassStorageManager.hasPermissionProvider = null
+            UsbMassStorageManager.openFileSystemProvider = null
+            UsbMassStorageManager.close()
+            DiagnosticVolumeProbe.volumeListProvider = null
+            DiagnosticVolumeProbe.volumePathsProvider = null
+            DiagnosticVolumeProbe.procMountsProvider = null
+            DiagSink.reset()
+            controller.pause().stop().destroy()
+        }
+    }
+
+    /**
+     * A save from the place list has no primary button to relabel, so the card itself must turn into
+     * the progress state. Otherwise the only visible change is that taps stop working, and Back —
+     * which dismisses the card and closes the stick — looks like the way out.
+     */
+    @Test fun aTappedStickShowsProgressWhileTheWriteRuns() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        registerReportProvider(activity.applicationContext)
+        val gate = CountDownLatch(1)
+        UsbMassStorageManager.deviceListProvider = { listOf(DiagnosticExportStoreTest.blankUsbDevice()) }
+        UsbMassStorageManager.hasPermissionProvider = { _, _ -> true }
+        UsbMassStorageManager.openFileSystemProvider = { gate.await(5, TimeUnit.SECONDS); null }
+        DiagnosticVolumeProbe.volumeListProvider = { emptyArray<Any>() }
+        DiagnosticVolumeProbe.volumePathsProvider = { emptyArray() }
+        DiagnosticVolumeProbe.procMountsProvider = { "" }
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
+            awaitText(activity, activity.getString(R.string.export_usb_direct_detail))
+            clickRow(activity, "U 盘 (USB 存储)")
+            shadowOf(Looper.getMainLooper()).idle()
+            val during = texts(activity).mapNotNull { it.text?.toString() }
+            assertTrue(during.toString(), during.contains(activity.getString(R.string.export_loading)))
+            assertFalse(during.contains(activity.getString(R.string.export_usb_direct_detail)))
+            gate.countDown()
+            awaitText(activity, activity.getString(R.string.export_failed_kept))
+        } finally {
+            gate.countDown()
             UsbMassStorageManager.deviceListProvider = null
             UsbMassStorageManager.hasPermissionProvider = null
             UsbMassStorageManager.openFileSystemProvider = null

@@ -3405,6 +3405,9 @@ class DiPlayActivity : ComponentActivity() {
                 }
             }
         } else {
+            // 这一行没有主按钮可以改成「正在保存…」，卡片本身要进入进度态：否则只剩点不动，
+            // 用户会按返回键，而返回键会关掉正在写入的设备。
+            sheet.showLoading(folder.label, getString(R.string.export_loading))
             exportToUsb(device)
         }
     }
