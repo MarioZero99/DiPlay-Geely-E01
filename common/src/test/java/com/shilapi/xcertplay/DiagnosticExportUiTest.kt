@@ -117,6 +117,39 @@ class DiagnosticExportUiTest {
         }
     }
 
+    @Test fun aLibaumsStickIsListedWithoutOpeningAndSaveTriesOnce() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        registerReportProvider(activity.applicationContext)
+        var opens = 0
+        UsbMassStorageManager.deviceListProvider = { listOf(DiagnosticExportStoreTest.blankUsbDevice()) }
+        UsbMassStorageManager.hasPermissionProvider = { _, _ -> true }
+        UsbMassStorageManager.openFileSystemProvider = { opens += 1; null }
+        DiagnosticVolumeProbe.volumeListProvider = { emptyArray<Any>() }
+        DiagnosticVolumeProbe.volumePathsProvider = { emptyArray() }
+        DiagnosticVolumeProbe.procMountsProvider = { "" }
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
+            awaitText(activity, "U 盘 (USB 存储)")
+            awaitText(activity, activity.getString(R.string.export_usb_direct_detail))
+            assertEquals(0, opens)
+            clickRow(activity, "U 盘 (USB 存储)")
+            awaitText(activity, activity.getString(R.string.export_failed_kept))
+            assertEquals(1, opens)
+            assertTrue(texts(activity).none { it.text?.contains("readme.txt") == true })
+        } finally {
+            UsbMassStorageManager.deviceListProvider = null
+            UsbMassStorageManager.hasPermissionProvider = null
+            UsbMassStorageManager.openFileSystemProvider = null
+            UsbMassStorageManager.close()
+            DiagnosticVolumeProbe.volumeListProvider = null
+            DiagnosticVolumeProbe.volumePathsProvider = null
+            DiagnosticVolumeProbe.procMountsProvider = null
+            DiagSink.reset()
+            controller.pause().stop().destroy()
+        }
+    }
+
     /** A stick that cannot be created stays a failure, and the card offers phone storage plus the private copy. */
     @Test fun aFailedStickKeepsTheReportAndOffersPhoneStorage() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()

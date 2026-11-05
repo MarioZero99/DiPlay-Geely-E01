@@ -8,7 +8,6 @@ import android.os.Environment
 import androidx.core.content.FileProvider
 import com.shilapi.xcertplay.host.R
 import me.jahnen.libaums.core.UsbMassStorageDevice
-import me.jahnen.libaums.core.fs.UsbFile
 import me.jahnen.libaums.core.fs.UsbFileOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -104,9 +103,6 @@ internal object DiagnosticExportStore {
         return if (productName != null) "U 盘 ($productName)" else "U 盘 (USB 存储)"
     }
 
-    internal fun formatUsbDeviceDetail(context: Context, device: UsbMassStorageDevice): String =
-        context.getString(R.string.export_usb_direct_detail)
-
     internal fun formatVolumeLabel(context: Context, dir: File, usb: Boolean): String {
         if (!usb) return context.getString(R.string.export_internal_storage)
         val sysDesc = runCatching {
@@ -198,12 +194,6 @@ internal object DiagnosticExportStore {
             }
         }
         return emptyList()
-    }
-
-    /** Directories first, then files, for USB Mass Storage. */
-    fun usbChildren(directory: UsbFile): List<UsbFile> {
-        val listed = runCatching { directory.listFiles() }.getOrNull()
-        return listed?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })) ?: emptyList()
     }
 
     /**

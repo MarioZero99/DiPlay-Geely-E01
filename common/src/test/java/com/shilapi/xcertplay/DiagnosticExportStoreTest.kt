@@ -93,7 +93,7 @@ class DiagnosticExportStoreTest {
         val raw = File(context.cacheDir, "mnt/media_rw/usbotg-sda1").apply { mkdirs() }
         File(raw, "song.mp3").writeText("a")
         DiagnosticVolumeProbe.volumeListProvider = { arrayOf(TestVolume(raw.absolutePath)) }
-        UsbMassStorageManager.deviceListProvider = { listOf(blankUsbDevice()) }
+        UsbMassStorageManager.deviceListProvider = { listOf(DiagnosticExportStoreTest.blankUsbDevice()) }
         var opens = 0
         UsbMassStorageManager.openFileSystemProvider = { opens += 1; null }
         UsbMassStorageManager.hasPermissionProvider = { _, _ -> true }
@@ -108,7 +108,7 @@ class DiagnosticExportStoreTest {
 
     @Test fun foldersListsLibaumsDeviceWithoutOpeningWhenNothingIsMounted() {
         var opens = 0
-        UsbMassStorageManager.deviceListProvider = { listOf(blankUsbDevice()) }
+        UsbMassStorageManager.deviceListProvider = { listOf(DiagnosticExportStoreTest.blankUsbDevice()) }
         UsbMassStorageManager.openFileSystemProvider = { opens += 1; null }
         UsbMassStorageManager.hasPermissionProvider = { _, _ -> true }
         DiagnosticVolumeProbe.volumeListProvider = { emptyArray<Any>() }
@@ -135,7 +135,7 @@ class DiagnosticExportStoreTest {
         DiagnosticVolumeProbe.volumeListProvider = {
             arrayOf(TestVolume(shell.absolutePath), TestVolume(sd.absolutePath, description = "SD"))
         }
-        UsbMassStorageManager.deviceListProvider = { listOf(blankUsbDevice()) }
+        UsbMassStorageManager.deviceListProvider = { listOf(DiagnosticExportStoreTest.blankUsbDevice()) }
         var opens = 0
         UsbMassStorageManager.openFileSystemProvider = { opens += 1; null }
 
@@ -172,7 +172,7 @@ class DiagnosticExportStoreTest {
         DiagSink.attach { lines.add(it) }
         val shells = listOf(File("/mnt/media_rw/usbotg/DiPlay"), File("/storage/usbotg/DiPlay"))
 
-        val outcome = DiagnosticExportStore.saveToUsb(context, blankUsbDevice(), "report.txt", "hello")
+        val outcome = DiagnosticExportStore.saveToUsb(context, DiagnosticExportStoreTest.blankUsbDevice(), "report.txt", "hello")
 
         assertFalse(outcome.written)
         assertEquals("USB: /DiPlay/report.txt", outcome.primaryPath)
@@ -214,7 +214,7 @@ class DiagnosticExportStoreTest {
             File("/storage/usbotg/DiPlay"),
         )
         val outcome = runCatching {
-            DiagnosticExportStore.saveToUsb(context, blankUsbDevice(), "report.txt", "hello")
+            DiagnosticExportStore.saveToUsb(context, DiagnosticExportStoreTest.blankUsbDevice(), "report.txt", "hello")
         }.getOrNull()
         if (outcome != null) {
             assertFalse(outcome.written)
@@ -222,15 +222,6 @@ class DiagnosticExportStoreTest {
             assertFalse(outcome.primaryPath.contains("/storage/usbotg"))
         }
         assertTrue(shells.none { it.exists() })
-    }
-
-    private fun blankUsbDevice(): UsbMassStorageDevice {
-        val unsafeClass = Class.forName("sun.misc.Unsafe")
-        val field = unsafeClass.getDeclaredField("theUnsafe")
-        field.isAccessible = true
-        val unsafe = field.get(null)
-        val allocate = unsafeClass.getMethod("allocateInstance", Class::class.java)
-        return allocate.invoke(unsafe, UsbMassStorageDevice::class.java) as UsbMassStorageDevice
     }
 
     @Test fun isReadableReturnsTrueForNormalDirectory() {
@@ -247,5 +238,16 @@ class DiagnosticExportStoreTest {
         assertFalse(regFile.isDirectory)
         assertTrue(regFile.isFile)
         assertEquals(1234L, regFile.length())
+    }
+
+    companion object {
+        internal fun blankUsbDevice(): UsbMassStorageDevice {
+            val unsafeClass = Class.forName("sun.misc.Unsafe")
+            val field = unsafeClass.getDeclaredField("theUnsafe")
+            field.isAccessible = true
+            val unsafe = field.get(null)
+            val allocate = unsafeClass.getMethod("allocateInstance", Class::class.java)
+            return allocate.invoke(unsafe, UsbMassStorageDevice::class.java) as UsbMassStorageDevice
+        }
     }
 }
