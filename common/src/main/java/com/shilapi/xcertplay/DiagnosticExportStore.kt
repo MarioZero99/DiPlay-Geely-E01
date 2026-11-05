@@ -248,9 +248,19 @@ internal object DiagnosticExportStore {
         val deviceName = runCatching { device.usbDevice.deviceName }.getOrDefault("unknown")
         DiagLog.i("DiagnosticExport", "saveToUsb device=$deviceName fileName=$fileName chars=${report.length}")
         val primaryPath = "USB: /DiPlay/$fileName"
+        // 日志行的 path 不带分隔空格，与 Global Constraints 里固定的 grep 格式一致。
+        val logPath = "USB:/DiPlay/$fileName"
+        val bytes = report.toByteArray(Charsets.UTF_8)
         var written = false
         try {
             val fs = UsbMassStorageManager.openFileSystem(device)
+            val vendorId = runCatching { device.usbDevice.vendorId }.getOrDefault(0)
+            val productId = runCatching { device.usbDevice.productId }.getOrDefault(0)
+            val permission = UsbMassStorageManager.hasPermission(context, device)
+            DiagLog.i(
+                "DiagnosticExport",
+                UsbMassStorageManager.describeOpen(vendorId, productId, permission, UsbMassStorageManager.lastOpenFacts),
+            )
             if (fs == null) {
                 DiagLog.w("DiagnosticExport", "saveToUsb: libaums returned no filesystem")
             } else {
@@ -260,7 +270,6 @@ internal object DiagnosticExportStore {
                     throw IOException("Target DiPlay path exists but is not a directory")
                 }
                 val targetFile = diplayDir.search(fileName) ?: diplayDir.createFile(fileName)
-                val bytes = report.toByteArray(Charsets.UTF_8)
                 UsbFileOutputStream(targetFile).use { out ->
                     out.write(bytes)
                     out.flush()
@@ -272,9 +281,13 @@ internal object DiagnosticExportStore {
                     DiagLog.w("DiagnosticExport", "saveToUsb length mismatch path=$primaryPath expected=${bytes.size} actual=${targetFile.length}")
                 }
             }
+            DiagLog.i("DiagnosticExport", describeSave(written, bytes.size, logPath))
         } catch (e: Exception) {
             DiagLog.w("DiagnosticExport", "saveToUsb via libaums failed", e)
             written = false
+            DiagLog.i("DiagnosticExport", describeSave(written, bytes.size, logPath))
+        } finally {
+            UsbMassStorageManager.close()
         }
 
         val backup = runCatching { saveInternalBackup(context, fileName, report) }.getOrElse { error ->
@@ -285,6 +298,9 @@ internal object DiagnosticExportStore {
         if (!written && backup == null) throw IOException("Report storage is unavailable")
         return ExportOutcome(primaryPath, backup?.uri, written = written)
     }
+
+    internal fun describeSave(written: Boolean, bytes: Int, path: String): String =
+        "usb save written=$written bytes=$bytes path=$path"
 
     private data class Backup(val uri: Uri?, val file: File)
 

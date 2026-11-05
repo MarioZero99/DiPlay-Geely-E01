@@ -92,6 +92,26 @@ internal object UsbMassStorageManager {
     internal var hasPermissionProvider: ((Context, UsbMassStorageDevice) -> Boolean)? = null
     internal var openFileSystemProvider: ((UsbMassStorageDevice) -> FileSystem?)? = null
 
+    internal data class UsbOpenFacts(
+        val partitionCount: Int,
+        val fat32: Boolean,
+        val error: String?,
+    )
+
+    internal var lastOpenFacts: UsbOpenFacts = UsbOpenFacts(0, false, "not opened")
+
+    internal fun describeOpen(vendorId: Int, productId: Int, permission: Boolean, facts: UsbOpenFacts): String {
+        val error = facts.error ?: "none"
+        return "usb open vid=%04x pid=%04x perm=%s partitions=%d fat32=%s error=%s".format(
+            vendorId,
+            productId,
+            permission,
+            facts.partitionCount,
+            facts.fat32,
+            error,
+        )
+    }
+
     // Currently opened device and filesystem (matching CX File Explorer ax.b2.l singleton)
     private var currentDevice: UsbMassStorageDevice? = null
     private var currentFs: FileSystem? = null
@@ -198,7 +218,16 @@ internal object UsbMassStorageManager {
      * If switching device or re-opening, cleanly closes previous device first.
      */
     fun openFileSystem(device: UsbMassStorageDevice): FileSystem? {
-        openFileSystemProvider?.let { return it(device) }
+        lastOpenFacts = UsbOpenFacts(0, false, "not opened")
+        openFileSystemProvider?.let { provider ->
+            val provided = provider(device)
+            lastOpenFacts = UsbOpenFacts(
+                partitionCount = 0,
+                fat32 = provided != null,
+                error = if (provided == null) "no filesystem" else null,
+            )
+            return provided
+        }
         synchronized(this) {
             if (currentDevice != null) {
                 if ((currentDevice === device || currentDevice?.usbDevice?.deviceId == device.usbDevice.deviceId) && currentFs != null) {
@@ -240,6 +269,11 @@ internal object UsbMassStorageManager {
                     }.getOrNull()
                 }.maxByOrNull { it.capacity }
                 currentFs = primaryFs
+                lastOpenFacts = UsbOpenFacts(
+                    partitionCount = partitions.size,
+                    fat32 = primaryFs != null,
+                    error = if (primaryFs == null) "no filesystem" else null,
+                )
                 if (primaryFs != null) {
                     cachedCapacity = primaryFs.capacity
                     cachedFreeSpace = primaryFs.freeSpace
@@ -250,6 +284,7 @@ internal object UsbMassStorageManager {
                 }
                 primaryFs
             } catch (e: Exception) {
+                lastOpenFacts = UsbOpenFacts(0, false, "${e.javaClass.simpleName}: ${e.message}")
                 DiagLog.w("UsbMassStorage", "Failed to init USB device: ${device.usbDevice.deviceName}", e)
                 close()
                 null

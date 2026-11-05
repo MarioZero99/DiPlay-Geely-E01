@@ -29,6 +29,7 @@ class DiagnosticExportStoreTest {
         UsbMassStorageManager.hasPermissionProvider = null
         UsbMassStorageManager.openFileSystemProvider = null
         UsbMassStorageManager.close()
+        DiagSink.reset()
     }
 
     class TestVolume(
@@ -152,6 +153,33 @@ class DiagnosticExportStoreTest {
         assertFalse(DiagnosticExportStore.isRealMountedStick(File("/mnt/media_rw/sdcard2")))
         assertTrue(DiagnosticExportStore.isRealMountedStick(File("/storage/usbotg/usbotg-sda1")))
         assertTrue(DiagnosticExportStore.isRealMountedStick(File("/mnt/media_rw/udisk1")))
+    }
+
+    @Test fun describeOpenUsesFourHexDigitsAndNoneForNoError() {
+        val line = UsbMassStorageManager.describeOpen(
+            vendorId = 0x0951,
+            productId = 0x1666,
+            permission = true,
+            facts = UsbMassStorageManager.UsbOpenFacts(partitionCount = 1, fat32 = true, error = null),
+        )
+        assertEquals("usb open vid=0951 pid=1666 perm=true partitions=1 fat32=true error=none", line)
+    }
+
+    @Test fun saveToUsbLogsTheMissAndDoesNotCreateAShell() {
+        UsbMassStorageManager.openFileSystemProvider = { null }
+        UsbMassStorageManager.hasPermissionProvider = { _, _ -> true }
+        val lines = mutableListOf<String>()
+        DiagSink.attach { lines.add(it) }
+        val shells = listOf(File("/mnt/media_rw/usbotg/DiPlay"), File("/storage/usbotg/DiPlay"))
+
+        val outcome = DiagnosticExportStore.saveToUsb(context, blankUsbDevice(), "report.txt", "hello")
+
+        assertFalse(outcome.written)
+        assertEquals("USB: /DiPlay/report.txt", outcome.primaryPath)
+        assertTrue(shells.none { it.exists() })
+        val text = lines.joinToString("\n")
+        assertTrue(text, text.contains("usb open vid=0000 pid=0000 perm=true partitions=0 fat32=false error=no filesystem"))
+        assertTrue(text, text.contains("usb save written=false bytes=5 path=USB:/DiPlay/report.txt"))
     }
 
     @Test fun lengthFromLsReadsTheSizeBeforeTheDate() {

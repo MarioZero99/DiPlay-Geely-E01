@@ -57,8 +57,8 @@ object DiagSink {
     /** Whether a session log is currently listening. Lets the page's wiring be checked. */
     fun isAttached(): Boolean = writer != null
 
-    /** Test seam: forgets the writer and everything held. */
-    internal fun reset() {
+    /** Test seam: forgets the writer and everything held. Public because `:common` tests call it. */
+    fun reset() {
         synchronized(lock) {
             writer = null
             pending.clear()
