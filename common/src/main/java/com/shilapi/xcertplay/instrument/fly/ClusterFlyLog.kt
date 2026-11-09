@@ -35,6 +35,9 @@ object ClusterFlyLog {
 
     fun pushStart(mode: PushMode): String = "fly.push start ${mode.name.lowercase()}"
 
+    /** The phone's H.264 profile, once per value: 66 is Baseline, anything else has to be re-encoded. */
+    fun profile(profileIdc: Int): String = "fly.profile $profileIdc"
+
     fun pushStop(): String = "fly.push stop"
 
     fun stat(packets: Long, bytes: Long, drops: Long, fps: Int, keyframeAgeMs: Long): String =

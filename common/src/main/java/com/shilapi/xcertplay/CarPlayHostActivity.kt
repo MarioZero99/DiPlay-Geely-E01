@@ -1,8 +1,10 @@
 package com.shilapi.xcertplay
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.content.res.ColorStateList
@@ -110,6 +112,11 @@ import com.shilapi.xcertplay.transport.WirelessBluetoothHop
 import com.shilapi.xcertplay.transport.adapter.AdapterPage
 import com.shilapi.xcertplay.transport.adapter.AdapterRoutes
 import com.shilapi.xcertplay.transport.adapter.WirelessAdapterStatus
+import com.shilapi.xcertplay.instrument.fly.ClusterFlyController
+import com.shilapi.xcertplay.instrument.fly.ClusterFlyLink
+import com.shilapi.xcertplay.instrument.fly.ClusterFlyLog
+import com.shilapi.xcertplay.instrument.fly.ClusterFlySequencer
+import com.shilapi.xcertplay.instrument.fly.FlyCommand
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector
 import com.shilapi.xcertplay.ui.component.QuickHudView
 import java.io.File
@@ -156,6 +163,15 @@ class CarPlayHostActivity : ComponentActivity() {
      * same kind of churn in a smaller place. See [QuickHudView].
      */
     private var quickHud: QuickHudView? = null
+
+    /**
+     * The cluster's fly layer. Built on the first sideways swipe, not with the page: most sessions
+     * never fly, and until one does there is no socket and no encoder to speak of.
+     */
+    private var clusterFly: ClusterFlyController? = null
+
+    /** The one line under a picture when a fly was refused; built with the page, hidden by default. */
+    private var flyWarningView: TextView? = null
     private var statusLamp: View? = null
     private var stepListContainer: LinearLayout? = null
     private var stepGlyphs: List<TextView> = emptyList()
@@ -570,6 +586,13 @@ class CarPlayHostActivity : ComponentActivity() {
         loadPersistedSettings()
         locationPermissionAvailable = hasFineLocationPermission()
         setContentView(buildContentView())
+        registerReceiver(
+            flySafetyReceiver,
+            IntentFilter().apply {
+                addAction(ACTION_RADAR_STATUS)
+                addAction(ACTION_ECALL_STATUS)
+            },
+        )
         applyFullscreenMode()
         onBackPressedDispatcher.addCallback(
             this,
@@ -975,6 +998,10 @@ class CarPlayHostActivity : ComponentActivity() {
     override fun onDestroy() {
         adapterPage?.close()
         adapterPage = null
+        runCatching { unregisterReceiver(flySafetyReceiver) }
+        mainHandler.removeCallbacks(hideFlyWarning)
+        clusterFly?.close()
+        clusterFly = null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) clusterMonitor?.stop()
         dismissClusterPresentation()
         mainHandler.removeCallbacks(applyDisplaySize)
@@ -1065,6 +1092,23 @@ class CarPlayHostActivity : ComponentActivity() {
                 )
             },
         ).also { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        // The refusal line sits where the quick bar does and disappears on its own: a dialog would
+        // cover the map at the moment the driver is trying to look at it.
+        val flyWarning = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setBackgroundColor(FLY_WARNING_BACKGROUND)
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setPadding(dp(20), dp(10), dp(20), dp(10))
+            visibility = View.GONE
+        }
+        root.addView(
+            flyWarning,
+            FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                bottomMargin = dp(96)
+            },
+        )
+        flyWarningView = flyWarning
         videoView = video
         connectionPanel = panel
         updateConnectionAction()
@@ -2555,6 +2599,7 @@ class CarPlayHostActivity : ComponentActivity() {
         handshakeResetInProgress = true
         val oldController = controller
         val oldSink = sink
+        clusterFly?.onCarPlayEnded()
         CarPlayMediaKeys.detach(oldController)
         CarPlayBackgroundSession.clear(oldController, keepOwner = true)
         controller = null
@@ -2635,6 +2680,83 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     /**
+     * The fly layer's controller, built the first time a sideways swipe arrives.
+     *
+     * There is no "settings finished" flag to read, so the gate's NOT_PROVISIONED word stays unused
+     * for now; every other refusal comes from something the controller can actually see.
+     */
+    private fun flyController(): ClusterFlyController =
+        clusterFly ?: ClusterFlyController(
+            commands = { command -> sendFlyCommand(command) },
+            showWarning = { line -> showFlyWarning(line) },
+            setMainVideoSubscribed = { subscribed -> setFlyVideoSubscribed(subscribed) },
+            log = { line -> DiagLog.i(ClusterFlyLog.TAG, line) },
+            linkFactory = { ClusterFlyLink(log = { line -> DiagLog.i(ClusterFlyLog.TAG, line) }) },
+        ).also { clusterFly = it }
+
+    /** The two factory broadcasts. The order and the extras are the whole contract. */
+    private fun sendFlyCommand(command: FlyCommand) {
+        val intent = when (command) {
+            FlyCommand.NAV_ON -> Intent(ClusterFlySequencer.ACTION_NAV_STATE)
+                .putExtra(ClusterFlySequencer.EXTRA_KEY_TYPE, ClusterFlySequencer.KEY_TYPE_NAV_STATE)
+                .putExtra(ClusterFlySequencer.EXTRA_STATE, ClusterFlySequencer.STATE_NAV_ON)
+
+            FlyCommand.NAV_OFF -> Intent(ClusterFlySequencer.ACTION_NAV_STATE)
+                .putExtra(ClusterFlySequencer.EXTRA_KEY_TYPE, ClusterFlySequencer.KEY_TYPE_NAV_STATE)
+                .putExtra(ClusterFlySequencer.EXTRA_STATE, ClusterFlySequencer.STATE_NAV_OFF)
+
+            FlyCommand.FLY_LEFT -> Intent(ClusterFlySequencer.ACTION_THREE_FINGER)
+                .putExtra(ClusterFlySequencer.EXTRA_DIRECTION, ClusterFlySequencer.DIRECTION_LEFT)
+
+            FlyCommand.FLY_RIGHT -> Intent(ClusterFlySequencer.ACTION_THREE_FINGER)
+                .putExtra(ClusterFlySequencer.EXTRA_DIRECTION, ClusterFlySequencer.DIRECTION_RIGHT)
+        }
+        sendBroadcast(intent)
+    }
+
+    private fun setFlyVideoSubscribed(subscribed: Boolean) {
+        if (subscribed) {
+            sink?.setMainVideoObserver { type, bytes -> clusterFly?.onMainVideo(type, bytes) }
+        } else {
+            sink?.setMainVideoObserver(null)
+        }
+    }
+
+    private fun showFlyWarning(line: String) {
+        val view = flyWarningView ?: return
+        view.text = line
+        view.visibility = View.VISIBLE
+        mainHandler.removeCallbacks(hideFlyWarning)
+        mainHandler.postDelayed(hideFlyWarning, FLY_WARNING_MILLIS)
+    }
+
+    private val hideFlyWarning = Runnable {
+        flyWarningView?.visibility = View.GONE
+    }
+
+    /**
+     * The factory's two public safety broadcasts. Reversing is not among them — the reverse gear and
+     * the panoramic camera stay in the system's `RvcManager` — so that state is sent blind and the
+     * factory drops the command.
+     */
+    private val flySafetyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                ACTION_RADAR_STATUS ->
+                    clusterFly?.onRadar(intent.getIntExtra(EXTRA_RADAR_STATE, 0) == 1)
+
+                ACTION_ECALL_STATUS -> {
+                    val type = intent.getStringExtra(EXTRA_ECALL_TYPE)
+                    val status = intent.getStringExtra(EXTRA_ECALL_STATUS)
+                    val active = type == ECALL_TYPE &&
+                        (status == ECALL_SENDING || status == ECALL_INCOMING)
+                    clusterFly?.onEcall(active)
+                }
+            }
+        }
+    }
+
+    /**
      * Ends the session and lands on DiPlay's home page, which is what disconnecting means everywhere
      * else in the app. The page is started before the teardown so it is already drawing by the time
      * this activity finishes.
@@ -2699,6 +2821,7 @@ class CarPlayHostActivity : ComponentActivity() {
         mainHandler.removeCallbacks(applyDisplaySize)
         val oldController = controller
         val oldSink = sink
+        clusterFly?.onCarPlayEnded()
         CarPlayMediaKeys.detach(oldController)
         CarPlayBackgroundSession.clear(oldController)
         controller = null
@@ -2801,10 +2924,16 @@ class CarPlayHostActivity : ComponentActivity() {
                 showQuickHud()
                 return true
             }
-            // Until the cluster controller is wired in, a sideways fly is consumed like the end of
-            // any other gesture: nothing is forwarded to CarPlay with its down missing.
-            ThreeFingerSwipeDetector.Decision.FLY_LEFT,
-            ThreeFingerSwipeDetector.Decision.FLY_RIGHT -> return true
+            // A sideways fly belongs to the cluster layer: the controller decides, and either way the
+            // rest of this touch stream is consumed rather than forwarded with its down missing.
+            ThreeFingerSwipeDetector.Decision.FLY_LEFT -> {
+                flyController().onGesture(ThreeFingerSwipeDetector.Decision.FLY_LEFT)
+                return true
+            }
+            ThreeFingerSwipeDetector.Decision.FLY_RIGHT -> {
+                flyController().onGesture(ThreeFingerSwipeDetector.Decision.FLY_RIGHT)
+                return true
+            }
         }
 
         val contacts = CarPlayTouchMapper.contacts(event, view.width, view.height)
@@ -3110,6 +3239,19 @@ class CarPlayHostActivity : ComponentActivity() {
         const val TAG = "xcertplay-usb"
         const val SCREEN_TYPE_MAIN = 110
         const val SCREEN_TYPE_ALT = 111
+
+        /** The factory's public safety broadcasts. Reversing has none; that is why it is unknown. */
+        const val ACTION_RADAR_STATUS = "com.neusoft.radarDefanceView"
+        const val EXTRA_RADAR_STATE = "state"
+        const val ACTION_ECALL_STATUS = "com.neusoft.ecallForThreeFinger"
+        const val EXTRA_ECALL_TYPE = "CallType"
+        const val EXTRA_ECALL_STATUS = "CallStatus"
+        const val ECALL_TYPE = "ECall"
+        const val ECALL_SENDING = "call data sending"
+        const val ECALL_INCOMING = "incoming call"
+
+        const val FLY_WARNING_MILLIS = 2_000L
+        val FLY_WARNING_BACKGROUND = 0xCC000000.toInt()
         const val LOG_RETENTION_MILLIS = 5 * 60_000L
         const val DISPLAY_CHANGE_DEBOUNCE_MILLIS = 500L
         const val RECONNECT_DELAY_MILLIS = 2_000L

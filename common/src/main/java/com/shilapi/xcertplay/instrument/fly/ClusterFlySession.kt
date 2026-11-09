@@ -44,6 +44,10 @@ class ClusterFlySession(
     /** The most recent complete picture of the car, for events that have no conditions of their own. */
     private var lastConditions: FlyConditions? = null
 
+    /** What the layer is doing right now. Read-only: only the session's own events move it. */
+    val currentPhase: FlyPhase
+        get() = phase
+
     fun onLeft(nowMillis: Long, conditions: FlyConditions): FlyEffect {
         advance(nowMillis)
         lastConditions = conditions

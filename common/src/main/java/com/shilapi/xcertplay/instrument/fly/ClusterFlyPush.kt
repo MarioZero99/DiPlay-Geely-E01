@@ -55,6 +55,9 @@ object ClusterFlyPush {
     private var reencode = false
     private var reencoder: ClusterFlyReencoder? = null
 
+    /** The last profile told to the log, so a value is written once instead of per frame. */
+    private var loggedProfile: Int? = null
+
     /** Photograph of what the last line said, so a line is written when the picture changes only. */
     private var open = false
     private var loggedMode: PushMode? = null
@@ -90,6 +93,10 @@ object ClusterFlyPush {
         }
 
         val profile = profileIdc(nalu)
+        if (profile != null && profile != loggedProfile) {
+            loggedProfile = profile
+            log(ClusterFlyLog.profile(profile))
+        }
         if (profile == null || profile == BASELINE_PROFILE_IDC) {
             return PushDecision(send = true, mode = PushMode.FORWARD, dropReason = null)
         }
@@ -110,9 +117,13 @@ object ClusterFlyPush {
             log(ClusterFlyLog.pushStop())
         }
         reencode = false
+        loggedProfile = null
         reencoder?.close()
         reencoder = null
     }
+
+    /** True when the unit carries an IDR, which is what the cluster's player waits for. */
+    fun isKeyframe(nalu: ByteArray): Boolean = hasNalType(nalu, NAL_TYPE_IDR)
 
     private fun noteMode() {
         val mode = mode()
@@ -123,6 +134,21 @@ object ClusterFlyPush {
     }
 
     private fun mode(): PushMode = if (reencode) PushMode.REENCODE else PushMode.FORWARD
+
+    private fun hasNalType(nalu: ByteArray, type: Int): Boolean {
+        var i = 0
+        while (i < nalu.size) {
+            val header = startCodeEnd(nalu, i)
+            if (header == null) {
+                i++
+                continue
+            }
+            if (header >= nalu.size) return false
+            if ((nalu[header].toInt() and 0x1F) == type) return true
+            i = header
+        }
+        return false
+    }
 
     /**
      * `profile_idc` of the first SPS in the unit, or null if there is none.
@@ -157,6 +183,7 @@ object ClusterFlyPush {
     }
 
     private const val NAL_TYPE_SPS = 7
+    private const val NAL_TYPE_IDR = 5
 }
 
 /**
