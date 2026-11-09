@@ -45,6 +45,14 @@ class ClusterFlyControllerTest {
         return packet
     }
 
+    private fun ask(function: Int, order: Int): ByteArray {
+        val packet = ByteArray(24)
+        packet[4] = (function shr 8).toByte()
+        packet[5] = function.toByte()
+        packet[23] = order.toByte()
+        return packet
+    }
+
     /** Left at 1000, the fly step at 1400, the cluster's ask at 1500: a live PUSHING session. */
     private fun pushing(frameExecutor: java.util.concurrent.ExecutorService? = null): ClusterFlyController {
         val controller = controller(frameExecutor)
@@ -127,6 +135,39 @@ class ClusterFlyControllerTest {
         executor.runAll()
 
         assertTrue(lines.contains("fly.push start forward"))
+    }
+
+    /**
+     * The factory answers a close with the map acknowledgement first and the stop second, and it
+     * does not care whether it believed it was streaming.
+     */
+    @Test
+    fun `a close is answered success then stop`() {
+        val controller = pushing(ManualExecutor())
+        now = 5_000L
+
+        val replies = controller.onPacket(ask(301, 1))
+
+        assertEquals(2, replies.size)
+        assertEquals(2, replies[0].last().toInt())
+        assertEquals(1, replies[1].last().toInt())
+    }
+
+    /** Function 303 is the cluster's own heartbeat; the factory reads it and writes nothing back. */
+    @Test
+    fun `the cluster heartbeat gets no reply`() {
+        assertEquals(emptyList<ByteArray>(), controller().onPacket(ask(303, 0)))
+    }
+
+    /** The junction map is not ours to show, so it is declined rather than acknowledged. */
+    @Test
+    fun `the junction map is declined`() {
+        val replies = controller().onPacket(ask(302, 0))
+
+        assertEquals(1, replies.size)
+        assertEquals(0x01, replies[0][4].toInt())
+        assertEquals(0x2E, replies[0][5].toInt())
+        assertEquals(0, replies[0].last().toInt())
     }
 
     /**

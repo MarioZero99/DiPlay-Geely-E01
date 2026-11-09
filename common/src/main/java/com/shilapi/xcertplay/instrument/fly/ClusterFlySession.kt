@@ -3,10 +3,10 @@ package com.shilapi.xcertplay.instrument.fly
 /**
  * What the cluster asked for on its 1028 connection.
  *
- * Declared here rather than next to the byte parsing because the session is the first consumer: the
- * protocol only turns bytes into one of these.
+ * `OPEN`/`CLOSE` are function 301, the background map the CarPlay picture goes into. The partial
+ * pair is function 302, the junction map, which this app can only decline.
  */
-enum class VideoAsk { OPEN, CLOSE, HEARTBEAT, IGNORE }
+enum class VideoAsk { OPEN, CLOSE, PARTIAL_OPEN, PARTIAL_CLOSE, HEARTBEAT, IGNORE }
 
 /** The five states of the layer. Only [PUSHING] has a picture going to the cluster. */
 enum class FlyPhase { IDLE, ARMING, WAITING_FOR_VIDEO, PUSHING, CLOSING }
@@ -101,6 +101,7 @@ class ClusterFlySession(
                 return effect(warning = block.takeIf { it != FlyBlock.NONE })
             }
 
+            VideoAsk.PARTIAL_OPEN, VideoAsk.PARTIAL_CLOSE,
             VideoAsk.HEARTBEAT, VideoAsk.IGNORE -> Unit
         }
         return effect()

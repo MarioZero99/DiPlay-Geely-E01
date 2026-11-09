@@ -289,7 +289,12 @@ class ClusterFlyController(
             return when (ask) {
                 VideoAsk.IGNORE -> emptyList()
 
-                VideoAsk.HEARTBEAT -> listOf(reply(FlyReply.HEARTBEAT, ClusterFlyProtocol.heartbeat()))
+                // The cluster's own heartbeat: the factory reads it and writes nothing back. Ours is
+                // sent on the link's three-second timer, not as an answer.
+                VideoAsk.HEARTBEAT -> emptyList()
+
+                VideoAsk.PARTIAL_OPEN, VideoAsk.PARTIAL_CLOSE ->
+                    listOf(reply(FlyReply.REFUSED, ClusterFlyProtocol.partialRefused()))
 
                 VideoAsk.OPEN -> {
                     val effect = session.onVideoAsk(VideoAsk.OPEN, now, conditions)
@@ -321,11 +326,12 @@ class ClusterFlyController(
                     postDelayed(0L) {
                         synchronized(lock) { handle(effect) }
                     }
-                    if (wasPushing) {
-                        listOf(reply(FlyReply.STOP, ClusterFlyProtocol.videoStop()))
-                    } else {
-                        listOf(reply(FlyReply.REFUSED, ClusterFlyProtocol.videoRefused()))
-                    }
+                    // The factory acknowledges the close whether or not it was streaming, then
+                    // sends the stream stop.
+                    listOf(
+                        reply(FlyReply.READY, ClusterFlyProtocol.videoReady()),
+                        reply(FlyReply.STOP, ClusterFlyProtocol.videoStop()),
+                    )
                 }
             }
         }

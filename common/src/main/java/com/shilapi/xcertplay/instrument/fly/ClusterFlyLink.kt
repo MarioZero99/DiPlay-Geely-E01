@@ -114,11 +114,39 @@ class ClusterFlyLink(
 
     private fun serve(socket: Socket) {
         client = socket
+        val writeLock = Any()
         try {
-            // A quiet connection still needs the heartbeat, so a read timeout is the timer.
+            // The read timeout is only a way to notice `close()`; the heartbeat has a timer of its
+            // own, because the factory sends one every three seconds whether the cluster is chatty
+            // or not.
             socket.soTimeout = HEARTBEAT_MILLIS.toInt()
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
+
+            val write: (ByteArray) -> Unit = { bytes ->
+                synchronized(writeLock) {
+                    output.write(bytes)
+                    output.flush()
+                }
+            }
+
+            thread(isDaemon = true, name = "cluster-fly-heartbeat") {
+                while (running && !socket.isClosed) {
+                    try {
+                        Thread.sleep(HEARTBEAT_MILLIS)
+                    } catch (_: InterruptedException) {
+                        return@thread
+                    }
+                    if (!running || socket.isClosed) return@thread
+                    try {
+                        write(ClusterFlyProtocol.heartbeat())
+                        log(ClusterFlyLog.reply(FlyReply.HEARTBEAT))
+                    } catch (_: IOException) {
+                        return@thread
+                    }
+                }
+            }
+
             val readBuffer = ByteArray(1024)
             val packet = ByteArray(ASK_SIZE)
             var filled = 0
@@ -126,9 +154,6 @@ class ClusterFlyLink(
                 val read = try {
                     input.read(readBuffer)
                 } catch (_: SocketTimeoutException) {
-                    output.write(ClusterFlyProtocol.heartbeat())
-                    output.flush()
-                    log(ClusterFlyLog.reply(FlyReply.HEARTBEAT))
                     continue
                 }
                 if (read < 0) break
@@ -136,10 +161,7 @@ class ClusterFlyLink(
                     packet[filled++] = readBuffer[index]
                     if (filled == ASK_SIZE) {
                         val replies = onPacket?.invoke(packet.copyOf()).orEmpty()
-                        for (reply in replies) {
-                            output.write(reply)
-                            output.flush()
-                        }
+                        for (reply in replies) write(reply)
                         filled = 0
                     }
                 }

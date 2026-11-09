@@ -19,6 +19,9 @@ object ClusterFlyProtocol {
     /** The cluster's question about the picture: function 301. */
     const val FUNCTION_ASK = 0x012D
 
+    /** The cluster's junction map: function 302. */
+    const val FUNCTION_PARTIAL = 0x012E
+
     /**
      * The cluster's "are you still there": function 303.
      *
@@ -30,9 +33,10 @@ object ClusterFlyProtocol {
     fun parse(packet: ByteArray): VideoAsk {
         if (packet.size != PACKET_SIZE) return VideoAsk.IGNORE
         val function = u16(packet, 4)
+        val order = packet[PACKET_SIZE - 1].toInt() and 0xFF
         return when (function) {
-            FUNCTION_ASK ->
-                if ((packet[PACKET_SIZE - 1].toInt() and 0xFF) == 0) VideoAsk.OPEN else VideoAsk.CLOSE
+            FUNCTION_ASK -> if (order == 0) VideoAsk.OPEN else VideoAsk.CLOSE
+            FUNCTION_PARTIAL -> if (order == 0) VideoAsk.PARTIAL_OPEN else VideoAsk.PARTIAL_CLOSE
             FUNCTION_STILL_THERE -> VideoAsk.HEARTBEAT
             else -> VideoAsk.IGNORE
         }
@@ -46,6 +50,12 @@ object ClusterFlyProtocol {
 
     /** "Not now." Sent when the session is not waiting for or pushing a picture. */
     fun videoRefused(): ByteArray = reply(FUNCTION_ASK, 0x0253, length = 4, status = 0)
+
+    /**
+     * Function 302's error. The junction map is the navigation app's to draw and this app cannot
+     * feed it, so it is declined rather than acknowledged into a blank page.
+     */
+    fun partialRefused(): ByteArray = reply(FUNCTION_PARTIAL, 0x0253, length = 4, status = 0)
 
     fun videoStart(): ByteArray = reply(FUNCTION_STILL_THERE, 0x0408, length = 4, status = 0)
 

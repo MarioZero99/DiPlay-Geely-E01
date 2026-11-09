@@ -43,6 +43,23 @@ class ClusterFlyProtocolTest {
     }
 
     @Test
+    fun `function 302 is the junction map`() {
+        assertEquals(VideoAsk.PARTIAL_OPEN, ClusterFlyProtocol.parse(ask(302, 0)))
+        assertEquals(VideoAsk.PARTIAL_CLOSE, ClusterFlyProtocol.parse(ask(302, 1)))
+    }
+
+    @Test
+    fun `the junction map refusal is function 302 with an error`() {
+        assertArrayEquals(
+            bytes(
+                0x03, 0xF0, 0x00, 0x01, 0x01, 0x2E, 0x02, 0x53, 0x00, 0x00, 0x5A, 0xA5,
+                0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0,
+            ),
+            ClusterFlyProtocol.partialRefused(),
+        )
+    }
+
+    @Test
     fun `a packet that is not 24 bytes is ignored`() {
         assertEquals(VideoAsk.IGNORE, ClusterFlyProtocol.parse(ByteArray(23)))
     }
