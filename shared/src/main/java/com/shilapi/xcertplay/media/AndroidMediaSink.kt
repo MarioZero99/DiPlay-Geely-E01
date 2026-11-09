@@ -28,13 +28,15 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
 
+/** The centre screen. The cluster's own screen (111) is never handed to the observer. */
+private const val SCREEN_TYPE_MAIN = 110
+
 /**
  * Android rendering backend for the CarPlay media engine. Video frames are
  * decoded with MediaCodec onto a Surface; audio streams are decoded to PCM and
  * played through AudioTrack. Call [close] when the session tears down.
  */
-class AndroidMediaSink(
-    surface: Surface? = null,
+class AndroidMediaSink(    surface: Surface? = null,
     private val videoWidth: Int = 1280,
     private val videoHeight: Int = 720,
     private val preferSoftwareHevcDecoder: Boolean = false,
@@ -115,13 +117,45 @@ class AndroidMediaSink(
         pendingVideoCodec[type] = codec
     }
 
+    /**
+     * The cluster layer's subscription to the centre screen's own bytes.
+     *
+     * Null by default, and null is the normal state: with no subscriber the decoder's input is
+     * untouched. While the layer is open it is set, and only then is a copy made — the observer is
+     * called from the media thread and may keep the array.
+     */
+    @Volatile
+    private var mainVideoObserver: ((Int, ByteArray) -> Unit)? = null
+
+    fun setMainVideoObserver(observer: ((Int, ByteArray) -> Unit)?) {
+        mainVideoObserver = observer
+    }
+
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
         val codec = pendingVideoCodec[type] ?: VideoCodec.H264
+        deliverToObserver(type, codecData)
         videoDecoder(type).configure(codec, codecData)
     }
 
     override fun onVideoFrame(type: Int, naluBytes: ByteArray) {
+        deliverToObserver(type, naluBytes)
         videoDecoder(type).submit(naluBytes)
+    }
+
+    /**
+     * Hands the main screen's codec data and frames to the observer, in order.
+     *
+     * A failure there must not reach the decoder or the main thread: the centre screen is what the
+     * driver is looking at, and the cluster layer is the extra one.
+     */
+    private fun deliverToObserver(type: Int, bytes: ByteArray) {
+        val observer = mainVideoObserver ?: return
+        if (type != SCREEN_TYPE_MAIN) return
+        try {
+            observer(type, bytes.copyOf())
+        } catch (error: Exception) {
+            DiagLog.w("xcertplay-fly", "cluster video observer failed", error)
+        }
     }
 
     override fun onScreenStreamActive(type: Int, active: Boolean) {
