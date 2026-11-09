@@ -134,6 +134,11 @@ class AndroidMediaSink(    surface: Surface? = null,
 
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
         val codec = pendingVideoCodec[type] ?: VideoCodec.H264
+        // The phone's choice of codec and profile is only visible here. One line per session, for
+        // every session: it is the answer to whether the cluster can take the picture untouched.
+        if (type == SCREEN_TYPE_MAIN) {
+            DiagLog.i("xcertplay-fly", VideoCodecConfigLog.line(codec, codecData))
+        }
         deliverToObserver(type, codecData)
         videoDecoder(type).configure(codec, codecData)
     }
