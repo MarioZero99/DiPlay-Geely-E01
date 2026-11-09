@@ -2981,6 +2981,9 @@ class CarPlayHostActivity : ComponentActivity() {
             if (shuttingDown.get() || generation != restartGeneration) return@runOnUiThread
             if (active) {
                 activeScreenStreamTypes.add(type)
+                // A live picture is what the cluster flies to; a restart clears the old session's
+                // navigation flag, and this puts it back.
+                clusterFly?.onCarPlayStarted()
             } else {
                 activeScreenStreamTypes.remove(type)
             }

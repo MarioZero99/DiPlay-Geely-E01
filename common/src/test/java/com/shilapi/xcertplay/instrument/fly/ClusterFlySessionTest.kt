@@ -93,4 +93,32 @@ class ClusterFlySessionTest {
         assertEquals(FlyPhase.CLOSING, right.phase)
         assertEquals(FlyCommand.FLY_RIGHT, right.steps.first().command)
     }
+
+    /**
+     * The cluster can ask while a radar warning is already up. The answer is no, and the picture
+     * stays away until the warning clears — the one state the warning line describes as forbidden.
+     */
+    @Test
+    fun `an open under radar is refused`() {
+        session.onLeft(1_000L, openConditions())
+        session.onWaitTimeout(1_400L)
+
+        val open = session.onVideoAsk(VideoAsk.OPEN, 1_500L, openConditions(radar = true))
+
+        assertFalse(open.push)
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, open.phase)
+        assertEquals(FlyBlock.RADAR, open.warning)
+    }
+
+    /** The close is a command like any other: two inside a second are dropped by the factory. */
+    @Test
+    fun `a close inside one second of the fly is too soon`() {
+        pushing()
+
+        val close = session.onVideoAsk(VideoAsk.CLOSE, 2_000L, openConditions(millisSinceLastClusterCommand = 200))
+
+        assertFalse(close.push)
+        assertTrue(close.steps.isEmpty())
+        assertEquals(FlyBlock.TOO_SOON, close.warning)
+    }
 }

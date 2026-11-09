@@ -20,8 +20,8 @@ import kotlin.concurrent.thread
  */
 class ClusterFlyLink(
     private val port: Int = DEFAULT_PORT,
-    rtpHost: String = RTP_HOST,
-    rtpPort: Int = RTP_PORT,
+    private val rtpHost: String = RTP_HOST,
+    private val rtpPort: Int = RTP_PORT,
     private val log: (String) -> Unit = {},
 ) {
 
@@ -35,7 +35,14 @@ class ClusterFlyLink(
     @Volatile
     private var client: Socket? = null
 
-    private val rtp = RtpWriter(rtpHost, rtpPort)
+    @Volatile
+    private var server: ServerSocket? = null
+
+    /**
+     * Rebuilt by every [start]. A finished link cannot be reopened with the old writer: its socket
+     * is closed for good, and the UDP side has to be new for [send] to work again.
+     */
+    private var rtp: RtpWriter? = null
 
     /**
      * Starts listening, or does nothing if already listening.
@@ -47,11 +54,12 @@ class ClusterFlyLink(
     fun start() {
         if (running) return
         running = true
+        rtp = RtpWriter(rtpHost, rtpPort)
         thread(isDaemon = true, name = "cluster-fly-listen") { acceptLoop() }
     }
 
     /** Pushes one access unit. False means the frame was dropped, which is a counter, not a throw. */
-    fun send(accessUnit: ByteArray): Boolean = if (running) rtp.send(accessUnit) else false
+    fun send(accessUnit: ByteArray): Boolean = if (running) rtp?.send(accessUnit) ?: false else false
 
     fun close() {
         running = false
@@ -60,21 +68,28 @@ class ClusterFlyLink(
         } catch (_: IOException) {
         }
         client = null
-        rtp.close()
+        // Closing the server socket is what releases a thread parked in accept().
+        try {
+            server?.close()
+        } catch (_: IOException) {
+        }
+        server = null
+        rtp?.close()
+        rtp = null
     }
 
     private fun acceptLoop() {
         var failures = 0
         while (running) {
-            var server: ServerSocket? = null
             try {
-                server = ServerSocket()
-                server.reuseAddress = true
-                server.bind(InetSocketAddress(port))
+                val listening = ServerSocket()
+                listening.reuseAddress = true
+                listening.bind(InetSocketAddress(port))
+                server = listening
                 log(ClusterFlyLog.tcp(TcpEvent.LISTEN))
                 failures = 0
                 while (running) {
-                    val socket = server.accept()
+                    val socket = listening.accept()
                     log(ClusterFlyLog.tcp(TcpEvent.ACCEPT))
                     serve(socket)
                 }
@@ -92,6 +107,7 @@ class ClusterFlyLink(
                     server?.close()
                 } catch (_: IOException) {
                 }
+                server = null
             }
         }
     }

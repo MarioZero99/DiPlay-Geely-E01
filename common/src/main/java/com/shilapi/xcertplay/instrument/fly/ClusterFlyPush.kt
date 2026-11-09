@@ -125,6 +125,57 @@ object ClusterFlyPush {
     /** True when the unit carries an IDR, which is what the cluster's player waits for. */
     fun isKeyframe(nalu: ByteArray): Boolean = hasNalType(nalu, NAL_TYPE_IDR)
 
+    /**
+     * True when the bytes are an avcC record — what the sink's config callback carries — rather
+     * than an Annex-B unit.
+     *
+     * The two are different formats and mixing them up is invisible until the cluster shows nothing:
+     * avcC is length-prefixed and has no start codes, so a NAL splitter would hand the whole record
+     * to the player as one impossible NAL.
+     */
+    fun isConfig(bytes: ByteArray): Boolean = avcCProfile(bytes) != null
+
+    /** `profile_idc` of an avcC record, or null if these bytes are not one. */
+    fun configProfile(bytes: ByteArray): Int? = avcCProfile(bytes)
+
+    /** The same parameter sets in Annex-B form (`00 00 00 01` + NAL), or null if malformed. */
+    fun annexB(config: ByteArray): ByteArray? {
+        if (avcCProfile(config) == null) return null
+        val out = java.io.ByteArrayOutputStream()
+        var at = 5
+        val spsCount = config[at].toInt() and 0x1F
+        at++
+        repeat(spsCount) { at = copyParameterSet(config, at, out) ?: return null }
+        if (at >= config.size) return null
+        val ppsCount = config[at].toInt() and 0xFF
+        at++
+        repeat(ppsCount) { at = copyParameterSet(config, at, out) ?: return null }
+        return out.toByteArray()
+    }
+
+    private fun avcCProfile(bytes: ByteArray): Int? {
+        if (bytes.size < 7) return null
+        if (bytes[0].toInt() != 1) return null
+        // configurationVersion 1, then profile, compatibility, level, then the reserved bits that
+        // say how the parameter-set lengths are written.
+        if ((bytes[4].toInt() and 0xFC) != 0xFC) return null
+        if ((bytes[5].toInt() and 0xE0) != 0xE0) return null
+        return bytes[1].toInt() and 0xFF
+    }
+
+    private fun copyParameterSet(config: ByteArray, at: Int, out: java.io.ByteArrayOutputStream): Int? {
+        if (at + 2 > config.size) return null
+        val length = ((config[at].toInt() and 0xFF) shl 8) or (config[at + 1].toInt() and 0xFF)
+        val start = at + 2
+        if (length <= 0 || start + length > config.size) return null
+        out.write(0)
+        out.write(0)
+        out.write(0)
+        out.write(1)
+        out.write(config, start, length)
+        return start + length
+    }
+
     private fun noteMode() {
         val mode = mode()
         if (mode != loggedMode) {

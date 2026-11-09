@@ -77,17 +77,28 @@ class ClusterFlySession(
         return close(nowMillis, conditions)
     }
 
-    fun onVideoAsk(ask: VideoAsk, nowMillis: Long): FlyEffect {
+    /**
+     * The cluster's ask. [conditions] is the car as it is *now*: a picture must not start under a
+     * radar warning, and a close is a command like any other, so the one-second interval applies to
+     * it too. Passing null falls back to the picture last stored by a gesture.
+     */
+    fun onVideoAsk(ask: VideoAsk, nowMillis: Long, conditions: FlyConditions? = null): FlyEffect {
         advance(nowMillis)
         when (ask) {
-            VideoAsk.OPEN -> if (phase == FlyPhase.WAITING_FOR_VIDEO) phase = FlyPhase.PUSHING
+            VideoAsk.OPEN -> if (phase == FlyPhase.WAITING_FOR_VIDEO) {
+                val current = conditions ?: lastConditions
+                val safety = current?.let { safetyBlock(it) }
+                if (safety != null) return effect(warning = safety)
+                phase = FlyPhase.PUSHING
+            }
 
             VideoAsk.CLOSE -> if (phase == FlyPhase.PUSHING) {
-                val conditions = lastConditions
-                if (conditions != null && ClusterFlyGate.decide(conditions) == FlyBlock.NONE) {
-                    return close(nowMillis, conditions)
-                }
+                val current = conditions ?: lastConditions
+                val block = current?.let { ClusterFlyGate.decide(it) } ?: FlyBlock.NONE
+                if (current != null && block == FlyBlock.NONE) return close(nowMillis, current)
+                // The factory would drop the close commands in this state; all we can do is stop.
                 phase = FlyPhase.IDLE
+                return effect(warning = block.takeIf { it != FlyBlock.NONE })
             }
 
             VideoAsk.HEARTBEAT, VideoAsk.IGNORE -> Unit
@@ -113,17 +124,20 @@ class ClusterFlySession(
 
         // Not the gate: between commands the gate answers TOO_SOON, and a radar warning that happens
         // to arrive half a second after a swipe is still a radar warning.
-        val block = when {
-            conditions.reversing -> FlyBlock.REVERSING
-            conditions.radar -> FlyBlock.RADAR
-            conditions.ecall -> FlyBlock.ECALL
-            else -> null
-        } ?: return effect()
+        val block = safetyBlock(conditions) ?: return effect()
 
         // The factory discards the close commands in these states, so there are none to send.
         phase = FlyPhase.CLOSING
         closeNavOffAt = nowMillis
         return effect(warning = block)
+    }
+
+    /** The three states that stop a picture, independent of how recently a command went out. */
+    private fun safetyBlock(conditions: FlyConditions): FlyBlock? = when {
+        conditions.reversing -> FlyBlock.REVERSING
+        conditions.radar -> FlyBlock.RADAR
+        conditions.ecall -> FlyBlock.ECALL
+        else -> null
     }
 
     fun onCarPlayEnded(nowMillis: Long, conditions: FlyConditions): FlyEffect {

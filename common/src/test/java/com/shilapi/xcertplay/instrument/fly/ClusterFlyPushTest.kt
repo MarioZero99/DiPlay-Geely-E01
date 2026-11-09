@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.instrument.fly
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -39,6 +40,28 @@ class ClusterFlyPushTest {
         assertEquals(PushMode.REENCODE, decision.mode)
     }
 
+    /**
+     * The sink's config callback carries an avcC record, not Annex-B. It has to be recognised as
+     * such — both to read the profile and so that it is never packetized as if it were a NAL.
+     */
+    @Test
+    fun `an avcC record is read and rewritten as Annex-B`() {
+        val config = avcCConfig(profileIdc = 66)
+        assertTrue(ClusterFlyPush.isConfig(config))
+        assertEquals(66, ClusterFlyPush.configProfile(config))
+
+        val annex = ClusterFlyPush.annexB(config)
+        assertArrayEquals(
+            byteArrayOf(0, 0, 0, 1, 0x67, 66, 0x11, 0, 0, 0, 1, 0x68, 0x22),
+            annex,
+        )
+    }
+
+    @Test
+    fun `an Annex-B frame is not mistaken for a config`() {
+        assertFalse(ClusterFlyPush.isConfig(sps(66)))
+    }
+
     /** The E01 has one small encoder; when a frame takes too long, fewer frames are offered. */
     @Test
     fun `a slow encoder drops the frame rate cap until things are fast again`() {
@@ -55,4 +78,15 @@ class ClusterFlyPushTest {
         rate.onEncoded(durationMillis = 50, nowMillis = 4_000L)
         assertEquals(10, rate.capFps)
     }
+
+    /**
+     * A minimal avcC record: version, profile, compatibility, level, lengthSizeMinusOne, one SPS and
+     * one PPS. The bodies are arbitrary; only the framing matters here.
+     */
+    private fun avcCConfig(profileIdc: Int): ByteArray = byteArrayOf(
+        1, profileIdc.toByte(), 0x00, 0x1F, 0xFF.toByte(), 0xE1.toByte(),
+        0x00, 0x03, 0x67, profileIdc.toByte(), 0x11,
+        0x01,
+        0x00, 0x02, 0x68, 0x22,
+    )
 }
