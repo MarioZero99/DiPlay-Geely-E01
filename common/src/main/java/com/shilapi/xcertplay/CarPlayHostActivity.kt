@@ -2801,6 +2801,10 @@ class CarPlayHostActivity : ComponentActivity() {
                 showQuickHud()
                 return true
             }
+            // Until the cluster controller is wired in, a sideways fly is consumed like the end of
+            // any other gesture: nothing is forwarded to CarPlay with its down missing.
+            ThreeFingerSwipeDetector.Decision.FLY_LEFT,
+            ThreeFingerSwipeDetector.Decision.FLY_RIGHT -> return true
         }
 
         val contacts = CarPlayTouchMapper.contacts(event, view.width, view.height)

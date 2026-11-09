@@ -56,10 +56,11 @@ class ThreeFingerSwipeDetectorTest {
     }
 
     @Test
-    fun `a sideways drag is not a settings gesture`() {
+    fun `a sideways drag flies instead of opening the quick bar`() {
         threeFingers()
-        // 80 down, but 200 across: far enough vertically, nowhere near vertical enough.
-        assertEquals(Decision.CONSUME, detector.onTouch(Phase.MOVE, 3, 120L, 1100f, 480f))
+        // 80 down, but 200 across: not vertical enough to be a settings gesture. It is now the
+        // sideways fly the driver meant, not something to swallow.
+        assertEquals(Decision.FLY_RIGHT, detector.onTouch(Phase.MOVE, 3, 120L, 1100f, 480f))
     }
 
     /** A flick's last move can be short and the lift carries the rest of the distance. */
@@ -135,5 +136,23 @@ class ThreeFingerSwipeDetectorTest {
         // 60 past the first finger's height but only 40 past the centroid's: not yet.
         assertEquals(Decision.CONSUME, detector.onTouch(Phase.MOVE, 3, 80L, 900f, 420f))
         assertEquals(Decision.TRIGGER, detector.onTouch(Phase.MOVE, 3, 120L, 900f, 460f))
+    }
+
+    @Test
+    fun `three fingers moving left fly left and do not open the quick bar`() {
+        threeFingers()
+        assertEquals(Decision.FLY_LEFT, detector.onTouch(Phase.MOVE, 3, 120L, 800f, 400f))
+    }
+
+    @Test
+    fun `three fingers moving right fly right`() {
+        threeFingers()
+        assertEquals(Decision.FLY_RIGHT, detector.onTouch(Phase.MOVE, 3, 120L, 1000f, 400f))
+    }
+
+    @Test
+    fun `downward swipe still opens the quick bar`() {
+        threeFingers()
+        assertEquals(Decision.TRIGGER, detector.onTouch(Phase.MOVE, 3, 120L, 900f, 520f))
     }
 }

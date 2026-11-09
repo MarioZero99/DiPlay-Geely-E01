@@ -2,7 +2,8 @@
 package com.shilapi.xcertplay.ui
 
 /**
- * The three-finger swipe-down that opens DiPlay from the CarPlay picture.
+ * The three-finger swipe-down that opens DiPlay from the CarPlay picture, and the sideways swipes
+ * that ask the cluster to fly.
  *
  * Split out of the host Activity because the interesting part is not a view: it is the question of
  * which events belong to the gesture and which to CarPlay. As a plain state machine it can be driven
@@ -46,6 +47,12 @@ class ThreeFingerSwipeDetector(
 
         /** The swipe completed: open the settings, and keep consuming until every finger is up. */
         TRIGGER,
+
+        /** The swipe went left: the cluster should fly to the map page. */
+        FLY_LEFT,
+
+        /** The swipe went right: the cluster layer should be taken down. */
+        FLY_RIGHT,
     }
 
     /** The six `MotionEvent` actions this machine distinguishes, without an Android dependency. */
@@ -104,21 +111,23 @@ class ThreeFingerSwipeDetector(
             }
 
             State.TRACKING -> when (phase) {
-                Phase.MOVE ->
-                    if (travelledFarEnough()) {
+                Phase.MOVE -> {
+                    val completed = completedGesture()
+                    if (completed != null) {
                         state = State.DRAINING
-                        Decision.TRIGGER
+                        completed
                     } else {
                         Decision.CONSUME
                     }
+                }
 
                 // The last event of a fast flick is often the lift, with the move before it still
                 // short of the threshold. The lift carries the finger's final position, so it is
                 // checked too instead of being thrown away.
                 Phase.POINTER_UP -> {
-                    val fired = pointerCount >= FINGERS && travelledFarEnough()
+                    val completed = if (pointerCount >= FINGERS) completedGesture() else null
                     state = State.DRAINING
-                    if (fired) Decision.TRIGGER else Decision.CONSUME
+                    completed ?: Decision.CONSUME
                 }
 
                 Phase.UP, Phase.CANCEL -> {
@@ -143,10 +152,23 @@ class ThreeFingerSwipeDetector(
         }
     }
 
-    private fun travelledFarEnough(): Boolean {
+    /**
+     * Which gesture the centroid has completed, or `null` while it has not.
+     *
+     * Downwards opens the quick bar; sideways flies the cluster. A swipe counts for a direction only
+     * when it has gone far enough and is clearly more that way than the other — the same ratio in
+     * both axes, so a diagonal never fires two things at once.
+     */
+    private fun completedGesture(): Decision? {
         val down = lastY - startY
-        val across = kotlin.math.abs(lastX - startX)
-        return down >= distance && down >= across * directionRatio
+        val across = lastX - startX
+        val acrossAbs = kotlin.math.abs(across)
+        return when {
+            down >= distance && down >= acrossAbs * directionRatio -> Decision.TRIGGER
+            acrossAbs >= distance && acrossAbs >= kotlin.math.abs(down) * directionRatio ->
+                if (across < 0f) Decision.FLY_LEFT else Decision.FLY_RIGHT
+            else -> null
+        }
     }
 
     private companion object {
