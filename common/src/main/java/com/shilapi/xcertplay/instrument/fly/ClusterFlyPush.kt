@@ -48,8 +48,16 @@ object ClusterFlyPush {
     @Volatile
     var reencoderFactory: ((ByteArray) -> ClusterFlyReencoder?)? = null
 
+    /** Where the lines go; the controller passes `DiagLog`, tests pass a list. */
+    @Volatile
+    var log: (String) -> Unit = {}
+
     private var reencode = false
     private var reencoder: ClusterFlyReencoder? = null
+
+    /** Photograph of what the last line said, so a line is written when the picture changes only. */
+    private var open = false
+    private var loggedMode: PushMode? = null
 
     fun onFrame(
         phase: FlyPhase,
@@ -63,6 +71,11 @@ object ClusterFlyPush {
         }
         if (screenType != SCREEN_TYPE_MAIN) {
             return PushDecision(send = false, mode = mode(), dropReason = "idle")
+        }
+
+        if (!open) {
+            open = true
+            noteMode()
         }
 
         if (reencode) {
@@ -85,14 +98,28 @@ object ClusterFlyPush {
         // from here on the encoder owns the picture.
         reencode = true
         reencoder = reencoderFactory?.invoke(nalu)
+        noteMode()
         return PushDecision(send = false, mode = PushMode.REENCODE, dropReason = "profile")
     }
 
     /** Forgets the encoder. Called when the layer closes, and safe to call when nothing is open. */
     fun release() {
+        if (open) {
+            open = false
+            loggedMode = null
+            log(ClusterFlyLog.pushStop())
+        }
         reencode = false
         reencoder?.close()
         reencoder = null
+    }
+
+    private fun noteMode() {
+        val mode = mode()
+        if (mode != loggedMode) {
+            loggedMode = mode
+            log(ClusterFlyLog.pushStart(mode))
+        }
     }
 
     private fun mode(): PushMode = if (reencode) PushMode.REENCODE else PushMode.FORWARD

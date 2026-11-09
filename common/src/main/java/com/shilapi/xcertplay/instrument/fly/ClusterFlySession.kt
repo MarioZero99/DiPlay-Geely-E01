@@ -27,9 +27,13 @@ data class FlyEffect(
  * it kept the map page, or it has no video support at all — gets nothing, and nothing is faked for it
  * out of the centre screen.
  */
-class ClusterFlySession {
+class ClusterFlySession(
+    /** Where the lines go. The controller passes `DiagLog`; tests pass a list. */
+    private val log: (String) -> Unit = {},
+) {
 
     private var phase = FlyPhase.IDLE
+    private var loggedPhase = FlyPhase.IDLE
 
     /** When the `FLY_LEFT` / `FLY_RIGHT` step is due; the wait for a video only starts after it. */
     private var flyStepAt = NO_TIME
@@ -158,7 +162,16 @@ class ClusterFlySession {
     private fun effect(
         steps: List<FlyStep> = emptyList(),
         warning: FlyBlock? = null,
-    ) = FlyEffect(phase = phase, push = phase == FlyPhase.PUSHING, warning = warning, steps = steps)
+    ): FlyEffect {
+        val effect = FlyEffect(phase = phase, push = phase == FlyPhase.PUSHING, warning = warning, steps = steps)
+        if (effect.phase != loggedPhase) {
+            loggedPhase = effect.phase
+            log(ClusterFlyLog.phase(effect.phase))
+        }
+        if (warning != null) log(ClusterFlyLog.blocked(warning))
+        steps.forEach { log(ClusterFlyLog.command(it.command)) }
+        return effect
+    }
 
     private companion object {
         /** Before any step is due; the phase guards keep this from ever being compared meaningfully. */
