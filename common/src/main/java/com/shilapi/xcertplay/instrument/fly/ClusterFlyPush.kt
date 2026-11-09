@@ -116,7 +116,14 @@ object ClusterFlyPush {
             loggedMode = null
             log(ClusterFlyLog.pushStop())
         }
+        reset()
+    }
+
+    /** Forgets everything without writing a line: a controller taking ownership starts from zero. */
+    fun reset() {
+        open = false
         reencode = false
+        loggedMode = null
         loggedProfile = null
         reencoder?.close()
         reencoder = null

@@ -4,6 +4,13 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector.Decision
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /** Where the two factory broadcasts really go. The Activity posts them; tests record them. */
 fun interface FlyCommandSink {
@@ -30,6 +37,7 @@ class ClusterFlyController(
         Handler(Looper.getMainLooper()).postDelayed(action, delay)
     },
     linkFactory: (() -> ClusterFlyLink)? = null,
+    frameExecutor: ExecutorService? = null,
 ) {
 
     private val session = ClusterFlySession(log)
@@ -38,8 +46,27 @@ class ClusterFlyController(
         onPacket = { bytes -> onPacket(bytes) }
     }
 
+    /**
+     * The fly thread. CarPlay's media thread hands over a frame and returns; everything that could
+     * block — the policy, the encoder boundary, the UDP send — happens here.
+     *
+     * The queue is bounded and its rejection is a counter, never a wait: a head unit with 26 MB free
+     * cannot afford the cluster layer to slow the picture the driver is actually looking at.
+     */
+    private val frameExecutor: ExecutorService = frameExecutor ?: ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(FRAME_QUEUE_CAPACITY),
+        { runnable -> Thread(runnable, "cluster-fly-frames").apply { isDaemon = true } },
+    )
+
     /** The one lock. Taken by gestures, safety broadcasts, the reader thread and posted steps. */
     private val lock = Any()
+
+    /** Guards the push policy's own state, which the fly thread and a teardown both touch. */
+    private val pushLock = Any()
 
     /** Before any command has been sent. Not `0`: uptime can legitimately start there. */
     private var lastCommandAt = NO_TIME
@@ -56,14 +83,15 @@ class ClusterFlyController(
     /** A step scheduled before a session ended belongs to the old session and is dropped. */
     private var generation = 0
 
-    private var statPackets = 0L
-    private var statBytes = 0L
-    private var statDrops = 0L
-    private var statFrames = 0
-    private var lastKeyframeAt = NO_TIME
+    private val statPackets = AtomicLong()
+    private val statBytes = AtomicLong()
+    private val statDrops = AtomicLong()
+    private val statFrames = AtomicInteger()
+    private val lastKeyframeAt = AtomicLong(NO_TIME)
 
     init {
         // The push policy logs through this controller, so its lines land in the same session log.
+        ClusterFlyPush.reset()
         ClusterFlyPush.log = log
     }
 
@@ -133,40 +161,56 @@ class ClusterFlyController(
             generation++
             stopEverything()
         }
+        // The queue may still hold frames; they belong to a dead layer and are not worth sending.
+        frameExecutor.shutdownNow()
     }
 
     /**
-     * One unit of the centre screen's video, already off the media thread.
+     * Hands one unit of the centre screen's video to the fly thread and returns.
+     *
+     * This is the only thing the CarPlay media thread does for the cluster: one queue offer, no copy,
+     * no allocation of its own. The decoder keeps the same array in its own queue (`submit` is an
+     * offer too), so the reference stays valid; the fly thread does the rest.
+     */
+    fun onMainVideo(type: Int, bytes: ByteArray) {
+        try {
+            frameExecutor.execute { processFrame(type, bytes) }
+        } catch (_: RejectedExecutionException) {
+            // The queue is full or the layer is closed: one countable drop, never a wait.
+            statDrops.incrementAndGet()
+        }
+    }
+
+    /**
+     * The fly thread's work for one unit.
      *
      * The sink's config callback carries an avcC record; it is rewritten to Annex-B here, both so
      * the policy can read its profile and so the cluster is never handed a length-prefixed blob as
      * if it were a NAL. Only the main screen's 110 is ever considered, and only while pushing.
      */
-    fun onMainVideo(type: Int, bytes: ByteArray) {
-        synchronized(lock) {
-            val now = clock()
-            val phase = session.currentPhase
-            val unit = if (ClusterFlyPush.isConfig(bytes)) {
-                ClusterFlyPush.annexB(bytes) ?: return
-            } else {
-                bytes
-            }
+    private fun processFrame(type: Int, bytes: ByteArray) {
+        val now = clock()
+        val phase: FlyPhase = synchronized(lock) { session.currentPhase }
+        val unit = if (ClusterFlyPush.isConfig(bytes)) {
+            ClusterFlyPush.annexB(bytes) ?: return
+        } else {
+            bytes
+        }
 
-            val decision = ClusterFlyPush.onFrame(phase, type, unit, now)
-            if (phase != FlyPhase.PUSHING) return
+        val decision = synchronized(pushLock) { ClusterFlyPush.onFrame(phase, type, unit, now) }
+        if (phase != FlyPhase.PUSHING) return
 
-            if (!decision.send) {
-                if (decision.dropReason != "idle") statDrops++
-                return
-            }
-            if (ClusterFlyPush.isKeyframe(unit)) lastKeyframeAt = now
-            if (link?.send(unit) == true) {
-                statPackets++
-                statBytes += unit.size
-                statFrames++
-            } else {
-                statDrops++
-            }
+        if (!decision.send) {
+            if (decision.dropReason != "idle") statDrops.incrementAndGet()
+            return
+        }
+        if (ClusterFlyPush.isKeyframe(unit)) lastKeyframeAt.set(now)
+        if (link?.send(unit) == true) {
+            statPackets.incrementAndGet()
+            statBytes.addAndGet(unit.size.toLong())
+            statFrames.incrementAndGet()
+        } else {
+            statDrops.incrementAndGet()
         }
     }
 
@@ -195,7 +239,7 @@ class ClusterFlyController(
                 }
             } else {
                 statScheduled = false
-                ClusterFlyPush.release()
+                synchronized(pushLock) { ClusterFlyPush.release() }
             }
         }
 
@@ -272,7 +316,7 @@ class ClusterFlyController(
                             subscribed = false
                             setMainVideoSubscribed(false)
                         }
-                        ClusterFlyPush.release()
+                        synchronized(pushLock) { ClusterFlyPush.release() }
                     }
                     postDelayed(0L) {
                         synchronized(lock) { handle(effect) }
@@ -304,7 +348,7 @@ class ClusterFlyController(
             subscribed = false
             setMainVideoSubscribed(false)
         }
-        ClusterFlyPush.release()
+        synchronized(pushLock) { ClusterFlyPush.release() }
         link?.close()
     }
 
@@ -319,26 +363,27 @@ class ClusterFlyController(
             statScheduled = false
             return
         }
-        val fps = statFrames / (STAT_INTERVAL_MILLIS / 1_000L).toInt()
-        val keyframeAge = if (lastKeyframeAt == NO_TIME) -1L else clock() - lastKeyframeAt
+        val frames = statFrames.getAndSet(0)
+        val fps = frames / (STAT_INTERVAL_MILLIS / 1_000L).toInt()
+        val keyframeAt = lastKeyframeAt.get()
+        val keyframeAge = if (keyframeAt == NO_TIME) -1L else clock() - keyframeAt
         log(
             ClusterFlyLog.stat(
-                packets = statPackets,
-                bytes = statBytes,
-                drops = statDrops,
+                packets = statPackets.getAndSet(0),
+                bytes = statBytes.getAndSet(0),
+                drops = statDrops.getAndSet(0),
                 fps = fps,
                 keyframeAgeMs = keyframeAge,
             ),
         )
-        statPackets = 0
-        statBytes = 0
-        statDrops = 0
-        statFrames = 0
         scheduleStat()
     }
 
     private companion object {
         const val NO_TIME = Long.MIN_VALUE
         const val STAT_INTERVAL_MILLIS = 5_000L
+
+        /** Four frames is a fifth of a second at 25 fps; more than that is already stale. */
+        const val FRAME_QUEUE_CAPACITY = 4
     }
 }

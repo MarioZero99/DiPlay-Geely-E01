@@ -121,8 +121,9 @@ class AndroidMediaSink(    surface: Surface? = null,
      * The cluster layer's subscription to the centre screen's own bytes.
      *
      * Null by default, and null is the normal state: with no subscriber the decoder's input is
-     * untouched. While the layer is open it is set, and only then is a copy made — the observer is
-     * called from the media thread and may keep the array.
+     * untouched. While the layer is open it is set, and the observer must only hand the array on —
+     * the controller queues it for its own thread. The decoder holds the same array in its own
+     * queue, so there is nothing to copy and nothing for the media thread to wait on.
      */
     @Volatile
     private var mainVideoObserver: ((Int, ByteArray) -> Unit)? = null
@@ -152,7 +153,7 @@ class AndroidMediaSink(    surface: Surface? = null,
         val observer = mainVideoObserver ?: return
         if (type != SCREEN_TYPE_MAIN) return
         try {
-            observer(type, bytes.copyOf())
+            observer(type, bytes)
         } catch (error: Exception) {
             DiagLog.w("xcertplay-fly", "cluster video observer failed", error)
         }

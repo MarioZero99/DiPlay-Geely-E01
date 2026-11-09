@@ -20,13 +20,14 @@ class ClusterFlyControllerTest {
     private val warnings = mutableListOf<String>()
     private val lines = mutableListOf<String>()
 
-    private fun controller() = ClusterFlyController(
+    private fun controller(frameExecutor: java.util.concurrent.ExecutorService? = null) = ClusterFlyController(
         commands = { sent.add(it) },
         showWarning = { warnings.add(it) },
         setMainVideoSubscribed = {},
         log = { lines.add(it) },
         clock = { now },
         postDelayed = { delay, action -> scheduled.add(delay to action) },
+        frameExecutor = frameExecutor,
     )
 
     /** Runs what the controller posted, in the order it posted it. */
@@ -45,8 +46,8 @@ class ClusterFlyControllerTest {
     }
 
     /** Left at 1000, the fly step at 1400, the cluster's ask at 1500: a live PUSHING session. */
-    private fun pushing(): ClusterFlyController {
-        val controller = controller()
+    private fun pushing(frameExecutor: java.util.concurrent.ExecutorService? = null): ClusterFlyController {
+        val controller = controller(frameExecutor)
         controller.onGesture(Decision.FLY_LEFT)
         now = 1_400L
         runScheduled()
@@ -54,6 +55,23 @@ class ClusterFlyControllerTest {
         controller.onPacket(openAsk())
         runScheduled()
         return controller
+    }
+
+    /**
+     * The CarPlay media thread must not pay for the cluster: a frame is only queued there. The
+     * policy, the encoder boundary and the socket send all run on the fly thread.
+     */
+    @Test
+    fun `a frame is packetized on the fly thread, not the caller's`() {
+        val executor = ManualExecutor()
+        val controller = pushing(executor)
+
+        controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x67, 66, 0, 0))
+
+        assertFalse(lines.contains("fly.push start forward"))
+
+        executor.runAll()
+        assertTrue(lines.contains("fly.push start forward"))
     }
 
     @Test
@@ -102,9 +120,11 @@ class ClusterFlyControllerTest {
 
     @Test
     fun `the picture being forwarded is logged`() {
-        val controller = pushing()
+        val executor = ManualExecutor()
+        val controller = pushing(executor)
 
         controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x67, 66, 0, 0))
+        executor.runAll()
 
         assertTrue(lines.contains("fly.push start forward"))
     }
@@ -126,5 +146,36 @@ class ClusterFlyControllerTest {
         )
         runScheduled()
         assertEquals(FlyCommand.NAV_OFF, sent.last())
+    }
+
+    /** Runs the fly-thread tasks by hand, so the test can see what was deferred. */
+    private class ManualExecutor : java.util.concurrent.AbstractExecutorService() {
+        private val tasks = mutableListOf<Runnable>()
+        private var stopped = false
+
+        override fun execute(command: Runnable) {
+            tasks.add(command)
+        }
+
+        override fun shutdown() {
+            stopped = true
+        }
+
+        override fun shutdownNow(): MutableList<Runnable> {
+            stopped = true
+            return tasks.toMutableList().also { tasks.clear() }
+        }
+
+        override fun isShutdown() = stopped
+
+        override fun isTerminated() = stopped
+
+        override fun awaitTermination(timeout: Long, unit: java.util.concurrent.TimeUnit) = true
+
+        fun runAll() {
+            val pending = tasks.toList()
+            tasks.clear()
+            pending.forEach { it.run() }
+        }
     }
 }
