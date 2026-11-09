@@ -93,6 +93,19 @@ class ClusterFlyController(
         // The push policy logs through this controller, so its lines land in the same session log.
         ClusterFlyPush.reset()
         ClusterFlyPush.log = log
+        // Only a controller with a real link is a production one; tests leave the factory alone, so
+        // no MediaCodec is ever constructed in a JVM test.
+        if (linkFactory != null) {
+            ClusterFlyPush.reencoderFactory = { config ->
+                // The re-encoder uses the buffer/Image APIs of 21+; the fly feature itself is an
+                // API 22 head unit, and anything older simply keeps the layer blank.
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                    ClusterFlyReencoderMediaCodec(config) { unit -> sendEncoded(unit) }
+                } else {
+                    null
+                }
+            }
+        }
     }
 
     fun onGesture(decision: Decision) {
@@ -205,6 +218,16 @@ class ClusterFlyController(
             return
         }
         if (ClusterFlyPush.isKeyframe(unit)) lastKeyframeAt.set(now)
+        if (link?.send(unit) == true) {
+            statPackets.incrementAndGet()
+            statBytes.addAndGet(unit.size.toLong())
+            statFrames.incrementAndGet()
+        } else {
+            statDrops.incrementAndGet()
+        }
+    }
+
+    private fun sendEncoded(unit: ByteArray) {
         if (link?.send(unit) == true) {
             statPackets.incrementAndGet()
             statBytes.addAndGet(unit.size.toLong())
