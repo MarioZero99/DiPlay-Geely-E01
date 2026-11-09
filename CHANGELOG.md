@@ -9,8 +9,16 @@ against. The base never moves — it is what makes this fork installable on old 
 alignment line, not the base line, is what says how current a release is.
 **Target:** Geely Xingrui E01 (ECARX E01 / MediaTek MT6735, GKUI 19, **Android 5.1 / API 22**).
 
-> 4.1 之后的改动按「新增 / 改进 / 优化 / 修复」汇总在
-> [CHANGELOG-4.1-to-HEAD.md](CHANGELOG-4.1-to-HEAD.md)；这份文件保留逐版本的发版记录。
+---
+
+## 0.5.0-geely — 2026-11-09
+
+**仪表音乐卡片显示更稳、连接重试更完整、无线音乐缓冲更宽。**
+
+### 一、改进
+- **仪表音乐卡片**：只向仪表同步歌曲的歌名与歌手，切歌、播放状态与重连后的显示更稳定，不再串歌或来回跳。
+- **连接稳定性**：无线握手超时、过早断开时会自动重试；有线连接能更快识别重新插拔与链路故障。
+- **音频**：无线音乐缓冲适当加宽，减少偶发卡顿与断音。
 
 ---
 

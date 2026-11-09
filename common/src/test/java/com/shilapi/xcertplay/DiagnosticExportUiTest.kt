@@ -153,9 +153,8 @@ class DiagnosticExportUiTest {
     }
 
     /**
-     * A save from the place list has no primary button to relabel, so the card itself must turn into
-     * the progress state. Otherwise the only visible change is that taps stop working, and Back —
-     * which dismisses the card and closes the stick — looks like the way out.
+     * A save from the place list has no primary button to relabel, so the card itself must say it is
+     * saving. "Reading…" is the folder-list sentence; leaving it up makes a started save look ignored.
      */
     @Test fun aTappedStickShowsProgressWhileTheWriteRuns() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
@@ -174,7 +173,8 @@ class DiagnosticExportUiTest {
             clickRow(activity, "U 盘 (USB 存储)")
             shadowOf(Looper.getMainLooper()).idle()
             val during = texts(activity).mapNotNull { it.text?.toString() }
-            assertTrue(during.toString(), during.contains(activity.getString(R.string.export_loading)))
+            assertTrue(during.toString(), during.contains(activity.getString(R.string.saving_report)))
+            assertFalse(during.toString(), during.contains(activity.getString(R.string.export_loading)))
             assertFalse(during.contains(activity.getString(R.string.export_usb_direct_detail)))
             gate.countDown()
             awaitText(activity, activity.getString(R.string.export_failed_kept))
@@ -183,6 +183,36 @@ class DiagnosticExportUiTest {
             UsbMassStorageManager.deviceListProvider = null
             UsbMassStorageManager.hasPermissionProvider = null
             UsbMassStorageManager.openFileSystemProvider = null
+            UsbMassStorageManager.close()
+            DiagnosticVolumeProbe.volumeListProvider = null
+            DiagnosticVolumeProbe.volumePathsProvider = null
+            DiagnosticVolumeProbe.procMountsProvider = null
+            DiagSink.reset()
+            controller.pause().stop().destroy()
+        }
+    }
+
+    /** No grant and no UsbDevice used to leave the card on "Reading…" because the callback never ran. */
+    @Test fun aStickWithoutPermissionLeavesTheReadingState() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        registerReportProvider(activity.applicationContext)
+        UsbMassStorageManager.deviceListProvider = { listOf(DiagnosticExportStoreTest.blankUsbDevice()) }
+        UsbMassStorageManager.hasPermissionProvider = { _, _ -> false }
+        DiagnosticVolumeProbe.volumeListProvider = { emptyArray<Any>() }
+        DiagnosticVolumeProbe.volumePathsProvider = { emptyArray() }
+        DiagnosticVolumeProbe.procMountsProvider = { "" }
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
+            awaitText(activity, "U 盘 (USB 存储)")
+            clickRow(activity, "U 盘 (USB 存储)")
+            awaitText(activity, "未获得 USB 设备访问权限")
+            val shown = texts(activity).mapNotNull { it.text?.toString() }
+            assertFalse(shown.toString(), shown.any { it.contains(activity.getString(R.string.export_loading)) })
+            assertNotNull(texts(activity).firstOrNull { it.text == activity.getString(R.string.retry) })
+        } finally {
+            UsbMassStorageManager.deviceListProvider = null
+            UsbMassStorageManager.hasPermissionProvider = null
             UsbMassStorageManager.close()
             DiagnosticVolumeProbe.volumeListProvider = null
             DiagnosticVolumeProbe.volumePathsProvider = null

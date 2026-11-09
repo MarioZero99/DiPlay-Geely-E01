@@ -35,21 +35,17 @@ class XingruiClusterMediaFormatterTest {
     }
 
     @Test
-    fun buildMediaPath_nullOrBlank_returnsDummyHttpPath() {
-        assertEquals("stream&&&http://none", XingruiClusterMediaFormatter.buildMediaPath(null))
-        assertEquals("stream&&&http://none", XingruiClusterMediaFormatter.buildMediaPath(""))
-        assertEquals("stream&&&http://none", XingruiClusterMediaFormatter.buildMediaPath("   "))
-    }
-
-    @Test
-    fun buildMediaPath_withSdcardUri_prependsCarplayPrefix() {
-        val uri = "file:///sdcard/Music/mediacenter/images/cover_0.jpg"
-        assertEquals("carplay&&&$uri", XingruiClusterMediaFormatter.buildMediaPath(uri))
-    }
-
-    @Test
-    fun buildMediaPath_withRawPath_addsFileProtocolAndPrependsCarplayPrefix() {
-        val path = "/sdcard/Music/mediacenter/images/cover_1.jpg"
-        assertEquals("carplay&&&file://$path", XingruiClusterMediaFormatter.buildMediaPath(path))
+    fun buildMediaPath_alwaysSkipsTheAlbumLayer() {
+        assertEquals("http://carplay", XingruiClusterMediaFormatter.buildMediaPath(null))
+        assertEquals("http://carplay", XingruiClusterMediaFormatter.buildMediaPath(""))
+        assertEquals("http://carplay", XingruiClusterMediaFormatter.buildMediaPath("   "))
+        assertEquals(
+            "http://carplay",
+            XingruiClusterMediaFormatter.buildMediaPath("file:///sdcard/Music/mediacenter/images/cover_0.jpg"),
+        )
+        assertEquals(
+            "http://carplay",
+            XingruiClusterMediaFormatter.buildMediaPath("/sdcard/Music/mediacenter/images/cover_1.jpg"),
+        )
     }
 }

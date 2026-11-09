@@ -4,4 +4,4 @@
 
 English: **[README.en.md](README.en.md)**
 
-4.1 之后的改动汇总：**[CHANGELOG-4.1-to-HEAD.md](CHANGELOG-4.1-to-HEAD.md)**。
+完整更新日志：**[CHANGELOG.md](CHANGELOG.md)**。

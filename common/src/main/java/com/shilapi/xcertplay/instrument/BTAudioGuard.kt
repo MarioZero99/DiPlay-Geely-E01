@@ -32,15 +32,9 @@ internal object BTAudioGuard {
         }
 
         override fun executeShell(command: String): Boolean {
-            return runCatching {
-                val p = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
-                p.waitFor() == 0
-            }.getOrElse {
-                runCatching {
-                    val p = Runtime.getRuntime().exec(command.split(" ").toTypedArray())
-                    p.waitFor() == 0
-                }.getOrDefault(false)
-            }
+            val bridge = com.shilapi.xcertplay.system.RootShellBridge
+            if (!bridge.isAvailable()) return false
+            return bridge.execute(command)
         }
     }
 
@@ -52,21 +46,22 @@ internal object BTAudioGuard {
      */
     fun ensureConnected(context: Context): Boolean {
         val accessor = accessorOverrideForTest ?: defaultAccessor
-        val current = accessor.getString(context, KEY_BT_AUDIO)
-        if (STATE_CONNECTED == current) {
+        val before = accessor.getString(context, KEY_BT_AUDIO)
+        if (STATE_CONNECTED == before) {
+            DiagLog.i(TAG, "BTAudio before='Connected' after='Connected' write=none")
             return true
         }
 
-        DiagLog.i(TAG, "BTAudio status is '$current', correcting to '$STATE_CONNECTED'")
         val putOk = accessor.putString(context, KEY_BT_AUDIO, STATE_CONNECTED)
         if (putOk) {
-            DiagLog.i(TAG, "Successfully updated $KEY_BT_AUDIO to $STATE_CONNECTED via Settings.System")
+            val after = accessor.getString(context, KEY_BT_AUDIO)
+            DiagLog.i(TAG, "BTAudio before='$before' after='$after' write=settings")
             return true
         }
 
-        DiagLog.w(TAG, "Failed to putString directly, attempting shell fallback")
         val shellOk = accessor.executeShell("settings put system $KEY_BT_AUDIO $STATE_CONNECTED")
-        DiagLog.i(TAG, "Shell fallback result: $shellOk")
+        val after = accessor.getString(context, KEY_BT_AUDIO)
+        DiagLog.i(TAG, "BTAudio before='$before' after='$after' write=shell shellOk=$shellOk")
         return shellOk
     }
 }

@@ -2,7 +2,9 @@ package com.shilapi.xcertplay.instrument
 
 internal object XingruiClusterMediaFormatter {
     const val MAX_CAN_TEXT_LENGTH = 31
-    const val DUMMY_HTTP_MEDIA_PATH = "stream&&&http://none"
+    /** 东软见到 http 开头就跳过封面图层。这台车没有第二块屏，封面图层不会起来。 */
+    const val PLAYING_MEDIA_PATH = "http://carplay"
+    const val DUMMY_HTTP_MEDIA_PATH = PLAYING_MEDIA_PATH
 
     fun formatText(raw: String?): String {
         if (raw.isNullOrBlank()) return " "
@@ -14,15 +16,5 @@ internal object XingruiClusterMediaFormatter {
         }
     }
 
-    fun buildMediaPath(sdcardUriOrPath: String?): String {
-        if (sdcardUriOrPath.isNullOrBlank()) {
-            return DUMMY_HTTP_MEDIA_PATH
-        }
-        val safeUri = if (sdcardUriOrPath.startsWith("file://")) {
-            sdcardUriOrPath
-        } else {
-            "file://$sdcardUriOrPath"
-        }
-        return "carplay&&&$safeUri"
-    }
+    fun buildMediaPath(sdcardUriOrPath: String?): String = PLAYING_MEDIA_PATH
 }

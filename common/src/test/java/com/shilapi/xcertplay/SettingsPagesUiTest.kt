@@ -28,7 +28,7 @@ import org.robolectric.shadows.ShadowAlertDialog
  * The settings area is one page that carries every bucket, and the two routes still left.
  *
  * The page has to show what each bucket has -- hotspot, phone, the connect step, display, audio,
- * diagnostics, firmware, language -- because hunting for which bucket a setting was filed under is
+ * voice governance, language -- because hunting for which bucket a setting was filed under is
  * what the hub cost, and the hub's entry cards going away is the other half of that assertion.
  *
  * Wireless and wired are buckets and nothing else. They used to be pages of their own as well, and
@@ -71,7 +71,7 @@ class SettingsPagesUiTest {
         Triple("wireless", "Wireless settings", "1 · Car hotspot (Wi-Fi)"),
         Triple("wired", "Wired settings", null),
         Triple("display", "Display and audio", "Resolution"),
-        Triple("governance", "Vehicle governance", "Save diagnostic report"),
+        Triple("governance", "Vehicle governance", "Suppress background voice"),
         Triple("system", "System settings", "Open after the car starts"),
     )
 

@@ -9,6 +9,8 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import me.jahnen.libaums.core.UsbMassStorageDevice
 import me.jahnen.libaums.core.driver.BlockDeviceDriver
 import me.jahnen.libaums.core.fs.FileSystem
@@ -100,6 +102,11 @@ internal object UsbMassStorageManager {
 
     internal var lastOpenFacts: UsbOpenFacts = UsbOpenFacts(0, false, "not opened")
 
+    /** How long a missing permission broadcast may leave the save card waiting. */
+    internal var permissionWaitMillis = 12_000L
+    internal var permissionPollMillis = 250L
+    private var permissionGeneration = 0
+
     internal fun describeOpen(vendorId: Int, productId: Int, permission: Boolean, facts: UsbOpenFacts): String {
         val error = facts.error ?: "none"
         return "usb open vid=%04x pid=%04x perm=%s partitions=%d fat32=%s error=%s".format(
@@ -153,6 +160,12 @@ internal object UsbMassStorageManager {
             onResult(true)
             return
         }
+        val usb = runCatching { device.usbDevice }.getOrNull()
+        if (usb == null) {
+            DiagLog.w("UsbMassStorage", "USB permission skipped: device has no UsbDevice")
+            onResult(false)
+            return
+        }
 
         // Unregister any previous receiver to prevent leaks (matching CX File Explorer)
         permissionReceiver?.let {
@@ -160,36 +173,35 @@ internal object UsbMassStorageManager {
             permissionReceiver = null
         }
 
-        val targetDeviceName = device.usbDevice.deviceName
-        val filter = IntentFilter(ACTION_USB_PERMISSION)
+        val generation = ++permissionGeneration
+        val targetDeviceName = usb.deviceName
+        val wait = UsbPermissionWait(
+            hasPermission = { hasPermission(context, device) },
+            onResult = { granted ->
+                if (generation != permissionGeneration) return@UsbPermissionWait
+                if (granted) unregisterPermissionReceiver(context)
+                DiagLog.i("DiagnosticExport", "usb permission device=$targetDeviceName granted=$granted")
+                activity.runOnUiThread {
+                    if (generation != permissionGeneration) return@runOnUiThread
+                    if (!activity.isFinishing && !activity.isDestroyed) onResult(granted)
+                }
+            },
+            waitMillis = permissionWaitMillis,
+            stepMillis = permissionPollMillis,
+        )
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
-                if (intent?.action == ACTION_USB_PERMISSION) {
-                    val reportedDevice = @Suppress("DEPRECATION")
-                    intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-                    if (reportedDevice != null && reportedDevice.deviceName != targetDeviceName) {
-                        return
-                    }
-
-                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    try {
-                        context.unregisterReceiver(this)
-                        if (permissionReceiver === this) {
-                            permissionReceiver = null
-                        }
-                    } catch (_: Exception) {}
-                    activity.runOnUiThread {
-                        if (!activity.isFinishing && !activity.isDestroyed) {
-                            onResult(granted)
-                        }
-                    }
-                }
+                if (intent?.action != ACTION_USB_PERMISSION) return
+                val reportedDevice = @Suppress("DEPRECATION")
+                intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                wait.onBroadcast(granted, reportedDevice?.deviceName, targetDeviceName)
             }
         }
         permissionReceiver = receiver
         try {
             // Android 5.1 (API 22) standard receiver registration (no API 33+ RECEIVER_NOT_EXPORTED)
-            context.registerReceiver(receiver, filter)
+            context.registerReceiver(receiver, IntentFilter(ACTION_USB_PERMISSION))
 
             // Flags: 0 on Android 5.1; 0x02000000 (FLAG_MUTABLE) on API 31+ if ever run there
             val flags = if (Build.VERSION.SDK_INT >= 31) {
@@ -201,14 +213,29 @@ internal object UsbMassStorageManager {
                 setPackage(context.packageName)
             }
             val permissionIntent = PendingIntent.getBroadcast(context, 0, intent, flags)
-            usbManager.requestPermission(device.usbDevice, permissionIntent)
+            usbManager.requestPermission(usb, permissionIntent)
+            // This head unit often grants the device and then drops the broadcast. Polling
+            // hasPermission is what lets the save continue. The wait still ends, so the card
+            // cannot sit on "正在读取…" until the process is killed.
+            val main = Handler(Looper.getMainLooper())
+            wait.start { delay, block ->
+                main.postDelayed({
+                    if (generation != permissionGeneration) return@postDelayed
+                    block()
+                }, delay)
+            }
         } catch (e: Exception) {
             DiagLog.w("UsbMassStorage", "Error requesting USB permission", e)
-            permissionReceiver?.let {
-                runCatching { context.unregisterReceiver(it) }
-                permissionReceiver = null
-            }
+            permissionGeneration++
+            unregisterPermissionReceiver(context)
             onResult(false)
+        }
+    }
+
+    private fun unregisterPermissionReceiver(context: Context) {
+        permissionReceiver?.let { rx ->
+            runCatching { context.unregisterReceiver(rx) }
+            if (permissionReceiver === rx) permissionReceiver = null
         }
     }
 
@@ -237,6 +264,10 @@ internal object UsbMassStorageManager {
                 close()
             }
             return try {
+                DiagLog.i(
+                    "UsbMassStorage",
+                    "init begin name=${runCatching { device.usbDevice.deviceName }.getOrDefault("unknown")}",
+                )
                 device.init()
                 currentDevice = device
                 var partitions = runCatching { device.partitions }.getOrElse { emptyList() }
@@ -299,21 +330,95 @@ internal object UsbMassStorageManager {
      * Closes the active USB device and releases USB endpoints (matching CX File Explorer ax.b2.l.d()).
      */
     fun close() {
-        synchronized(this) {
-            permissionReceiver?.let { rx ->
-                runCatching { appContext?.unregisterReceiver(rx) }
-                permissionReceiver = null
+        cancelPermissionWait()
+        synchronized(this) { closeDeviceLocked() }
+    }
+
+    /**
+     * Cancels a permission wait on the caller thread, then releases the device on a background
+     * thread. init() holds the manager lock for the whole SCSI exchange, and waiting for that
+     * lock on the UI thread freezes the page.
+     */
+    fun closeInBackground() {
+        cancelPermissionWait()
+        Thread({
+            synchronized(this) { closeDeviceLocked() }
+        }, "diplay-usb-close").start()
+    }
+
+    private fun cancelPermissionWait() {
+        // Bump before taking the lock. A permission callback must not start a save after the card is gone.
+        permissionGeneration++
+        val context = appContext
+        if (context != null) {
+            unregisterPermissionReceiver(context)
+        } else {
+            permissionReceiver = null
+        }
+    }
+
+    private fun closeDeviceLocked() {
+        val dev = currentDevice
+        if (dev != null) {
+            currentFs?.let {
+                cachedCapacity = it.capacity
+                cachedFreeSpace = it.freeSpace
             }
-            val dev = currentDevice
-            if (dev != null) {
-                currentFs?.let {
-                    cachedCapacity = it.capacity
-                    cachedFreeSpace = it.freeSpace
-                }
-                runCatching { dev.close() }
-                currentDevice = null
-                currentFs = null
-            }
+            runCatching { dev.close() }
+            currentDevice = null
+            currentFs = null
         }
     }
 }
+
+/**
+ * Waits out a permission broadcast this head unit often drops.
+ * A null device extra still counts: the ROM omitted it. A different device name is ignored,
+ * and [hasPermission] is polled until [waitMillis]. Timeout reports false once; a later grant
+ * still reports true, because the receiver stays until the grant, a new request, or [UsbMassStorageManager.close].
+ */
+internal class UsbPermissionWait(
+    private val hasPermission: () -> Boolean,
+    private val onResult: (Boolean) -> Unit,
+    private val waitMillis: Long = 12_000L,
+    private val stepMillis: Long = 250L,
+) {
+    private var outcome: Boolean? = null
+    private var elapsed = 0L
+
+    fun start(postDelayed: (Long, () -> Unit) -> Unit) {
+        postDelayed(stepMillis) { tick(postDelayed) }
+    }
+
+    fun onBroadcast(granted: Boolean, reportedDeviceName: String?, targetDeviceName: String) {
+        if (!acceptsPermissionBroadcast(targetDeviceName, reportedDeviceName)) return
+        finish(granted)
+    }
+
+    private fun tick(postDelayed: (Long, () -> Unit) -> Unit) {
+        if (outcome == true) return
+        if (hasPermission()) {
+            finish(true)
+            return
+        }
+        elapsed += stepMillis
+        if (outcome == null && elapsed >= waitMillis) finish(false)
+        if (outcome != true && elapsed < waitMillis) postDelayed(stepMillis) { tick(postDelayed) }
+    }
+
+    private fun finish(granted: Boolean) {
+        if (granted) {
+            if (outcome == true) return
+            outcome = true
+            onResult(true)
+            return
+        }
+        if (outcome != null) return
+        outcome = false
+        onResult(false)
+    }
+}
+
+/** A missing extra is a grant for this request. A different device name belongs to another request. */
+internal fun acceptsPermissionBroadcast(targetDeviceName: String, reportedDeviceName: String?): Boolean =
+    reportedDeviceName == null || reportedDeviceName == targetDeviceName

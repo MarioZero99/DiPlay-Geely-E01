@@ -85,6 +85,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
+import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -190,6 +191,11 @@ class DiPlayActivity : ComponentActivity() {
     private var exportInProgress = false
     private var browseGeneration = 0
     private var browseRequest = 0
+    /** Bumped when a USB save is superseded. A late result from the previous attempt is ignored. */
+    private var usbSaveToken = 0
+    private var usbSaveTimeout: Runnable? = null
+    private val usbSaveTimeoutMillis = 25_000L
+    private val directoryListTimeoutMillis = 8_000L
     private var exportSheet: ExportFolderSheet? = null
     private var exportRoots: List<ExportFolder> = emptyList()
     private var uploadInProgress = false
@@ -466,12 +472,8 @@ class DiPlayActivity : ComponentActivity() {
         updateLink = null
         releaseAdapterPage()
         // Drop the card without animating. A fade callback would run after this activity is gone.
-        browseGeneration++
-        browseRequest++
         exportSheet?.removeImmediately()
-        exportSheet = null
-        exportRoots = emptyList()
-        UsbMassStorageManager.close()
+        abandonUsbSave()
         super.onDestroy()
     }
 
@@ -1021,10 +1023,12 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun vehicleGovernanceCards(columns: CardColumns) {
-        carLifeGovernanceCard(columns)
+        // 软屏蔽：只不显示入口，CarLife 治理与 U 盘诊断导出的实现和备份都留着，
+        // 改回 true 即可恢复这两个卡片。
+        if (SHOW_CARLIFE_GOVERNANCE) carLifeGovernanceCard(columns)
         voiceGovernanceCard(columns)
         bluetoothGovernanceCard(columns)
-        diagnosticsCard(columns)
+        if (SHOW_DIAGNOSTIC_EXPORT) diagnosticsCard(columns)
     }
 
     /**
@@ -3411,11 +3415,7 @@ class DiPlayActivity : ComponentActivity() {
         val generation = ++browseGeneration
         val request = ++browseRequest
         val sheet = ExportFolderSheet(this, palette) {
-            browseGeneration++
-            browseRequest++
-            exportSheet = null
-            exportRoots = emptyList()
-            UsbMassStorageManager.close()
+            abandonUsbSave()
         }
         exportSheet = sheet
         host.addView(sheet, FrameLayout.LayoutParams(-1, -1))
@@ -3457,15 +3457,20 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun saveUsb(folder: ExportFolder) {
         val device = folder.usbDevice ?: return
+        val permitted = UsbMassStorageManager.hasPermission(this, device)
+        DiagLog.i("DiagnosticExport", "usb tap ${folder.label} perm=$permitted")
         if (exportInProgress) return
         val sheet = exportSheet ?: return
-        if (!UsbMassStorageManager.hasPermission(this, device)) {
-            sheet.showLoading(folder.label, getString(R.string.export_loading))
+        // 这一行没有主按钮可以改字。直接把卡片改成「正在保存报告…」，
+        // 不能再用「正在读取…」，否则保存已经开始也看起来像没点中。
+        sheet.showLoading(folder.label, getString(R.string.saving_report))
+        if (!permitted) {
             UsbMassStorageManager.requestPermission(this, device) { granted ->
+                val card = exportSheet ?: return@requestPermission
                 if (granted) {
                     exportToUsb(device)
                 } else {
-                    sheet.showChoices(
+                    card.showChoices(
                         folder.label,
                         "未获得 USB 设备访问权限",
                         listOf(ExportFolderSheet.Choice(getString(R.string.export_up), null, clickable = true) { showMountList() }),
@@ -3476,9 +3481,6 @@ class DiPlayActivity : ComponentActivity() {
                 }
             }
         } else {
-            // 这一行没有主按钮可以改成「正在保存…」，卡片本身要进入进度态：否则只剩点不动，
-            // 用户会按返回键，而返回键会关掉正在写入的设备。
-            sheet.showLoading(folder.label, getString(R.string.export_loading))
             exportToUsb(device)
         }
     }
@@ -3486,18 +3488,40 @@ class DiPlayActivity : ComponentActivity() {
     private fun exportToUsb(device: me.jahnen.libaums.core.UsbMassStorageDevice) {
         if (exportInProgress) return
         val sheet = exportSheet ?: return
+        val token = ++usbSaveToken
         exportInProgress = true
         exportButton?.apply { isEnabled = false; text = getString(R.string.saving_report) }
         sheet.setSaving(getString(R.string.saving_report))
         val appContext = applicationContext
         val fileName = reportFileName()
         val generation = browseGeneration
+        val startedAt = SystemClock.uptimeMillis()
+        lateinit var timeout: Runnable
+        timeout = Runnable {
+            if (token != usbSaveToken || !exportInProgress) return@Runnable
+            val elapsed = SystemClock.uptimeMillis() - startedAt
+            // A delayed runnable that runs before the clock has moved is not the real timeout.
+            if (elapsed < usbSaveTimeoutMillis) {
+                handler.postDelayed(timeout, (usbSaveTimeoutMillis - elapsed).coerceAtLeast(1L))
+                return@Runnable
+            }
+            if (isFinishing || isDestroyed || exportSheet == null) {
+                exportInProgress = false
+                return@Runnable
+            }
+            showUsbSaveTimeout(device)
+        }
+        usbSaveTimeout = timeout
+        handler.postDelayed(timeout, usbSaveTimeoutMillis)
         Thread({
             val result = runCatching {
                 val report = buildCompleteReport(appContext)
                 DiagnosticExportStore.saveToUsb(appContext, device, fileName, report) to report
             }
             runOnUiThread {
+                if (token != usbSaveToken) return@runOnUiThread
+                usbSaveTimeout?.let { handler.removeCallbacks(it) }
+                usbSaveTimeout = null
                 exportInProgress = false
                 if (!isFinishing && !isDestroyed) {
                     exportButton?.apply { isEnabled = true; text = getString(R.string.save_diagnostic_report) }
@@ -3546,11 +3570,29 @@ class DiPlayActivity : ComponentActivity() {
         val sheet = exportSheet ?: return
         val generation = browseGeneration
         val request = ++browseRequest
+        DiagLog.i("DiagnosticExport", "list ${directory.absolutePath}")
         sheet.showLoading(directory.name.ifBlank { mountRoot.name }, getString(R.string.export_loading))
+        val settled = AtomicBoolean(false)
+        val startedAt = SystemClock.uptimeMillis()
+        lateinit var listTimeout: Runnable
+        listTimeout = Runnable {
+            if (!browseAlive(generation, request) || settled.get()) return@Runnable
+            val elapsed = SystemClock.uptimeMillis() - startedAt
+            if (elapsed < directoryListTimeoutMillis) {
+                handler.postDelayed(listTimeout, (directoryListTimeoutMillis - elapsed).coerceAtLeast(1L))
+                return@Runnable
+            }
+            if (!settled.compareAndSet(false, true)) return@Runnable
+            if (!browseAlive(generation, request)) return@Runnable
+            DiagLog.w("DiagnosticExport", "list timed out ${directory.absolutePath}")
+            showDirectory(directory, mountRoot, emptyList(), readable = false)
+        }
+        handler.postDelayed(listTimeout, directoryListTimeoutMillis)
         Thread({
             val readable = DiagnosticExportStore.isReadable(directory)
             val entries = if (readable) DiagnosticExportStore.children(directory) else emptyList()
             runOnUiThread {
+                if (!settled.compareAndSet(false, true)) return@runOnUiThread
                 if (!browseAlive(generation, request)) return@runOnUiThread
                 showDirectory(directory, mountRoot, entries, readable)
             }
@@ -3598,6 +3640,9 @@ class DiPlayActivity : ComponentActivity() {
     private fun exportHere(directory: File) {
         if (exportInProgress) return
         val sheet = exportSheet ?: return
+        usbSaveToken++
+        usbSaveTimeout?.let { handler.removeCallbacks(it) }
+        usbSaveTimeout = null
         exportInProgress = true
         exportButton?.apply { isEnabled = false; text = getString(R.string.saving_report) }
         sheet.setSaving(getString(R.string.saving_report))
@@ -3659,6 +3704,45 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun browseAlive(generation: Int, request: Int): Boolean =
         generation == browseGeneration && request == browseRequest && exportSheet != null && !isFinishing && !isDestroyed
+
+    /** Drops the export card and any USB save still running. Device release waits off this thread. */
+    private fun abandonUsbSave() {
+        browseGeneration++
+        browseRequest++
+        usbSaveToken++
+        exportInProgress = false
+        usbSaveTimeout?.let { handler.removeCallbacks(it) }
+        usbSaveTimeout = null
+        exportSheet = null
+        exportRoots = emptyList()
+        UsbMassStorageManager.closeInBackground()
+    }
+
+    /** init() or the sector write did not return. The report thread may still replace this card. */
+    private fun showUsbSaveTimeout(device: me.jahnen.libaums.core.UsbMassStorageDevice) {
+        DiagLog.w("DiagnosticExport", "usb save timed out")
+        exportInProgress = false
+        if (!isFinishing && !isDestroyed) {
+            exportButton?.apply { isEnabled = true; text = getString(R.string.save_diagnostic_report) }
+        }
+        val card = exportSheet ?: return
+        val downloads = android.os.Environment.getExternalStoragePublicDirectory(
+            android.os.Environment.DIRECTORY_DOWNLOADS,
+        )
+        card.showFailed(
+            title = getString(R.string.could_not_save_the_report),
+            body = getString(R.string.export_failed_kept),
+            viewLabel = null,
+            onView = null,
+            shareLabel = null,
+            onShare = null,
+            alternateLabel = getString(R.string.export_save_to_phone),
+            onAlternate = { exportHere(downloads) },
+            retryLabel = getString(R.string.retry),
+            onRetry = { exportToUsb(device) },
+            closeLabel = getString(R.string.close),
+        )
+    }
 
     private fun sameFile(left: File, right: File) = left.absolutePath == right.absolutePath
 
@@ -4367,6 +4451,14 @@ class DiPlayActivity : ComponentActivity() {
          */
         private const val PAGE_FIRMWARE = "firmware"
 
+        /**
+         * 车机治理页的软屏蔽开关。
+         *
+         * false 时只不绘制对应卡片，不删除实现、不清理已写入车厢的状态，
+         * 需要恢复时把这里改回 true 即可。
+         */
+        private const val SHOW_CARLIFE_GOVERNANCE = false
+        private const val SHOW_DIAGNOSTIC_EXPORT = false
         private const val HOP_DEVICES_TTL_MILLIS = 10_000L
 
         /** How long network status (Wi-Fi, hotspot, BT) is reused during periodic ticks to prevent binder churn. */

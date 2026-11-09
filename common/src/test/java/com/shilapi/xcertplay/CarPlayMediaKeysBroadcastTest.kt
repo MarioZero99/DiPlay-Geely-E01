@@ -86,14 +86,24 @@ class CarPlayMediaKeysBroadcastTest {
     }
 
     @Test
-    fun clusterMediaSourceDefaultsToOnline() {
-        assertEquals("Cluster media source should default to 6 (Online)", 6, AirPlayPersistence.loadClusterMediaSource(context))
-        AirPlayPersistence.saveClusterMediaSource(context, 1)
-        assertEquals("Cluster media source can be saved as custom source", 1, AirPlayPersistence.loadClusterMediaSource(context))
-        AirPlayPersistence.saveClusterMediaSource(context, 0)
-        assertEquals("Legacy USB (0) must auto-migrate to Online (6)", 6, AirPlayPersistence.loadClusterMediaSource(context))
-        AirPlayPersistence.saveClusterMediaSource(context, 2)
-        assertEquals("Legacy Bluetooth (2) must auto-migrate to Online (6)", 6, AirPlayPersistence.loadClusterMediaSource(context))
+    fun clusterMediaSourceStaysOnBluetooth() {
+        fun stored(): Int = context.getSharedPreferences("xcertplay_airplay", 0)
+            .getInt("cluster_media_source", -1)
+
+        assertEquals(AirPlayPersistence.SOURCE_BLUETOOTH, AirPlayPersistence.loadClusterMediaSource(context))
+        for (legacy in listOf(0, 6, 1)) {
+            AirPlayPersistence.saveClusterMediaSource(context, legacy)
+            assertEquals(legacy, stored())
+            assertEquals(
+                "Stored source $legacy must migrate back to Bluetooth (2), CAN byte 5",
+                AirPlayPersistence.SOURCE_BLUETOOTH,
+                AirPlayPersistence.loadClusterMediaSource(context),
+            )
+            assertEquals(AirPlayPersistence.SOURCE_BLUETOOTH, stored())
+        }
+        AirPlayPersistence.saveClusterMediaSource(context, AirPlayPersistence.SOURCE_BLUETOOTH)
+        assertEquals(AirPlayPersistence.SOURCE_BLUETOOTH, AirPlayPersistence.loadClusterMediaSource(context))
+        assertEquals(AirPlayPersistence.SOURCE_BLUETOOTH, stored())
     }
 
     @Test

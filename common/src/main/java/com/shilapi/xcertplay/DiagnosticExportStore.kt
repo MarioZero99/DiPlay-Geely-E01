@@ -234,7 +234,9 @@ internal object DiagnosticExportStore {
         device: UsbMassStorageDevice,
         fileName: String,
         report: String,
-    ): ExportOutcome {
+    ): ExportOutcome = synchronized(UsbMassStorageManager) {
+        // Open, the sector write, and close share the manager lock. A retry started while init()
+        // is still inside the first save waits here, instead of closing the stick mid-write.
         val deviceName = runCatching { device.usbDevice.deviceName }.getOrDefault("unknown")
         DiagLog.i("DiagnosticExport", "saveToUsb device=$deviceName fileName=$fileName chars=${report.length}")
         val primaryPath = "USB: /DiPlay/$fileName"
@@ -286,7 +288,7 @@ internal object DiagnosticExportStore {
         }
         DiagLog.i("DiagnosticExport", "saveToUsb complete: written=$written primaryPath=$primaryPath backup=${backup != null}")
         if (!written && backup == null) throw IOException("Report storage is unavailable")
-        return ExportOutcome(primaryPath, backup?.uri, written = written)
+        ExportOutcome(primaryPath, backup?.uri, written = written)
     }
 
     internal fun describeSave(written: Boolean, bytes: Int, path: String): String =

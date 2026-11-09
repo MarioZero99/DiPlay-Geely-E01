@@ -4,7 +4,7 @@
 
 CarPlay for the **2021 Geely Xingrui (星瑞)** head unit: ECARX E01, MediaTek MT6735, GKUI 19, **Android 5.1 (API 22)**. Installed on the car. No jailbreak, no dongle.
 
-Current version: **`0.4.6-geely`**. App id: `com.shihab.diplay`. Install `DiPlay-Legacy-Geely-V046.apk`.
+Current version: **`0.5.0-geely`**. App id: `com.shihab.diplay`. Install `DiPlay-Legacy-Geely-V050.apk`.
 
 Not Apple-certified, and not affiliated with Geely or ECARX. CarPlay is a trademark of Apple Inc.
 
@@ -34,7 +34,7 @@ The cockpit is laid out for the 1920×720 panel: a Slim Dock on the left, the co
 - **Touch responsiveness**: dedicated `TouchDispatchQueue` merges high-frequency `MOVE` events with hardware timestamps, eliminating scroll lag and frame drops.
 - **Steering wheel** previous/next works. There is no play/pause key — that position is the head unit's screen-mirroring button.
 - **Three-finger quick bar** over the CarPlay picture: disconnect, navigation audio stream, day/night, exit.
-- **Diagnostic report**: saved to a USB stick first, then Downloads/private storage. The official package never uploads on its own.
+- **Instrument music card**: the current song's title and artist are mirrored to the Xingrui cluster (the cluster does not show cover art). Track changes and playback state follow more reliably, without mismatched songs or jumping back.
 
 ## Read this before installing
 
@@ -60,14 +60,14 @@ A later build of this fork installs over the previous one and keeps its settings
 
 ```sh
 adb uninstall com.shihab.diplay
-adb install -r DiPlay-Legacy-Geely-V045.apk
+adb install -r DiPlay-Legacy-Geely-V050.apk
 ```
 
 Without ADB, copy the APK to a USB stick and install it from the head unit's file manager.
 
 ### Which package
 
-Use `DiPlay-Legacy-Geely-V045.apk` for normal installation.
+Use `DiPlay-Legacy-Geely-V050.apk` for normal installation.
 
 ## After it opens
 
@@ -93,7 +93,7 @@ Use `DiPlay-Legacy-Geely-V045.apk` for normal installation.
 | Same Wi-Fi mode | ✅ Verified on reference car (0.4.4 introduced, 0.4.5 IPv6 instant connect) |
 | Touch responsiveness & dispatch | ✅ Dedicated TouchDispatchQueue merges events, verified smooth on car |
 | Cockpit UI / drawer / quick bar | ✅ Verified on reference car at 1920×720, verified for long drives |
-| USB diagnostic export | ✅ Verified one-click write to physical USB stick on the car |
+| Instrument music card | ✅ Car logs confirm title and artist reach the cluster (no cover art) |
 | Calls / Bluetooth music after wireless takeover | ✅ Verified on car, working normally |
 | Incoming calls, Siri, long trips, future iOS | ❌ Needs wider testing |
 
@@ -111,8 +111,9 @@ The repository does not contain the signing key. The release APK carries an expe
 
 ## More
 
-- [What changed after 4.1 — additions, improvements, optimizations, fixes](CHANGELOG-4.1-to-HEAD.md)
+- [v0.5.0 release notes](docs/release-notes/v0.5.0-geely.md)
 - [Full changelog](CHANGELOG.md)
+- [v0.4.9 release notes](docs/release-notes/v0.4.9-geely.md)
 - [v0.4.6 release notes](docs/release-notes/v0.4.6-geely.md)
 - [v0.4.5 release notes](docs/release-notes/v0.4.5-geely.md)
 - [v0.4.4 release notes](docs/release-notes/v0.4.4-geely.md)

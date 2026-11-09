@@ -659,14 +659,14 @@ object AirPlayPersistence {
 
     fun loadClusterMediaSource(context: Context): Int {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val source = sp.getInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_ONLINE)
-        // Auto-migrate legacy USB (0) and Bluetooth (2) to Online (6).
-        // In Geely Xingrui, Online (6) is a pure software stream requiring no physical USB or A2DP hardware handshake.
-        if (source == SOURCE_USB || source == SOURCE_BLUETOOTH) {
-            sp.edit().putInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_ONLINE).apply()
-            return SOURCE_ONLINE
+        val source = sp.getInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_BLUETOOTH)
+        // 媒体卡只认 CAN 值 5。音源 2 编成 5，音源 0 编成 3，音源 6 编成 9。
+        // 旧的 0 和 6 会写到别的格子上，卡片不切过去。读到就迁回 2。
+        // 蓝牙断开时东软会丢掉音源 2，发送前由 BTAudioGuard 把 BTAudio 写成 Connected。
+        if (source != SOURCE_BLUETOOTH) {
+            sp.edit().putInt(KEY_CLUSTER_MEDIA_SOURCE, SOURCE_BLUETOOTH).apply()
         }
-        return source
+        return SOURCE_BLUETOOTH
     }
 
     fun saveClusterMediaSource(context: Context, source: Int) {

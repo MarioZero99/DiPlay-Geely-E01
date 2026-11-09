@@ -8,9 +8,9 @@ import java.io.File
  *
  * 第一屏严格只来自 StorageManager.getVolumeList()，筛选已挂载、可移动、非主存储的系统卷。
  * 标题使用系统 getDescription(context)（系统默认「USB 存储」），路径使用 getPath()。
- * 仅当路径为 /mnt/media_rw/<name> 且同名 /storage/<name> 的 listFiles() 至少返回一项时才做平级替换；
- * 空目录不替换，绝不改写为 /storage/usbotg。
- * 彻底剔除广播路径注入、/proc/mounts 扫描以及厂商目录探测。
+ * 仅当路径为 /mnt/media_rw/<name> 且同名 /storage/<name> 的 listFiles() 至少返回一项时才做平级替换。
+ * 空目录不替换。另外按名字查找 usbotg-sda1、usbotg-sda2、udisk1、udisk2。
+ * 找不到能 list() 的分区时，不把 sdcard1、sdcard2 和 usbotg 父目录当成盘。
  */
 internal object DiagnosticVolumeProbe {
 
@@ -57,23 +57,27 @@ internal object DiagnosticVolumeProbe {
     }
 
     /**
-     * 路径只允许一种替换：
-     * getPath() 是 /mnt/media_rw/某个名字，名字里面没有斜线，
-     * 而且 /storage/同一个名字 存在且为目录。这时用 /storage 那条（无论是空目录还是已有文件）。
-     * 否则留 getPath()。禁止改写成非同名目录（例如 /storage/usbotg）。
+     * 只在同名 /storage 目录能列出至少一项时才换过去。
+     * 空目录留在原路径。MTK 的 sdcard1、sdcard2、usbotg 空壳只是目录存在，里面没有盘上的文件。
      */
-    internal fun resolveVolumePath(dir: File, storageRoot: File = File("/storage")): File {
+    internal fun resolveVolumePath(
+        dir: File,
+        storageRoot: File = File("/storage"),
+        mountedPaths: Set<String> = emptySet(),
+    ): File {
         val path = dir.absolutePath
         val prefix = "/mnt/media_rw/"
         if (!path.startsWith(prefix)) return dir
         val leaf = path.removePrefix(prefix).trim('/')
         if (leaf.isEmpty() || leaf.contains('/')) return dir
         val twin = File(storageRoot, leaf)
-        if (twin.isDirectory) {
+        val listed = runCatching { twin.listFiles() }.getOrNull()
+        val twinMounted = mountedPaths.isEmpty() || mountedPaths.contains(twin.absolutePath)
+        if (listed != null && listed.isNotEmpty() && twinMounted) {
             DiagLog.i("DiagnosticExport", "usb $path -> ${twin.absolutePath}")
             return twin
         }
-        DiagLog.i("DiagnosticExport", "usb $path kept (twin ${twin.absolutePath} not found)")
+        DiagLog.i("DiagnosticExport", "usb $path kept (twin ${twin.absolutePath} not a mounted listing)")
         return dir
     }
 
@@ -85,8 +89,11 @@ internal object DiagnosticVolumeProbe {
     fun candidates(
         context: Context,
         storageRoot: File = File("/storage"),
+        mediaRw: File = File("/mnt/media_rw"),
     ): List<File> {
         val found = linkedMapOf<String, File>()
+        val mountsContent = mountText()
+        logMountEvidence(mountsContent)
 
         // 1. 尝试标准 AOSP StorageManager.getVolumeList()
         val volumes = volumeListProvider?.invoke(context) ?: runCatching {
@@ -162,46 +169,120 @@ internal object DiagnosticVolumeProbe {
         }
 
         // 3. /proc/mounts 挂载点旁证（当系统服务未登记卷时兜底识别物理挂载）
-        if (found.isEmpty()) {
-            val mountsContent = procMountsProvider?.invoke() ?: runCatching {
-                File("/proc/mounts").takeIf { it.canRead() }?.readText()
-            }.getOrNull().orEmpty().ifEmpty {
-                if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-                    com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("cat /proc/mounts").second
-                } else ""
-            }
-
-            if (mountsContent.isNotEmpty()) {
+        if (found.isEmpty() && mountsContent.isNotEmpty()) {
                 val mountCandidates = parseMountPoints(mountsContent)
+                val mounted = mountCandidates.map { it.absolutePath }.toSet()
                 for (file in mountCandidates) {
-                    val effectiveFile = resolveVolumePath(file, storageRoot)
+                    if (file.absolutePath == "/mnt/media_rw" || file.absolutePath == "/storage") continue
+                    val effectiveFile = resolveVolumePath(file, storageRoot, mounted)
                     found[effectiveFile.absolutePath] = effectiveFile
                     DiagLog.i("DiagnosticVolumeProbe", "Candidate from /proc/mounts: ${effectiveFile.absolutePath} (raw=${file.absolutePath})")
                 }
-            }
+        }
 
-            // 4. MTK 物理挂载目录 /mnt/media_rw/ 直接子目录扫描兜底（排除未插入的空 SD 卡槽等虚拟节点）
-            if (found.isEmpty()) {
-                val mediaRw = File("/mnt/media_rw")
-                val children = runCatching { mediaRw.listFiles() }.getOrNull()
-                if (children != null) {
-                    for (child in children) {
-                        if (!child.isDirectory) continue
-                        val name = child.name.lowercase()
-                        if (name.contains("sdcard") && child.totalSpace <= 0L) continue
-                        val effectiveFile = resolveVolumePath(child, storageRoot)
-                        found[effectiveFile.absolutePath] = effectiveFile
-                        DiagLog.i("DiagnosticVolumeProbe", "Candidate from /mnt/media_rw: ${effectiveFile.absolutePath}")
-                    }
+        for (partition in usbPartitionCandidates(storageRoot, mediaRw)) {
+            found.putIfAbsent(partition.absolutePath, partition)
+            DiagLog.i("DiagnosticVolumeProbe", "Candidate from usbotg partition: ${partition.absolutePath}")
+        }
+
+        val kept = found.values.mapNotNull { keepListableVolume(it) }
+        if (kept.isEmpty()) {
+            DiagLog.i("DiagnosticVolumeProbe", "No listable USB partition. sdcard1, sdcard2 and the usbotg parent are not the stick.")
+        } else {
+            DiagLog.i("DiagnosticVolumeProbe", "kept ${kept.joinToString { it.absolutePath }}")
+        }
+        return kept.distinctBy { it.absolutePath }
+    }
+
+    /**
+     * CX 和东软认的 U 盘是 `usbotg-sda1` / `usbotg-sda2`，在 `usbotg` 下面一层。
+     * `sdcard1`、`sdcard2` 和单独的 `usbotg` 目录不是这支盘。
+     * 目录要能 list()，空数组可以，返回 null 的不收。
+     */
+    internal fun usbPartitionCandidates(
+        storageRoot: File = File("/storage"),
+        mediaRw: File = File("/mnt/media_rw"),
+    ): List<File> {
+        val names = listOf("usbotg-sda1", "usbotg-sda2", "udisk1", "udisk2")
+        val parents = listOf(
+            File(storageRoot, "usbotg"),
+            File(mediaRw, "usbotg"),
+            storageRoot,
+            mediaRw,
+        )
+        val found = linkedMapOf<String, File>()
+        for (parent in parents) {
+            for (name in names) {
+                val dir = File(parent, name)
+                if (!dir.isDirectory) continue
+                val namesListed = runCatching { dir.list() }.getOrNull()
+                DiagLog.i(
+                    "DiagnosticVolumeProbe",
+                    "partition ${dir.absolutePath} list=${namesListed?.size ?: "null"} sample=${namesListed?.take(3)?.joinToString(",") ?: "null"}",
+                )
+                if (namesListed == null) continue
+                found[dir.absolutePath] = dir
+            }
+        }
+        return found.values.toList()
+    }
+
+    /** 打开保存列表时记一次挂载，后面不用再上车看 /proc/mounts。 */
+    private fun logMountEvidence(text: String) {
+        val interesting = text.lineSequence()
+            .map { it.trim() }
+            .filter { line ->
+                val lower = line.lowercase()
+                lower.contains("usbotg") || lower.contains("vfat") || lower.contains("exfat") ||
+                    lower.contains("udisk") || lower.contains("sdcard")
+            }
+            .take(12)
+            .toList()
+        if (interesting.isEmpty()) {
+            DiagLog.i("DiagnosticVolumeProbe", "mounts: no usbotg/vfat/exfat/udisk/sdcard line")
+        } else {
+            interesting.forEach { line -> DiagLog.i("DiagnosticVolumeProbe", "mount $line") }
+        }
+    }
+
+    private fun mountText(): String {
+        procMountsProvider?.let { return it().orEmpty() }
+        val fileText = runCatching { File("/proc/mounts").takeIf { it.canRead() }?.readText() }.getOrNull()
+        if (!fileText.isNullOrBlank()) return fileText
+        if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
+            return com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("cat /proc/mounts").second
+        }
+        return ""
+    }
+
+    internal fun keepListableVolume(dir: File): File? {
+        val leaf = dir.name.lowercase()
+        if (leaf == "usbotg" || leaf == "udisk") {
+            val children = runCatching { dir.listFiles() }.getOrNull() ?: return null
+            val partition = children.firstOrNull { child ->
+                child.isDirectory && child.name.lowercase().let { name ->
+                    name.contains("sda") || name == "udisk1" || name == "udisk2"
                 }
             }
+            if (partition != null && runCatching { partition.listFiles() }.getOrNull() != null) {
+                return partition
+            }
+            if (children.isNotEmpty()) return dir
+            return null
         }
-
-        if (found.isEmpty()) {
-            DiagLog.i("DiagnosticVolumeProbe", "No removable volumes found from getVolumeList, getVolumePaths, mounts, or /mnt/media_rw")
+        if (leaf == "sdcard1" || leaf == "sdcard2") {
+            val listed = runCatching { dir.listFiles() }.getOrNull()
+            if (listed == null || listed.isEmpty()) {
+                DiagLog.i("DiagnosticVolumeProbe", "dropped ${dir.absolutePath} list=${listed?.size ?: "null"}")
+                return null
+            }
+            return dir
         }
-
-        return found.values.toList()
+        if (runCatching { dir.listFiles() }.getOrNull() == null) {
+            DiagLog.i("DiagnosticVolumeProbe", "dropped ${dir.absolutePath} list=null")
+            return null
+        }
+        return dir
     }
 
     internal fun isPrimaryStorage(candidate: File): Boolean {

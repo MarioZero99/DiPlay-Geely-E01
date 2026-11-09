@@ -49,14 +49,43 @@ class DiagnosticVolumeProbeTest {
         assertEquals(storageStick.absolutePath, resolved.absolutePath)
     }
 
-    @Test fun resolveVolumePathUsesStorageWhenEmptyDirectory() {
+    @Test fun resolveVolumePathKeepsMediaRwWhenStorageDirectoryIsEmpty() {
         val raw = File("/mnt/media_rw/usbotg-sda1")
         val storage = temp.newFolder("storage")
-        val storageStick = File(storage, "usbotg-sda1").apply { mkdirs() }
-        // Directory exists but is completely empty (no files)
+        File(storage, "usbotg-sda1").mkdirs()
 
         val resolved = DiagnosticVolumeProbe.resolveVolumePath(raw, storageRoot = storage)
-        assertEquals(storageStick.absolutePath, resolved.absolutePath)
+        assertEquals(raw.absolutePath, resolved.absolutePath)
+    }
+
+    @Test fun candidatesUsesUsbotgSdaPartitionAndDropsEmptySdcardSlots() {
+        val storage = temp.newFolder("storage-root")
+        val partition = File(storage, "usbotg/usbotg-sda1").apply { mkdirs() }
+        File(partition, "song.mp3").writeText("a")
+        val sdcard = File(storage, "sdcard1").apply { mkdirs() }
+        DiagnosticVolumeProbe.volumeListProvider = { arrayOf(TestVolume(sdcard.absolutePath)) }
+        DiagnosticVolumeProbe.volumePathsProvider = { emptyArray() }
+        DiagnosticVolumeProbe.procMountsProvider = { "" }
+
+        val found = DiagnosticVolumeProbe.candidates(
+            context,
+            storageRoot = storage,
+            mediaRw = temp.newFolder("media-rw-empty"),
+        )
+        assertEquals(listOf(partition.absolutePath), found.map { it.absolutePath })
+    }
+
+    @Test fun candidatesIgnoresDirectoriesThatAreNotMounted() {
+        DiagnosticVolumeProbe.volumeListProvider = { emptyArray<Any>() }
+        DiagnosticVolumeProbe.volumePathsProvider = { emptyArray() }
+        DiagnosticVolumeProbe.procMountsProvider = { "" }
+
+        val found = DiagnosticVolumeProbe.candidates(
+            context,
+            storageRoot = temp.newFolder("storage-empty"),
+            mediaRw = temp.newFolder("media-empty"),
+        )
+        assertTrue(found.none { it.name == "sdcard1" || it.name == "sdcard2" || it.name == "usbotg" })
     }
 
     @Test fun resolveVolumePathStaysOnMediaRwWhenStorageDirectoryDoesNotExist() {
@@ -65,6 +94,20 @@ class DiagnosticVolumeProbeTest {
         // Directory does not exist under storage
 
         val resolved = DiagnosticVolumeProbe.resolveVolumePath(raw, storageRoot = storage)
+        assertEquals(raw.absolutePath, resolved.absolutePath)
+    }
+
+    @Test fun resolveVolumePathDoesNotUseAnUnmountedTwin() {
+        val raw = File("/mnt/media_rw/usbotg")
+        val storage = temp.newFolder("storage-real")
+        val twin = File(storage, "usbotg").apply { mkdirs() }
+        File(twin, "leftover.txt").writeText("x")
+
+        val resolved = DiagnosticVolumeProbe.resolveVolumePath(
+            raw,
+            storageRoot = storage,
+            mountedPaths = setOf(raw.absolutePath),
+        )
         assertEquals(raw.absolutePath, resolved.absolutePath)
     }
 
@@ -94,7 +137,11 @@ class DiagnosticVolumeProbeTest {
 
         DiagnosticVolumeProbe.volumeListProvider = { volumes }
 
-        val found = DiagnosticVolumeProbe.candidates(context)
+        val found = DiagnosticVolumeProbe.candidates(
+            context,
+            storageRoot = temp.newFolder("storage-empty"),
+            mediaRw = temp.newFolder("media-empty"),
+        )
         assertEquals(listOf(validUsb.absolutePath), found.map { it.absolutePath })
     }
 
@@ -106,7 +153,11 @@ class DiagnosticVolumeProbeTest {
             "/dev/block/vold/8:1 ${rawUsb.absolutePath} vfat rw,dirsync,nosuid,nodev,noexec,relatime 0 0\n"
         }
 
-        val found = DiagnosticVolumeProbe.candidates(context)
+        val found = DiagnosticVolumeProbe.candidates(
+            context,
+            storageRoot = temp.newFolder("storage-empty"),
+            mediaRw = temp.newFolder("media-empty"),
+        )
         assertEquals(listOf(rawUsb.absolutePath), found.map { it.absolutePath })
     }
 }

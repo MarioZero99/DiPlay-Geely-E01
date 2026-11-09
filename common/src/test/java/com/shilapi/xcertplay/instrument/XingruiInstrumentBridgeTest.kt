@@ -37,7 +37,6 @@ class XingruiInstrumentBridgeTest {
             isSupportedOverrideForTest = true
             dimServiceForTest = fakeService
             coverSlotManager = CoverSlotManager(baseDir = tempDir)
-            debounceDelayMs = 400L
             minCanIntervalMs = 1500L
             enforceThrottleForTest = true
         }
@@ -61,124 +60,106 @@ class XingruiInstrumentBridgeTest {
     }
 
     @Test
-    fun asynchronousArtworkArrival_within400ms_coalescesIntoSingleSendWithCover() {
-        // Step 1: Initial metadata arrives without artwork (e.g. CarPlay metadata event)
-        bridge.updateMedia("Bohemian Rhapsody", "Queen", "A Night at the Opera", isPlaying = true, artworkBitmap = null)
-        drain(100L) // Wait 100ms (< 400ms debounce), must NOT have sent yet
-        assertEquals("Debounce window active: must not send half-baked packet without artwork", 0, fakeService.updateMediaCalls.size)
+    fun songReachesEveryMediaServiceThatMightHoldTheCallback() {
+        val other = TestDimTransListener()
+        bridge.extraDimServicesForTest = listOf(other)
+        bridge.updateMedia("Bohemian Rhapsody", "Queen", "A Night at the Opera", isPlaying = true)
+        drain()
+        assertEquals(listOf("onSourceChanged:2", "updateMedia:Bohemian Rhapsody", "onAction:1:2"), fakeService.callOrder)
+        assertEquals(fakeService.callOrder, other.callOrder)
+        assertEquals(2, fakeService.updateMediaCalls[0].source)
+        assertEquals(2, other.updateMediaCalls[0].source)
+    }
 
-        // Step 2: Artwork arrives asynchronously 150ms later (e.g. from onArtworkDecoded) for the exact same track
-        val coverBmp = Bitmap.createBitmap(300, 300, Bitmap.Config.ARGB_8888)
-        bridge.updateMedia("Bohemian Rhapsody", "Queen", "A Night at the Opera", isPlaying = true, artworkBitmap = coverBmp)
-        drain() // Artwork arrival completes debounce and dispatches single full update
+    @Test
+    fun defaultCanIntervalIsTwoSeconds() {
+        val fresh = XingruiInstrumentBridge(context).apply { isSupportedOverrideForTest = true }
+        assertEquals(2000L, fresh.minCanIntervalMs)
+        fresh.release()
+    }
 
-        assertEquals("Coalesced into single send; 200ms CAN collision eliminated", 1, fakeService.updateMediaCalls.size)
+    @Test
+    fun blankNowPlayingDoesNotConsumeTheCanLock() {
+        bridge.updateMedia(null, null, null, isPlaying = false)
+        bridge.updateMedia("  ", " ", null, isPlaying = true)
+        drain()
+        assertEquals(0, fakeService.updateMediaCalls.size)
+
+        bridge.updateMedia("Bohemian Rhapsody", "Queen", "A Night at the Opera", isPlaying = true)
+        drain()
+        assertEquals(1, fakeService.updateMediaCalls.size)
         val call = fakeService.updateMediaCalls[0]
         assertEquals("Bohemian Rhapsody", call.title)
         assertEquals("Queen", call.artist)
-        assertTrue("Media path must use carplay slot URI", call.cover?.startsWith("carplay&&&file:///sdcard/Music/mediacenter/images/") == true)
-        assertEquals(6, call.source)
+        assertEquals("http://carplay", call.cover)
+        assertEquals(2, call.source)
+        assertTrue(tempDir.list().isNullOrEmpty())
+    }
 
-        // Step 3: Repeated identical call should be deduplicated
-        bridge.updateMedia("Bohemian Rhapsody", "Queen", "A Night at the Opera", isPlaying = true, artworkBitmap = coverBmp)
+    @Test
+    fun artworkForTheSameTrackDoesNotSendAgain() {
+        bridge.updateMedia("Bohemian Rhapsody", "Queen", "A Night at the Opera", isPlaying = true, artworkBitmap = null)
         drain()
-        assertEquals("Duplicate call must be dropped", 1, fakeService.updateMediaCalls.size)
-    }
-
-    @Test
-    fun debounceTimeoutWithoutArtwork_sendsDefaultCoverFallback() {
-        bridge.updateMedia("Radio Song", "FM Artist", "Radio", isPlaying = true, artworkBitmap = null)
-        drain(200L)
-        assertEquals(0, fakeService.updateMediaCalls.size)
-
-        // Advance past 400ms debounce timeout
-        drain(300L)
-        assertEquals(1, fakeService.updateMediaCalls.size)
-        val call = fakeService.updateMediaCalls[0]
-        assertEquals("Radio Song", call.title)
-        assertEquals("carplay&&&file:///sdcard/Music/mediacenter/images/default_cover.jpg", call.cover)
-        assertEquals(6, call.source)
-        assertTrue(File(tempDir, "default_cover.jpg").exists())
-    }
-
-    @Test
-    fun subsequentArtworkArrival_afterDefaultCoverFallback_updatesToRealCover() {
-        // Step 1: Track arrives without artwork, 400ms timeout occurs -> default cover sent
-        bridge.updateMedia("Radio Song", "FM Artist", "Radio", isPlaying = true, artworkBitmap = null)
-        drain(500L)
-        assertEquals(1, fakeService.updateMediaCalls.size)
-        assertEquals("carplay&&&file:///sdcard/Music/mediacenter/images/default_cover.jpg", fakeService.updateMediaCalls[0].cover)
-
-        // Step 2: Late artwork arrives for same track -> updates to real cover after throttle
-        val coverBmp = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)
-        bridge.updateMedia("Radio Song", "FM Artist", "Radio", isPlaying = true, artworkBitmap = coverBmp)
+        val coverBmp = Bitmap.createBitmap(300, 300, Bitmap.Config.ARGB_8888)
+        bridge.updateMedia("Bohemian Rhapsody", "Queen", "A Night at the Opera", isPlaying = true, artworkBitmap = coverBmp)
         drain(1600L)
 
-        assertEquals(2, fakeService.updateMediaCalls.size)
-        val secondCall = fakeService.updateMediaCalls[1]
-        assertTrue("Must send real cover after default cover fallback", secondCall.cover?.contains("cover_0.jpg") == true)
-        assertTrue(File(tempDir, "cover_0.jpg").exists())
+        assertEquals(1, fakeService.updateMediaCalls.size)
+        assertEquals("http://carplay", fakeService.updateMediaCalls[0].cover)
+        assertEquals(2, fakeService.updateMediaCalls[0].source)
+        assertTrue(!File(tempDir, "cover_0.jpg").exists())
+        assertTrue(!File(tempDir, "default_cover.jpg").exists())
     }
 
     @Test
-    fun rapidTrackSkip_cancelsPendingThrottle_andGivesNewTrackFullDebounceWindow() {
-        // Track 1 sent at t=0
-        val bmp1 = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)
-        bridge.updateMedia("Track 1", "Artist 1", "Album 1", isPlaying = true, artworkBitmap = bmp1)
+    fun rapidTrackSkip_keepsOnlyTheLatestTrackInsideTheCanWindow() {
+        bridge.updateMedia("Track 1", "Artist 1", "Album 1", isPlaying = true)
         drain()
         assertEquals(1, fakeService.updateMediaCalls.size)
-        assertEquals("Track 1", fakeService.updateMediaCalls[0].title)
+        assertEquals("http://carplay", fakeService.updateMediaCalls[0].cover)
+        assertEquals(2, fakeService.updateMediaCalls[0].source)
 
-        // Advance 200ms (within 1500ms CAN throttle window)
-        // User skips to Track 2, which receives artwork immediately -> queued in throttle for ~1300ms later
-        val bmp2 = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)
-        bridge.updateMedia("Track 2", "Artist 2", "Album 2", isPlaying = true, artworkBitmap = bmp2)
+        bridge.updateMedia("Track 2", "Artist 2", "Album 2", isPlaying = true)
         drain(100L)
-        assertEquals("Track 2 must be throttled (1500ms CAN interval)", 1, fakeService.updateMediaCalls.size)
+        assertEquals(1, fakeService.updateMediaCalls.size)
         assertTrue(bridge.hasPendingThrottleForTest())
 
-        // User quickly skips to Track 3 without artwork -> enters 400ms debounce
-        // This must cancel Track 2's pending throttle, so Track 2 does not prematurely dispatch Track 3
-        bridge.updateMedia("Track 3", "Artist 3", "Album 3", isPlaying = true, artworkBitmap = null)
+        bridge.updateMedia("Track 3", "Artist 3", "Album 3", isPlaying = true)
         drain(100L)
-        assertTrue("Track 3 must have active debounce", bridge.hasPendingDebounceForTest())
+        assertTrue(bridge.hasPendingThrottleForTest())
         assertEquals(1, fakeService.updateMediaCalls.size)
 
-        // Advance past 400ms debounce timeout (total ~500ms since Track 3, elapsed from Track 1 is ~700ms < 1500ms,
-        // so debounce schedules throttle, then after 1500ms total, Track 3 dispatches)
         drain(1600L)
         assertEquals(2, fakeService.updateMediaCalls.size)
         val secondCall = fakeService.updateMediaCalls[1]
         assertEquals("Track 3", secondCall.title)
-        assertEquals("carplay&&&file:///sdcard/Music/mediacenter/images/default_cover.jpg", secondCall.cover)
+        assertEquals("http://carplay", secondCall.cover)
+        assertEquals(2, secondCall.source)
+        assertTrue(tempDir.list().isNullOrEmpty())
     }
 
     @Test
     fun callSequence_isSourceChangedThenUpdateMediaThenOnAction() {
-        val coverBmp = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888)
-        bridge.updateMedia("Hotel California", "Eagles", "Hotel California", isPlaying = true, artworkBitmap = coverBmp)
+        bridge.updateMedia("Hotel California", "Eagles", "Hotel California", isPlaying = true)
         drain()
 
-        assertEquals(listOf("onSourceChanged:6", "updateMedia:Hotel California", "onAction:1:6"), fakeService.callOrder)
+        assertEquals(listOf("onSourceChanged:2", "updateMedia:Hotel California", "onAction:1:2"), fakeService.callOrder)
     }
 
     @Test
-    fun replayOfSameCover_doesNotRotateSlot_andNextIdenticalUpdateIsDropped() {
+    fun replaySendsTheSameHttpPathAndDropsTheNextIdenticalUpdate() {
         val coverBmp = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)
         bridge.updateMedia("Song", "Artist", "Album", isPlaying = true, artworkBitmap = coverBmp)
         drain()
 
-        assertEquals(1, fakeService.updateMediaCalls.size)
-        val firstCover = fakeService.updateMediaCalls[0].cover
-        assertTrue(firstCover?.contains("cover_0.jpg") == true)
-        assertTrue(File(tempDir, "cover_0.jpg").exists())
+        assertEquals("http://carplay", fakeService.updateMediaCalls[0].cover)
+        assertTrue(!File(tempDir, "cover_0.jpg").exists())
 
         bridge.replayCachedForTest()
-        drain(1600L) // Advance past 1500ms throttle for replay
+        drain()
 
         assertEquals(2, fakeService.updateMediaCalls.size)
-        assertEquals(firstCover, fakeService.updateMediaCalls[1].cover)
-        assertTrue(!File(tempDir, "cover_1.jpg").exists())
+        assertEquals("http://carplay", fakeService.updateMediaCalls[1].cover)
 
         bridge.updateMedia("Song", "Artist", "Album", isPlaying = true, artworkBitmap = coverBmp)
         drain()
@@ -188,9 +169,8 @@ class XingruiInstrumentBridgeTest {
     }
 
     @Test
-    fun clearMedia_clearsCoverSlotsAndSendsEmptyMediaPath() {
-        val coverBmp = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
-        bridge.updateMedia("Song", "Artist", "Album", isPlaying = true, artworkBitmap = coverBmp)
+    fun clearMedia_sendsEmptyMediaPathOnHddAudio() {
+        bridge.updateMedia("Song", "Artist", "Album", isPlaying = true)
         drain()
 
         fakeService.callOrder.clear()
@@ -200,8 +180,9 @@ class XingruiInstrumentBridgeTest {
         val lastUpdate = fakeService.updateMediaCalls.lastOrNull()
         assertNotNull(lastUpdate)
         assertEquals("", lastUpdate?.cover)
+        assertEquals(2, lastUpdate?.source)
+        assertEquals(listOf("onSourceChanged:2", "updateMedia: ", "onAction:2:2"), fakeService.callOrder)
         assertTrue(!File(tempDir, "cover_0.jpg").exists())
-        assertTrue(!File(tempDir, "cover_1.jpg").exists())
     }
 
     private class TestDimTransListener : IDimTransListener.Stub() {
