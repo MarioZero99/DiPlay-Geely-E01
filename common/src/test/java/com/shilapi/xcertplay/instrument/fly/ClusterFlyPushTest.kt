@@ -62,6 +62,23 @@ class ClusterFlyPushTest {
         assertFalse(ClusterFlyPush.isConfig(sps(66)))
     }
 
+    /** With no encoder built, the log must not say one is running. */
+    @Test
+    fun `a missing reencoder does not claim to be encoding`() {
+        val lines = mutableListOf<String>()
+        ClusterFlyPush.reset()
+        ClusterFlyPush.log = { lines.add(it) }
+        try {
+            ClusterFlyPush.onFrame(FlyPhase.PUSHING, 110, sps(100), 0L)
+
+            assertTrue(lines.contains("fly.profile 100"))
+            assertFalse(lines.contains("fly.push start reencode"))
+        } finally {
+            ClusterFlyPush.log = {}
+            ClusterFlyPush.reset()
+        }
+    }
+
     /** The E01 has one small encoder; when a frame takes too long, fewer frames are offered. */
     @Test
     fun `a slow encoder drops the frame rate cap until things are fast again`() {

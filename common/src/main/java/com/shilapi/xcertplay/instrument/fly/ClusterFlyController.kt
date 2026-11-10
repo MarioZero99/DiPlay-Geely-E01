@@ -311,6 +311,7 @@ class ClusterFlyController(
     }
 
     private fun sendStep(step: FlyStep) {
+        log(ClusterFlyLog.command(step.command))
         commands.send(step.command)
         lastCommandAt = clock()
         if (step.command == FlyCommand.FLY_LEFT) {

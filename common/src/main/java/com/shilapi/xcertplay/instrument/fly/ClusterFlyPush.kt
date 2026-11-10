@@ -105,7 +105,8 @@ object ClusterFlyPush {
         // from here on the encoder owns the picture.
         reencode = true
         reencoder = reencoderFactory?.invoke(nalu)
-        noteMode()
+        // Only say a re-encoder started if one did; with the factory off the layer stays blank.
+        if (reencoder != null) noteMode()
         return PushDecision(send = false, mode = PushMode.REENCODE, dropReason = "profile")
     }
 

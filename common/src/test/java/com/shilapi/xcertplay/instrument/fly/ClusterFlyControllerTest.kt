@@ -88,9 +88,12 @@ class ClusterFlyControllerTest {
 
         assertEquals(listOf(FlyCommand.NAV_ON), sent)
         assertEquals(400L, scheduled.single().first)
+        assertTrue(lines.contains("fly.command NAV_ON"))
+        assertFalse(lines.contains("fly.command FLY_LEFT"))
 
         scheduled.single().second()
         assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.FLY_LEFT), sent)
+        assertTrue(lines.contains("fly.command FLY_LEFT"))
     }
 
     @Test

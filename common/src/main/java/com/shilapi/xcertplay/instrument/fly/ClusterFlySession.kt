@@ -276,7 +276,8 @@ class ClusterFlySession(
             log(ClusterFlyLog.phase(effect.phase))
         }
         if (warning != null) log(ClusterFlyLog.blocked(warning))
-        steps.forEach { log(ClusterFlyLog.command(it.command)) }
+        // Commands are logged where they are sent, not here: a step cancelled by a newer gesture
+        // must not be recorded as if it had gone out.
         return effect
     }
 

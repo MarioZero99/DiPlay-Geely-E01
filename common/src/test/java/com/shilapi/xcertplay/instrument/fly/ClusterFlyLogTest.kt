@@ -47,7 +47,8 @@ class ClusterFlyLogTest {
         session.onLeft(1_000L, openConditions())
 
         assertTrue(lines.contains("fly.phase ARMING"))
-        assertTrue(lines.contains("fly.command NAV_ON"))
-        assertTrue(lines.contains("fly.command FLY_LEFT"))
+        // Commands are logged where they are actually sent, by the controller, not here: a step
+        // that is cancelled before it goes out must not appear in the log as if it had.
+        assertFalse(lines.contains("fly.command NAV_ON"))
     }
 }

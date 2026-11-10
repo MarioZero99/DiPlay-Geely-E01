@@ -2921,6 +2921,8 @@ class CarPlayHostActivity : ComponentActivity() {
             ThreeFingerSwipeDetector.Decision.CONSUME -> return true
             ThreeFingerSwipeDetector.Decision.TRIGGER -> {
                 appendLog("Three-finger swipe down: quick bar")
+                // The controller keeps the log line for this gesture as well; it decides nothing.
+                flyController().onGesture(ThreeFingerSwipeDetector.Decision.TRIGGER)
                 showQuickHud()
                 return true
             }
