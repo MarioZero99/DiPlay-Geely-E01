@@ -17,6 +17,10 @@ import java.nio.ByteBuffer
  * busy the frame is dropped and counted, never waited for, because the centre screen must not slow
  * down for the cluster. Any failure closes both codecs and reports `false` from then on; the layer
  * stays blank rather than risking the main picture.
+ *
+ * The decoder's output is read through `getOutputImage` when the codec offers it and through
+ * `getOutputBuffer` with the reported stride otherwise: the MT6735 on this head unit usually hands
+ * back a plain YUV buffer, and a null Image must not mean "no picture at all".
  */
 class ClusterFlyReencoderMediaCodec(
     config: ByteArray,
@@ -28,18 +32,37 @@ class ClusterFlyReencoderMediaCodec(
     private var encoderWidth = 0
     private var encoderHeight = 0
     private var encoderColor = 0
+
     private var frameWidth = 0
     private var frameHeight = 0
+    private var frameStride = 0
+    private var frameSliceHeight = 0
+    private var frameColor = 0
     private var semiPlanarSource = true
-    private var presentationTimeUs = 0L
+
+    private var decodeTimeUs = 0L
+    private var encodeTimeUs = 0L
+    private var lastAcceptedAtMs = 0L
+    private val rate = ClusterFlyFrameRate()
     private var failed = false
     private val info = MediaCodec.BufferInfo()
 
     override fun submit(nalu: ByteArray, nowMillis: Long): Boolean {
         if (failed) return false
         val decoder = decoder ?: return false
+
+        // The factory's own player settles on five frames a second when encoding is slow; offering
+        // more only makes the queue longer. Off the centre screen's thread, so dropping is cheap.
+        val minimumGap = if (rate.capFps >= 10) 100L else 200L
+        if (lastAcceptedAtMs != 0L && nowMillis - lastAcceptedAtMs < minimumGap) return false
+        lastAcceptedAtMs = nowMillis
+
+        val startedNs = System.nanoTime()
         return try {
-            feedDecoder(decoder, nalu)
+            val accepted = feedDecoder(decoder, nalu)
+            val spentMs = (System.nanoTime() - startedNs) / 1_000_000L
+            rate.onEncoded(spentMs, nowMillis)
+            accepted
         } catch (error: Exception) {
             fail(error)
             false
@@ -75,13 +98,14 @@ class ClusterFlyReencoderMediaCodec(
         if (input < 0) return false
         val buffer = decoder.getInputBuffer(input)
         if (buffer == null) {
-            decoder.queueInputBuffer(input, 0, 0, presentationTimeUs, 0)
+            decoder.queueInputBuffer(input, 0, 0, decodeTimeUs, 0)
             return false
         }
         buffer.clear()
         buffer.put(nalu)
-        decoder.queueInputBuffer(input, 0, nalu.size, presentationTimeUs, 0)
-        presentationTimeUs += InputStepUs
+        decoder.queueInputBuffer(input, 0, nalu.size, decodeTimeUs, 0)
+        // The decoder's clock is its own; only the encoder's presentation times reach the wire.
+        decodeTimeUs += InputStepUs
         drainDecoder(decoder)
         drainEncoder()
         return true
@@ -91,11 +115,7 @@ class ClusterFlyReencoderMediaCodec(
         while (true) {
             val index = decoder.dequeueOutputBuffer(info, 0)
             when {
-                index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    val format = decoder.outputFormat
-                    frameWidth = format.getInteger(MediaFormat.KEY_WIDTH)
-                    frameHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
-                }
+                index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> rememberOutputFormat(decoder.outputFormat)
 
                 index >= 0 -> {
                     try {
@@ -110,34 +130,65 @@ class ClusterFlyReencoderMediaCodec(
         }
     }
 
+    private fun rememberOutputFormat(format: MediaFormat) {
+        frameWidth = format.getInteger(MediaFormat.KEY_WIDTH)
+        frameHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
+        frameStride = if (format.containsKey(MediaFormat.KEY_STRIDE)) {
+            format.getInteger(MediaFormat.KEY_STRIDE)
+        } else {
+            0
+        }
+        frameSliceHeight = if (format.containsKey("slice-height")) {
+            format.getInteger("slice-height")
+        } else {
+            0
+        }
+        frameColor = if (format.containsKey(MediaFormat.KEY_COLOR_FORMAT)) {
+            format.getInteger(MediaFormat.KEY_COLOR_FORMAT)
+        } else {
+            MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+        }
+    }
+
     private fun encodeFrame(decoder: MediaCodec, index: Int) {
         val image = try {
             decoder.getOutputImage(index)
         } catch (_: Exception) {
             null
-        } ?: return
+        }
 
-        val encoder = encoder ?: createEncoder(image) ?: return
+        val encoder = encoder ?: createEncoder(image)?.also { encoder = it } ?: return
         val input = encoder.dequeueInputBuffer(0)
         if (input < 0) return
         val target = encoder.getInputBuffer(input)
-        if (target == null || !copyImage(image, target)) {
-            encoder.queueInputBuffer(input, 0, 0, presentationTimeUs, 0)
+        if (target == null) return
+
+        val copied = if (image != null) {
+            copyImage(image, target)
+        } else {
+            copyBuffer(decoder, index, target)
+        }
+        if (!copied) {
+            encoder.queueInputBuffer(input, 0, 0, encodeTimeUs, 0)
             return
         }
-        encoder.queueInputBuffer(input, 0, encoderWidth * encoderHeight * 3 / 2, presentationTimeUs, 0)
-        presentationTimeUs += InputStepUs
+        encoder.queueInputBuffer(input, 0, encoderWidth * encoderHeight * 3 / 2, encodeTimeUs, 0)
+        // Five pictures a second at the factory's rate; one step per encoded frame, not per stage.
+        encodeTimeUs += EncodedStepUs
     }
 
-    private fun createEncoder(image: Image): MediaCodec? {
-        val width = if (frameWidth > 0) frameWidth else image.width
-        val height = if (frameHeight > 0) frameHeight else image.height
+    private fun createEncoder(image: Image?): MediaCodec? {
+        val width = if (frameWidth > 0) frameWidth else image?.width ?: return null
+        val height = if (frameHeight > 0) frameHeight else image?.height ?: return null
         encoderWidth = (width / 16) * 16
         encoderHeight = (height / 2) * 2
         if (encoderWidth <= 0 || encoderHeight <= 0) return null
 
-        val planes = image.planes
-        semiPlanarSource = planes.size < 3 || planes[1].pixelStride == 2
+        semiPlanarSource = when {
+            image != null -> image.planes.size < 3 || image.planes[1].pixelStride == 2
+            frameColor == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar -> false
+            else -> true
+        }
         encoderColor = if (semiPlanarSource) {
             MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
         } else {
@@ -164,12 +215,8 @@ class ClusterFlyReencoderMediaCodec(
     }
 
     /**
-     * Copies the decoded planes into the encoder's buffer.
-     *
-     * The encoder is configured to the source's own layout — semi-planar when U and V are already
-     * interleaved, planar otherwise — so this is a row-by-row copy and never a colour conversion.
-     * A width that the encoder padded to 16 is filled with zeroes; the encoder treats it as the
-     * right-hand edge.
+     * Copies the decoded planes through the Image API, one row at a time, padding the width the
+     * encoder aligned to 16 with zeroes.
      */
     private fun copyImage(image: Image, target: ByteBuffer): Boolean {
         val planes = image.planes
@@ -195,7 +242,6 @@ class ClusterFlyReencoderMediaCodec(
         )
     }
 
-    /** Copies [sourceWidth] bytes of each of [rows] rows, padding the rest of the row with zeroes. */
     private fun copyPlane(
         plane: Image.Plane,
         target: ByteBuffer,
@@ -212,6 +258,78 @@ class ClusterFlyReencoderMediaCodec(
             if (row < sourceRows) {
                 val from = row * rowStride
                 val count = minOf(sourceWidth, targetStride, source.capacity() - from)
+                if (count > 0) {
+                    source.limit(from + count).position(from)
+                    target.put(source)
+                    if (count < targetStride) repeat(targetStride - count) { target.put(0) }
+                } else {
+                    repeat(targetStride) { target.put(0) }
+                }
+            } else {
+                repeat(targetStride) { target.put(0) }
+            }
+        }
+        return true
+    }
+
+    /**
+     * The same copy for a codec that will not hand out an Image: the buffer is one YUV frame whose
+     * rows are [frameStride] wide and whose planes start every [frameSliceHeight] rows.
+     */
+    private fun copyBuffer(decoder: MediaCodec, index: Int, target: ByteBuffer): Boolean {
+        val buffer = try {
+            decoder.getOutputBuffer(index)
+        } catch (_: Exception) {
+            null
+        } ?: return false
+
+        val stride = if (frameStride > 0) frameStride else frameWidth
+        val sliceHeight = if (frameSliceHeight > 0) frameSliceHeight else frameHeight
+        if (stride <= 0 || sliceHeight <= 0) return false
+
+        target.clear()
+        val lumaSize = encoderWidth * encoderHeight
+        val chromaHeight = encoderHeight / 2
+        if (!copyRows(buffer, stride, sliceHeight, 0, target, 0, encoderWidth, encoderHeight, frameWidth)) {
+            return false
+        }
+        if (semiPlanarSource) {
+            return copyRows(
+                buffer, stride, sliceHeight / 2, stride * sliceHeight,
+                target, lumaSize, encoderWidth, chromaHeight, frameWidth,
+            )
+        }
+        val chromaWidth = encoderWidth / 2
+        val chromaStride = stride / 2
+        val chromaRows = sliceHeight / 2
+        if (!copyRows(
+            buffer, chromaStride, chromaRows, stride * sliceHeight,
+            target, lumaSize, chromaWidth, chromaHeight, frameWidth / 2,
+        )) {
+            return false
+        }
+        return copyRows(
+            buffer, chromaStride, chromaRows, stride * sliceHeight + chromaStride * chromaRows,
+            target, lumaSize + chromaWidth * chromaHeight, chromaWidth, chromaHeight, frameWidth / 2,
+        )
+    }
+
+    private fun copyRows(
+        source: ByteBuffer,
+        sourceStride: Int,
+        sourceRows: Int,
+        sourceOffset: Int,
+        target: ByteBuffer,
+        targetOffset: Int,
+        targetStride: Int,
+        rows: Int,
+        width: Int,
+    ): Boolean {
+        for (row in 0 until rows) {
+            target.position(targetOffset + row * targetStride)
+            val from = sourceOffset + row * sourceStride
+            if (row < sourceRows && from < source.capacity()) {
+                val count = minOf(width, targetStride, source.capacity() - from)
                 if (count > 0) {
                     source.limit(from + count).position(from)
                     target.put(source)
@@ -283,8 +401,9 @@ class ClusterFlyReencoderMediaCodec(
         const val FrameRate = 5
         const val KeyframeSeconds = 1
 
-        /** 20 ms per frame: faster than the encoder's 5 fps, so no frame is refused for being early. */
+        /** 20 ms of decoder input; the encoder's own clock is 5 fps. */
         const val InputStepUs = 20_000L
+        const val EncodedStepUs = 200_000L
     }
 }
 

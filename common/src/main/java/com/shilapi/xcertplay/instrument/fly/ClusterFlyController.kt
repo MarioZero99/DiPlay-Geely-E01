@@ -80,6 +80,9 @@ class ClusterFlyController(
     private var subscribed = false
     private var statScheduled = false
 
+    /** The profile warning is said once per layer, not per frame. */
+    private var profileWarned = false
+
     /** A step scheduled before a session ended belongs to the old session and is dropped. */
     private var generation = 0
 
@@ -95,10 +98,10 @@ class ClusterFlyController(
         ClusterFlyPush.log = log
         // Only a controller with a real link is a production one; tests leave the factory alone, so
         // no MediaCodec is ever constructed in a JVM test.
-        if (linkFactory != null) {
+        // The re-encoder is deliberately off this round: a second hardware decode competes with the
+        // picture the driver is looking at. The class is kept and wired only when this is turned on.
+        if (REENCODE_PICTURE && linkFactory != null) {
             ClusterFlyPush.reencoderFactory = { config ->
-                // The re-encoder uses the buffer/Image APIs of 21+; the fly feature itself is an
-                // API 22 head unit, and anything older simply keeps the layer blank.
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                     ClusterFlyReencoderMediaCodec(config) { unit -> sendEncoded(unit) }
                 } else {
@@ -214,9 +217,15 @@ class ClusterFlyController(
         if (phase != FlyPhase.PUSHING) return
 
         if (!decision.send) {
+            if (decision.dropReason == "profile") warnUnsupportedPicture()
             if (decision.dropReason != "idle") statDrops.incrementAndGet()
             return
         }
+        // In re-encode mode this unit has only been accepted by the encoder; its own output is what
+        // goes on the wire, through [sendEncoded]. Sending the original here would hand the cluster
+        // a higher-profile slice it cannot decode.
+        if (decision.mode != PushMode.FORWARD) return
+
         if (ClusterFlyPush.isKeyframe(unit)) lastKeyframeAt.set(now)
         if (link?.send(unit) == true) {
             statPackets.incrementAndGet()
@@ -224,6 +233,15 @@ class ClusterFlyController(
             statFrames.incrementAndGet()
         } else {
             statDrops.incrementAndGet()
+        }
+    }
+
+    /** Said once per layer, on the main thread: the phone's picture is not the profile the cluster takes. */
+    private fun warnUnsupportedPicture() {
+        if (profileWarned) return
+        profileWarned = true
+        postDelayed(0L) {
+            synchronized(lock) { showWarning(ProfileWarning) }
         }
     }
 
@@ -267,15 +285,22 @@ class ClusterFlyController(
         }
 
         if (effect.phase == FlyPhase.ARMING || effect.phase == FlyPhase.WAITING_FOR_VIDEO) {
+            // Listening starts with the opening pair, not with the wait: the cluster may ask inside
+            // those 400 ms and the ask is remembered rather than refused.
             link?.start()
         }
 
+        if (effect.steps.isNotEmpty()) {
+            // A new command pair supersedes anything still queued from the old one — a right swipe
+            // during the left pair must not be followed by a late FLY_LEFT.
+            generation++
+        }
+        val expected = generation
         for (step in effect.steps) {
             val delay = (step.sendAtMillis - clock()).coerceAtLeast(0L)
             if (delay == 0L) {
                 sendStep(step)
             } else {
-                val expected = generation
                 postDelayed(delay) {
                     synchronized(lock) {
                         if (generation == expected) sendStep(step)
@@ -289,8 +314,17 @@ class ClusterFlyController(
         commands.send(step.command)
         lastCommandAt = clock()
         if (step.command == FlyCommand.FLY_LEFT) {
-            // The left step has gone out; from here the cluster may ask for the picture.
-            handle(session.onWaitTimeout(clock()))
+            // The left step has gone out; from here the cluster may ask for the picture. An ask that
+            // arrived while arming is answered now, before the subscription makes frames flow.
+            val effect = session.onWaitTimeout(clock())
+            if (effect.push && session.takePendingOpen()) {
+                val replies = listOf(
+                    reply(FlyReply.READY, ClusterFlyProtocol.videoReady()),
+                    reply(FlyReply.START, ClusterFlyProtocol.videoStart()),
+                )
+                link?.reply(replies)
+            }
+            handle(effect)
         }
     }
 
@@ -373,6 +407,7 @@ class ClusterFlyController(
 
     private fun stopEverything() {
         statScheduled = false
+        profileWarned = false
         if (subscribed) {
             subscribed = false
             setMainVideoSubscribed(false)
@@ -414,5 +449,14 @@ class ClusterFlyController(
 
         /** Four frames is a fifth of a second at 25 fps; more than that is already stale. */
         const val FRAME_QUEUE_CAPACITY = 4
+
+        /**
+         * Off until the car says the phone's picture is not Baseline. A second hardware decode
+         * competes with the main picture on a head unit with 26 MB free, so the layer stays black
+         * and says why instead of switching it on by itself.
+         */
+        const val REENCODE_PICTURE = false
+
+        const val ProfileWarning = "手机画面格式暂不支持飞屏"
     }
 }

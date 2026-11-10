@@ -29,6 +29,15 @@ class ClusterFlyLink(
     @Volatile
     var onPacket: ((ByteArray) -> List<ByteArray>)? = null
 
+    /** Writes back an answer that was produced outside an ask, such as a remembered open. */
+    @Volatile
+    private var replyWriter: ((ByteArray) -> Unit)? = null
+
+    fun reply(packets: List<ByteArray>) {
+        val writer = replyWriter ?: return
+        packets.forEach(writer)
+    }
+
     @Volatile
     private var running = false
 
@@ -129,6 +138,7 @@ class ClusterFlyLink(
                     output.flush()
                 }
             }
+            replyWriter = write
 
             thread(isDaemon = true, name = "cluster-fly-heartbeat") {
                 while (running && !socket.isClosed) {
@@ -169,6 +179,7 @@ class ClusterFlyLink(
         } catch (_: IOException) {
         } finally {
             client = null
+            replyWriter = null
             try {
                 socket.close()
             } catch (_: IOException) {
@@ -195,14 +206,29 @@ class ClusterFlyLink(
         private var timestamp = 0
         private val ssrc = java.util.Random().nextInt()
 
+        /** Wall clock of the previous access unit: the timestamp follows arrival, not a fixed fps. */
+        private var lastUnitAtMs = 0L
+
+        /** Reused for every packet; grows only when one needs more room than the last. */
+        private var packet = ByteArray(RTP_MTU + 16)
+
+        private val fuHeader = ByteArray(2)
+
         fun send(accessUnit: ByteArray): Boolean {
-            val nalus = split(accessUnit)
+            val nalus = nals(accessUnit)
             if (nalus.isEmpty()) return false
-            var sent = false
-            for ((index, nalu) in nalus.withIndex()) {
-                sent = sendNalu(nalu, marker = index == nalus.lastIndex) || sent
+            val nowMs = System.nanoTime() / 1_000_000L
+            if (lastUnitAtMs != 0L) {
+                // 90 kHz, measured from the frame before: a 30 fps phone must not play at 25 fps
+                // just because the step was written down as a constant.
+                val delta = (nowMs - lastUnitAtMs).coerceIn(0L, MAX_STEP_MILLIS)
+                timestamp += (delta * 90).toInt()
             }
-            timestamp += TIMESTAMP_STEP
+            lastUnitAtMs = nowMs
+            var sent = false
+            for ((index, nal) in nalus.withIndex()) {
+                sent = sendNal(accessUnit, nal.first, nal.last + 1, marker = index == nalus.lastIndex) || sent
+            }
             return sent
         }
 
@@ -213,55 +239,62 @@ class ClusterFlyLink(
             }
         }
 
-        private fun sendNalu(nalu: ByteArray, marker: Boolean): Boolean {
-            if (nalu.isEmpty()) return false
-            return if (nalu.size + RTP_HEADER_SIZE <= RTP_MTU) {
-                sendPacket(nalu, marker, fragmentHeader = null)
+        private fun sendNal(unit: ByteArray, start: Int, end: Int, marker: Boolean): Boolean {
+            val size = end - start
+            if (size <= 0) return false
+            return if (size + RTP_HEADER_SIZE <= RTP_MTU) {
+                sendPacket(unit, start, size, marker, fragmentHeader = null)
             } else {
-                sendFragments(nalu, marker)
+                sendFragments(unit, start, end, marker)
             }
         }
 
-        private fun sendFragments(nalu: ByteArray, marker: Boolean): Boolean {
-            val nalHeader = nalu[0].toInt() and 0xFF
+        private fun sendFragments(unit: ByteArray, start: Int, end: Int, marker: Boolean): Boolean {
+            val nalHeader = unit[start].toInt() and 0xFF
             val indicator = ((nalHeader and 0xE0) or FU_A_TYPE).toByte()
             val chunkSize = RTP_MTU - RTP_HEADER_SIZE - 2
-            var offset = 1
+            var offset = start + 1
             var sent = true
-            while (offset < nalu.size) {
-                val size = minOf(chunkSize, nalu.size - offset)
-                val start = offset == 1
-                val end = offset + size == nalu.size
-                val fu = byteArrayOf(
-                    indicator,
-                    ((if (start) 0x80 else 0) or (if (end) 0x40 else 0) or (nalHeader and 0x1F)).toByte(),
-                )
-                sent = sendPacket(nalu.copyOfRange(offset, offset + size), end && marker, fu) && sent
+            while (offset < end) {
+                val size = minOf(chunkSize, end - offset)
+                val first = offset == start + 1
+                val last = offset + size == end
+                fuHeader[0] = indicator
+                fuHeader[1] =
+                    ((if (first) 0x80 else 0) or (if (last) 0x40 else 0) or (nalHeader and 0x1F)).toByte()
+                sent = sendPacket(unit, offset, size, last && marker, fuHeader) && sent
                 offset += size
             }
             return sent
         }
 
-        private fun sendPacket(payload: ByteArray, marker: Boolean, fragmentHeader: ByteArray?): Boolean {
+        private fun sendPacket(
+            unit: ByteArray,
+            offset: Int,
+            length: Int,
+            marker: Boolean,
+            fragmentHeader: ByteArray?,
+        ): Boolean {
             val header = fragmentHeader?.size ?: 0
-            val packet = ByteArray(RTP_HEADER_SIZE + header + payload.size)
-            writeHeader(packet, marker)
+            val needed = RTP_HEADER_SIZE + header + length
+            if (packet.size < needed) packet = ByteArray(needed)
+            writeHeader(marker)
             var at = RTP_HEADER_SIZE
             if (fragmentHeader != null) {
-                System.arraycopy(fragmentHeader, 0, packet, at, fragmentHeader.size)
-                at += fragmentHeader.size
+                System.arraycopy(fragmentHeader, 0, packet, at, header)
+                at += header
             }
-            System.arraycopy(payload, 0, packet, at, payload.size)
+            System.arraycopy(unit, offset, packet, at, length)
             val target = address ?: return false
             return try {
-                socket.send(DatagramPacket(packet, packet.size, target, port))
+                socket.send(DatagramPacket(packet, needed, target, port))
                 true
             } catch (_: Exception) {
                 false
             }
         }
 
-        private fun writeHeader(packet: ByteArray, marker: Boolean) {
+        private fun writeHeader(marker: Boolean) {
             packet[0] = 0x80.toByte()
             packet[1] = (PAYLOAD_TYPE or (if (marker) 0x80 else 0)).toByte()
             packet[2] = (sequence shr 8).toByte()
@@ -277,8 +310,9 @@ class ClusterFlyLink(
             packet[11] = ssrc.toByte()
         }
 
-        /** One byte array in, one NAL per entry out, start codes removed. */
-        private fun split(unit: ByteArray): List<ByteArray> {
+        /** Ranges of the NAL units inside one access unit, start codes excluded, with no copy. */
+        private fun nals(unit: ByteArray): List<IntRange> {
+            if (unit.isEmpty()) return emptyList()
             val starts = mutableListOf<Pair<Int, Int>>()
             var i = 0
             while (i + 3 <= unit.size) {
@@ -298,10 +332,10 @@ class ClusterFlyLink(
                 }
                 i++
             }
-            if (starts.isEmpty()) return listOf(unit)
+            if (starts.isEmpty()) return listOf(0 until unit.size)
             return starts.mapIndexedNotNull { index, (_, nalStart) ->
                 val end = if (index + 1 < starts.size) starts[index + 1].first else unit.size
-                if (end > nalStart) unit.copyOfRange(nalStart, end) else null
+                if (end > nalStart) nalStart until end else null
             }
         }
     }
@@ -319,7 +353,7 @@ class ClusterFlyLink(
         const val PAYLOAD_TYPE = 96
         const val FU_A_TYPE = 28
 
-        /** 90 kHz / 25 pictures a second. */
-        const val TIMESTAMP_STEP = 3_600
+        /** The furthest the timestamp may move for one unit: a stall must not jump minutes ahead. */
+        const val MAX_STEP_MILLIS = 200L
     }
 }

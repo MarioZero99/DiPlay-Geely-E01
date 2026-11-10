@@ -112,13 +112,63 @@ class ClusterFlySessionTest {
 
     /** The close is a command like any other: two inside a second are dropped by the factory. */
     @Test
-    fun `a close inside one second of the fly is too soon`() {
+    fun `a close inside one second waits for the boundary`() {
         pushing()
 
         val close = session.onVideoAsk(VideoAsk.CLOSE, 2_000L, openConditions(millisSinceLastClusterCommand = 200))
 
         assertFalse(close.push)
-        assertTrue(close.steps.isEmpty())
-        assertEquals(FlyBlock.TOO_SOON, close.warning)
+        assertEquals(FlyPhase.CLOSING, close.phase)
+        assertEquals(FlyCommand.FLY_RIGHT, close.steps.first().command)
+        assertEquals(2_800L, close.steps.first().sendAtMillis)
+    }
+
+    /** A right swipe made too quickly still has to close the layer; it just has to wait. */
+    @Test
+    fun `a right inside one second still closes at the boundary`() {
+        pushing()
+
+        val right = session.onRight(2_000L, openConditions(millisSinceLastClusterCommand = 200))
+
+        assertFalse(right.push)
+        assertEquals(FlyPhase.CLOSING, right.phase)
+        assertEquals(2_800L, right.steps.first().sendAtMillis)
+    }
+
+    /**
+     * Radar stops the picture at once, but the layer is still up. When the warning clears and the
+     * interval allows it, the close goes out instead of being forgotten.
+     */
+    @Test
+    fun `radar during playback closes once it clears`() {
+        pushing()
+        val radar = session.onSafety(openConditions(radar = true), 2_000L)
+        assertFalse(radar.push)
+        assertTrue(radar.steps.isEmpty())
+
+        val cleared = session.onSafety(openConditions(millisSinceLastClusterCommand = 5_000), 6_000L)
+
+        assertEquals(FlyPhase.CLOSING, cleared.phase)
+        assertEquals(FlyCommand.FLY_RIGHT, cleared.steps.first().command)
+        assertEquals(FlyCommand.NAV_OFF, cleared.steps.last().command)
+    }
+
+    /**
+     * The cluster can ask before the left step is due. Refusing then would cost the picture for the
+     * rest of the session, so the ask is remembered and answered when the wait begins.
+     */
+    @Test
+    fun `an open during arming starts pushing at the fly step`() {
+        session.onLeft(1_000L, openConditions())
+
+        val early = session.onVideoAsk(VideoAsk.OPEN, 1_200L, openConditions())
+        assertFalse(early.push)
+        assertEquals(FlyPhase.ARMING, early.phase)
+
+        val waited = session.onWaitTimeout(1_400L)
+
+        assertTrue(waited.push)
+        assertEquals(FlyPhase.PUSHING, waited.phase)
+        assertTrue(session.takePendingOpen())
     }
 }
