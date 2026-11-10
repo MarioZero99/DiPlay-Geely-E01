@@ -17,6 +17,8 @@ data class FlyEffect(
     val push: Boolean,
     val warning: FlyBlock?,
     val steps: List<FlyStep>,
+    /** The cluster already asked, and the answer waits until the left step has gone out. */
+    val holdOpen: Boolean = false,
 )
 
 /**
@@ -89,7 +91,10 @@ class ClusterFlySession(
         advance(nowMillis)
         when (ask) {
             VideoAsk.OPEN -> when (phase) {
-                FlyPhase.ARMING -> openPending = true
+                FlyPhase.ARMING -> {
+                    openPending = true
+                    return effect(holdOpen = true)
+                }
 
                 FlyPhase.WAITING_FOR_VIDEO -> {
                     val current = conditions ?: lastConditions
@@ -257,8 +262,15 @@ class ClusterFlySession(
     private fun effect(
         steps: List<FlyStep> = emptyList(),
         warning: FlyBlock? = null,
+        holdOpen: Boolean = false,
     ): FlyEffect {
-        val effect = FlyEffect(phase = phase, push = phase == FlyPhase.PUSHING, warning = warning, steps = steps)
+        val effect = FlyEffect(
+            phase = phase,
+            push = phase == FlyPhase.PUSHING,
+            warning = warning,
+            steps = steps,
+            holdOpen = holdOpen,
+        )
         if (effect.phase != loggedPhase) {
             loggedPhase = effect.phase
             log(ClusterFlyLog.phase(effect.phase))

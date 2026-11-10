@@ -163,6 +163,7 @@ class ClusterFlySessionTest {
 
         val early = session.onVideoAsk(VideoAsk.OPEN, 1_200L, openConditions())
         assertFalse(early.push)
+        assertTrue(early.holdOpen)
         assertEquals(FlyPhase.ARMING, early.phase)
 
         val waited = session.onWaitTimeout(1_400L)

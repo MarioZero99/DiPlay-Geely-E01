@@ -111,6 +111,29 @@ class ClusterFlyControllerTest {
         assertEquals(emptyList<String>(), warnings)
     }
 
+    /**
+     * The cluster can ask in the 400 ms before the left step. That ask is not refused: the first
+     * answer would be the one it keeps. Ready and start are logged when the left step goes out.
+     */
+    @Test
+    fun `an open before the fly step is answered when the step goes out`() {
+        val controller = controller()
+        controller.onGesture(Decision.FLY_LEFT)
+        now = 1_200L
+
+        val replies = controller.onPacket(openAsk())
+
+        assertEquals(emptyList<ByteArray>(), replies)
+        assertFalse(lines.contains("fly.reply refused"))
+
+        now = 1_400L
+        runScheduled()
+
+        assertTrue(lines.contains("fly.reply ready"))
+        assertTrue(lines.contains("fly.reply start"))
+        assertFalse(lines.contains("fly.reply refused"))
+    }
+
     @Test
     fun `open is answered ready then start`() {
         val controller = controller()

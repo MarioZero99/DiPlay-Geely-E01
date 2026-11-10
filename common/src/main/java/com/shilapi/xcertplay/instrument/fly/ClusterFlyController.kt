@@ -355,16 +355,22 @@ class ClusterFlyController(
 
                 VideoAsk.OPEN -> {
                     val effect = session.onVideoAsk(VideoAsk.OPEN, now, conditions)
-                    val replies = if (effect.push) {
-                        listOf(
+                    val replies = when {
+                        effect.push -> listOf(
                             reply(FlyReply.READY, ClusterFlyProtocol.videoReady()),
                             reply(FlyReply.START, ClusterFlyProtocol.videoStart()),
                         )
-                    } else {
-                        listOf(reply(FlyReply.REFUSED, ClusterFlyProtocol.videoRefused()))
+                        // Asked during the 400 ms before the left step. A refusal here is the
+                        // answer the cluster keeps; the ready and start go out with that step.
+                        effect.holdOpen -> emptyList()
+                        else -> listOf(reply(FlyReply.REFUSED, ClusterFlyProtocol.videoRefused()))
                     }
-                    postDelayed(0L) {
-                        synchronized(lock) { handle(effect) }
+                    // The held ask is answered from the left step. Handling this effect later
+                    // would run after the picture had started and turn the subscription back off.
+                    if (!effect.holdOpen) {
+                        postDelayed(0L) {
+                            synchronized(lock) { handle(effect) }
+                        }
                     }
                     replies
                 }
