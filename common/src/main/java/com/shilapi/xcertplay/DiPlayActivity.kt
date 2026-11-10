@@ -4458,7 +4458,7 @@ class DiPlayActivity : ComponentActivity() {
          * 需要恢复时把这里改回 true 即可。
          */
         private const val SHOW_CARLIFE_GOVERNANCE = false
-        private const val SHOW_DIAGNOSTIC_EXPORT = false
+        private const val SHOW_DIAGNOSTIC_EXPORT = true
         private const val HOP_DEVICES_TTL_MILLIS = 10_000L
 
         /** How long network status (Wi-Fi, hotspot, BT) is reused during periodic ticks to prevent binder churn. */
