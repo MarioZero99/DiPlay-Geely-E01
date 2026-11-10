@@ -370,6 +370,8 @@ internal object CarPlayMediaKeys {
         private var sessionToken: Any? = null
         private var lastPublishedNowPlaying: CarPlayNowPlaying? = null
         private var instrumentBridge: XingruiInstrumentBridge? = null
+        private data class ClusterLines(val line1: String?, val line2: String?)
+        private var lastClusterLines: ClusterLines? = null
 
         override fun onPlaybackChanged(playing: Boolean) {
             super.onPlaybackChanged(playing)
@@ -388,9 +390,13 @@ internal object CarPlayMediaKeys {
                         if (playing) 1f else 0f,
                     ).build(),
                 )
-                instrumentBridge?.updateMedia(
+                val lines = lastClusterLines ?: ClusterLines(
                     lastPublishedNowPlaying?.title,
                     lastPublishedNowPlaying?.artist,
+                )
+                instrumentBridge?.updateMedia(
+                    lines.line1,
+                    lines.line2,
                     lastPublishedNowPlaying?.album,
                     playing,
                     currentArtwork,
@@ -502,6 +508,14 @@ internal object CarPlayMediaKeys {
                 lastGenuineAlbum = filterResult.genuineAlbum
                 lastDurationMillis = filterResult.durationMillis
                 val filteredInfo = filterResult.info
+                val newLines = ClusterLines(filterResult.clusterLine1, filterResult.clusterLine2)
+                val clusterChanged = newLines != lastClusterLines
+                lastClusterLines = newLines
+                DiagLog.d(
+                    TAG,
+                    "cluster lyrics raw title=${info.title} artist=${info.artist} album=${info.album} " +
+                        "lyric=${filterResult.isLyric} line1=${filterResult.clusterLine1} line2=${filterResult.clusterLine2}",
+                )
 
                 val previous = lastPublishedNowPlaying
                 val isTrackChanged = previous != null && (previous.title != filteredInfo.title || previous.artist != filteredInfo.artist)
@@ -512,6 +526,15 @@ internal object CarPlayMediaKeys {
                     filteredInfo.elapsedMillis?.let { if (it >= 0) lastKnownPosition = it }
                 }
                 if (!metadataChanged(previous, filteredInfo)) {
+                    if (clusterChanged) {
+                        instrumentBridge?.updateMedia(
+                            newLines.line1,
+                            newLines.line2,
+                            filteredInfo.album,
+                            filteredInfo.playing,
+                            currentArtwork,
+                        )
+                    }
                     // Filter out 2Hz elapsed time or status ticks to protect system_server heap
                     return@post
                 }
@@ -559,8 +582,7 @@ internal object CarPlayMediaKeys {
                 session?.isActive = true
                 controller?.currentNowPlaying?.let { info ->
                     if (info.title != null || info.artist != null || info.album != null) {
-                        lastPublishedNowPlaying = info
-                        publishMetadata(info, currentArtwork)
+                        onNowPlaying(info)
                     }
                 }
             }
@@ -570,6 +592,7 @@ internal object CarPlayMediaKeys {
             artworkQueue.clear()
             updateArtwork(null)
             lastPublishedNowPlaying = null
+            lastClusterLines = null
             lastKnownPosition = 0L
             session?.let { sess ->
                 runCatching {
@@ -616,9 +639,10 @@ internal object CarPlayMediaKeys {
                     ).build(),
                 )
 
+                val lines = lastClusterLines ?: ClusterLines(nowPlaying?.title, nowPlaying?.artist)
                 instrumentBridge?.updateMedia(
-                    nowPlaying?.title,
-                    nowPlaying?.artist,
+                    lines.line1,
+                    lines.line2,
                     nowPlaying?.album,
                     isPlaying,
                     artwork,
@@ -636,6 +660,7 @@ internal object CarPlayMediaKeys {
             controller?.nowPlayingListener = null
             controller?.artworkListener = null
             lastPublishedNowPlaying = null
+            lastClusterLines = null
             lastGenuineTitle = null
             lastGenuineArtist = null
             lastGenuineAlbum = null
