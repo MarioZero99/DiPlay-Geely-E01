@@ -22,6 +22,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.util.ReflectionHelpers
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -251,18 +254,19 @@ class DiagnosticExportUiTest {
         }
     }
 
-    /** The file on disk is the retained logs, not the one-megabyte digest. */
+    /** The file on disk holds today's earlier runs, not the one-megabyte digest. */
     @Test fun theSavedFileKeepsEveryRetainedLogLine() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
         val activity = controller.get()
         registerReportProvider(activity.applicationContext)
         val logs = File(activity.filesDir, "logs").apply { mkdirs() }
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val older = buildString {
             appendLine("HEAD-KEPT-LINE")
             repeat(40_000) { append("older-line-").append(it).append(" xxxxxxxxxxxxxxxxxxxx\n") }
             appendLine("TAIL-KEPT-LINE")
         }
-        File(logs, "previous.log").writeText(older)
+        File(logs, "diplay-$today.log").writeText(older)
         File(logs, "diplay.log").writeText("password=hunter2\nNEWER-LINE marker\n")
         try {
             ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
@@ -278,7 +282,7 @@ class DiagnosticExportUiTest {
             assertTrue(text.contains("HEAD-KEPT-LINE"))
             assertTrue(text.contains("TAIL-KEPT-LINE"))
             assertTrue(text.contains("NEWER-LINE marker"))
-            assertTrue(text.contains("--- previous.log ---"))
+            assertTrue(text.contains("--- diplay-$today.log ---"))
             assertTrue(text.contains(DiagnosticRedactor.WITHHELD))
             assertFalse(text.contains("hunter2"))
             assertFalse(text.contains("lines omitted"))

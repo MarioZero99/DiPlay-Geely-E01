@@ -3883,13 +3883,11 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun buildDiagnosticSections(appContext: android.content.Context): List<DiagnosticSection> {
-        val logs = SessionLogFile.REPORT_NAMES.mapNotNull { name ->
-            val file = File(appContext.filesDir, "logs/$name")
-            if (!file.isFile) return@mapNotNull null
+        val logs = SessionLogFile.reportFiles(File(appContext.filesDir, "logs")).map { file ->
             DiagnosticSection(
-                name = name,
+                name = file.name,
                 lines = file.useLines { lines -> lines.mapNotNull { DiagnosticRedactor.redact(it) }.toList() },
-                newest = name == "diplay.log",
+                newest = file.name == "diplay.log",
             )
         }
         // Appended without the generic redaction pass. A record is redacted when it is written, and that
@@ -3904,9 +3902,10 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     /**
-     * The report in full, oldest run first. Saving and uploading both use this, so the file holds
-     * every retained log line. Each log file is still capped on disk; this does not read past that.
-     * Uploading then splits the text across objects ([SupabaseLogUpload.parts]).
+     * The report in full, oldest run of today first. Saving and uploading both use this, so both
+     * are the day they were asked about rather than a stack of drives. Each log file is still
+     * capped on disk; this does not read past that. Uploading then splits the text across objects
+     * ([SupabaseLogUpload.parts]).
      */
     private fun buildCompleteReport(appContext: android.content.Context): String = buildString {
         appendLine(buildDiagnosticHeader(appContext))

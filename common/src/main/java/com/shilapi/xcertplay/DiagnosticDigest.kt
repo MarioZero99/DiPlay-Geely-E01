@@ -60,8 +60,9 @@ internal object DiagnosticDigest {
         if (sections.isEmpty()) return keptHeader
 
         // One running index across the sections, in read order — oldest run first, which is the order
-        // REPORT_NAMES lists them. A per-section index would restart at every run, and sorting on it would
-        // group every run's first line together, then every run's second, reading the timestamps backwards.
+        // SessionLogFile.reportFiles lists them. A per-section index would restart at every run, and
+        // sorting on it would group every run's first line together, then every run's second, reading
+        // the timestamps backwards.
         val candidates = ArrayList<Ranked>()
         val newestStat = HashMap<String, Int>()
         var sequence = 0
