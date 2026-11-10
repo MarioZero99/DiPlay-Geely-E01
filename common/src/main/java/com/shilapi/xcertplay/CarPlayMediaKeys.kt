@@ -488,64 +488,70 @@ internal object CarPlayMediaKeys {
         }
 
         private fun onNowPlaying(info: CarPlayNowPlaying) {
-            mainHandler.post {
-                val currentContext = context ?: return@post
-                if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) {
-                    if (lastPublishedNowPlaying != null || currentArtwork != null) {
-                        clearClusterMetadata()
-                    }
-                    return@post
-                }
-                val filterResult = filterLyricMetadata(
-                    info,
-                    lastGenuineTitle,
-                    lastGenuineArtist,
-                    lastGenuineAlbum,
-                    lastDurationMillis,
-                )
-                lastGenuineTitle = filterResult.genuineTitle
-                lastGenuineArtist = filterResult.genuineArtist
-                lastGenuineAlbum = filterResult.genuineAlbum
-                lastDurationMillis = filterResult.durationMillis
-                val filteredInfo = filterResult.info
-                val newLines = ClusterLines(filterResult.clusterLine1, filterResult.clusterLine2)
-                val clusterChanged = newLines != lastClusterLines
-                lastClusterLines = newLines
-                DiagLog.d(
-                    TAG,
-                    "cluster lyrics raw title=${info.title} artist=${info.artist} album=${info.album} " +
-                        "lyric=${filterResult.isLyric} line1=${filterResult.clusterLine1} line2=${filterResult.clusterLine2}",
-                )
+            applyNowPlaying(info)
+        }
 
-                val previous = lastPublishedNowPlaying
-                val isTrackChanged = previous != null && (previous.title != filteredInfo.title || previous.artist != filteredInfo.artist)
-                if (isTrackChanged) {
-                    // Reset position immediately when track changes, so late elapsed time won't bleed previous song's end position
-                    lastKnownPosition = filteredInfo.elapsedMillis?.takeIf { it >= 0 } ?: 0L
-                } else {
-                    filteredInfo.elapsedMillis?.let { if (it >= 0) lastKnownPosition = it }
-                }
-                if (!metadataChanged(previous, filteredInfo)) {
-                    if (clusterChanged) {
-                        instrumentBridge?.updateMedia(
-                            newLines.line1,
-                            newLines.line2,
-                            filteredInfo.album,
-                            filteredInfo.playing,
-                            currentArtwork,
-                        )
-                    }
-                    // Filter out 2Hz elapsed time or status ticks to protect system_server heap
-                    return@post
-                }
-                val previousArtworkId = previous?.artworkTransferId
-                val newArtworkId = filteredInfo.artworkTransferId
-                if (newArtworkId != previousArtworkId) {
-                    updateArtwork(null)
-                }
-                lastPublishedNowPlaying = filteredInfo
-                publishMetadata(filteredInfo, currentArtwork)
+        private fun applyNowPlaying(info: CarPlayNowPlaying) {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                mainHandler.post { applyNowPlaying(info) }
+                return
             }
+            val currentContext = context ?: return
+            if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) {
+                if (lastPublishedNowPlaying != null || currentArtwork != null) {
+                    clearClusterMetadata()
+                }
+                return
+            }
+            val filterResult = filterLyricMetadata(
+                info,
+                lastGenuineTitle,
+                lastGenuineArtist,
+                lastGenuineAlbum,
+                lastDurationMillis,
+            )
+            lastGenuineTitle = filterResult.genuineTitle
+            lastGenuineArtist = filterResult.genuineArtist
+            lastGenuineAlbum = filterResult.genuineAlbum
+            lastDurationMillis = filterResult.durationMillis
+            val filteredInfo = filterResult.info
+            val newLines = ClusterLines(filterResult.clusterLine1, filterResult.clusterLine2)
+            val clusterChanged = newLines != lastClusterLines
+            lastClusterLines = newLines
+            DiagLog.d(
+                TAG,
+                "cluster lyrics raw title=${info.title} artist=${info.artist} album=${info.album} " +
+                    "lyric=${filterResult.isLyric} line1=${filterResult.clusterLine1} line2=${filterResult.clusterLine2}",
+            )
+
+            val previous = lastPublishedNowPlaying
+            val isTrackChanged = previous != null && (previous.title != filteredInfo.title || previous.artist != filteredInfo.artist)
+            if (isTrackChanged) {
+                // Reset position immediately when track changes, so late elapsed time won't bleed previous song's end position
+                lastKnownPosition = filteredInfo.elapsedMillis?.takeIf { it >= 0 } ?: 0L
+            } else {
+                filteredInfo.elapsedMillis?.let { if (it >= 0) lastKnownPosition = it }
+            }
+            if (!metadataChanged(previous, filteredInfo)) {
+                if (clusterChanged) {
+                    instrumentBridge?.updateMedia(
+                        newLines.line1,
+                        newLines.line2,
+                        filteredInfo.album,
+                        filteredInfo.playing,
+                        currentArtwork,
+                    )
+                }
+                // Filter out 2Hz elapsed time or status ticks to protect system_server heap
+                return
+            }
+            val previousArtworkId = previous?.artworkTransferId
+            val newArtworkId = filteredInfo.artworkTransferId
+            if (newArtworkId != previousArtworkId) {
+                updateArtwork(null)
+            }
+            lastPublishedNowPlaying = filteredInfo
+            publishMetadata(filteredInfo, currentArtwork)
         }
 
         private fun onArtworkReceived(transferId: Int, bytes: ByteArray) {
@@ -582,7 +588,7 @@ internal object CarPlayMediaKeys {
                 session?.isActive = true
                 controller?.currentNowPlaying?.let { info ->
                     if (info.title != null || info.artist != null || info.album != null) {
-                        onNowPlaying(info)
+                        applyNowPlaying(info)
                     }
                 }
             }
