@@ -85,29 +85,74 @@ class DiagnosticRedactorTest {
             log.append("CarPlay connected")
             log.close()
             assertTrue(folder.resolve("diplay.log").length() <= SessionLogFile.MAX_BYTES + 701)
-            assertTrue(folder.resolve("previous.log").length() <= SessionLogFile.MAX_BYTES + 701)
+            val archive = SessionLogFile.reportFiles(folder).first()
+            assertTrue(archive.name, archive.name != "diplay.log")
+            assertTrue(archive.length() <= SessionLogFile.MAX_BYTES + 701)
             assertTrue(folder.resolve("diplay.log").readText().contains("CarPlay connected"))
             assertFalse(folder.listFiles()!!.any { it.readText().contains("secret") })
         } finally { folder.deleteRecursively() }
     }
-    @Test fun failuresSurviveLaterSuccessfulSessionsAndOldestHistoryExpires() {
-        val folder = Files.createTempDirectory("diplay-history-test").toFile()
+    /**
+     * The report is the day it is asked about: the runs earlier today are in it, yesterday's are
+     * not. Yesterday is still on disk — retention is seven days — it is just not what gets sent.
+     */
+    @Test fun aReportHoldsTodaysRunsAndNothingOlder() {
+        val folder = Files.createTempDirectory("diplay-today-report").toFile()
         try {
-            repeat(10) { session ->
-                SessionLogFile(folder.resolve("diplay.log")).use {
-                    it.reset("session=$session")
-                    it.append(if (session == 3) "Wi-Fi P2P create rejected code=0" else "CarPlay connected")
-                    it.append("password=secret")
-                }
+            val now = System.currentTimeMillis()
+            SessionLogFile(folder.resolve("diplay.log"), clock = { noonDaysAgo(now, 1) }).use {
+                it.reset(headerDaysAgo(now, 1))
+                it.append("yesterday line")
             }
-            val history = SessionLogFile.REPORT_NAMES.map { folder.resolve(it).readText() }
-            assertEquals(8, folder.listFiles()!!.size)
-            assertTrue(history.first().contains("session=2"))
-            assertTrue(history.last().contains("session=9"))
-            assertTrue(history.any { it.contains("rejected code=0") })
-            assertFalse(history.any { it.contains("secret") })
+            SessionLogFile(folder.resolve("diplay.log"), clock = { noonDaysAgo(now, 0) }).use {
+                it.reset(headerDaysAgo(now, 0))
+                it.append("today earlier run")
+            }
+            SessionLogFile(folder.resolve("diplay.log"), clock = { noonDaysAgo(now, 0) }).use {
+                it.reset(headerDaysAgo(now, 0))
+                it.append("today current run")
+            }
+
+            val report = SessionLogFile.reportFiles(folder).joinToString("\n") { it.readText() }
+            assertTrue(report.contains("today earlier run"))
+            assertTrue(report.contains("today current run"))
+            assertFalse(report.contains("yesterday line"))
+            assertTrue(folder.resolve("diplay-${day(noonDaysAgo(now, 1))}.log").isFile)
         } finally { folder.deleteRecursively() }
     }
+
+    /** Seven days are kept; the eighth is deleted at the next start. */
+    @Test fun daysOlderThanSevenAreDeletedAtTheNextStart() {
+        val folder = Files.createTempDirectory("diplay-history-days").toFile()
+        try {
+            val now = System.currentTimeMillis()
+            folder.resolve("diplay-${day(noonDaysAgo(now, 7))}.log").writeText("seven days old")
+            folder.resolve("diplay-${day(noonDaysAgo(now, 6))}.log").writeText("six days old")
+
+            SessionLogFile(folder.resolve("diplay.log"), clock = { noonDaysAgo(now, 0) }).use {
+                it.reset(headerDaysAgo(now, 0))
+            }
+
+            assertFalse(folder.resolve("diplay-${day(noonDaysAgo(now, 7))}.log").exists())
+            assertTrue(folder.resolve("diplay-${day(noonDaysAgo(now, 6))}.log").isFile)
+        } finally { folder.deleteRecursively() }
+    }
+
+    /** Noon, so a daylight-saving shift cannot move the run onto a neighbouring date. */
+    private fun noonDaysAgo(now: Long, daysAgo: Int): Long = java.util.Calendar.getInstance().apply {
+        timeInMillis = now
+        add(java.util.Calendar.DAY_OF_MONTH, -daysAgo)
+        set(java.util.Calendar.HOUR_OF_DAY, 12)
+        set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    private fun day(millis: Long): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(millis))
+
+    private fun headerDaysAgo(now: Long, daysAgo: Int) =
+        "${day(noonDaysAgo(now, daysAgo))} 12:00:00.000  session=$daysAgo"
     @Test fun safeWifiMetadataSurvivesWithoutWeakeningCredentialFilters() {
         val lines = listOf(
             "Wi-Fi P2P preflight wifiEnabled=true locationEnabled=false permissionGranted=true stationMHz=5180",
