@@ -146,6 +146,8 @@ internal object CarPlayMediaKeys {
         val genuineArtist: String?,
         val genuineAlbum: String?,
         val durationMillis: Long?,
+        val clusterLine1: String?,
+        val clusterLine2: String?,
     )
 
     internal fun filterLyricMetadata(
@@ -173,6 +175,8 @@ internal object CarPlayMediaKeys {
                 genuineArtist = genArtist,
                 genuineAlbum = genAlbum,
                 durationMillis = genDuration,
+                clusterLine1 = info.title,
+                clusterLine2 = info.artist,
             )
         }
 
@@ -192,6 +196,11 @@ internal object CarPlayMediaKeys {
             val effTitle = lastGenuineTitle
             val effArtist = lastGenuineArtist ?: (if (rawArtist != lastGenuineTitle) rawArtist else null)
             val effAlbum = lastGenuineAlbum ?: rawAlbum
+            val line1 = when {
+                isLyricSuffix -> rawTitle!!.removeSuffix(" - $lastGenuineTitle").ifBlank { lastGenuineTitle }
+                else -> rawTitle?.takeIf { it.isNotBlank() } ?: lastGenuineTitle
+            }
+            val line2 = joinNonBlank(lastGenuineArtist, lastGenuineTitle, " - ") ?: lastGenuineTitle
             FilteredTrack(
                 info = info.copy(title = effTitle, artist = effArtist, album = effAlbum),
                 isLyric = true,
@@ -199,6 +208,8 @@ internal object CarPlayMediaKeys {
                 genuineArtist = lastGenuineArtist,
                 genuineAlbum = lastGenuineAlbum,
                 durationMillis = lastDurationMillis,
+                clusterLine1 = line1,
+                clusterLine2 = line2,
             )
         } else {
             // 3. 其余都是新歌，放行。包括《七里香》后面的《七里香 (Live)》、时长相同的下一首、进度停在中途、进度为空。
@@ -213,7 +224,20 @@ internal object CarPlayMediaKeys {
                 genuineArtist = genArtist,
                 genuineAlbum = genAlbum,
                 durationMillis = genDuration,
+                clusterLine1 = info.title,
+                clusterLine2 = info.artist,
             )
+        }
+    }
+
+    private fun joinNonBlank(first: String?, second: String?, separator: String): String? {
+        val a = first?.trim().orEmpty()
+        val b = second?.trim().orEmpty()
+        return when {
+            a.isNotEmpty() && b.isNotEmpty() -> "$a$separator$b"
+            a.isNotEmpty() -> a
+            b.isNotEmpty() -> b
+            else -> null
         }
     }
 

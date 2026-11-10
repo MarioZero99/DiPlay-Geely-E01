@@ -481,6 +481,92 @@ class CarPlayMediaKeysBroadcastTest {
         bridge.release()
     }
 
+    @Test
+    fun clusterLinesShowLyricOnlyForExistingThreeShapes() {
+        val base = CarPlayMediaKeys.filterLyricMetadata(
+            CarPlayNowPlaying(
+                title = "七里香", artist = "周杰伦", album = "七里香",
+                durationMillis = 300_000L, elapsedMillis = 0L, playing = true,
+            ),
+            null, null, null, null,
+        )
+        assertFalse(base.isLyric)
+        assertEquals("七里香", base.clusterLine1)
+        assertEquals("周杰伦", base.clusterLine2)
+
+        val shapeA = CarPlayNowPlaying(
+            title = "雨下整夜 我的爱溢出就像雨水", artist = "七里香", album = "七里香",
+            durationMillis = 300_000L, elapsedMillis = 20_000L, playing = true,
+        )
+        val a = CarPlayMediaKeys.filterLyricMetadata(
+            shapeA, base.genuineTitle, base.genuineArtist, base.genuineAlbum, base.durationMillis,
+        )
+        assertTrue(a.isLyric)
+        assertEquals("雨下整夜 我的爱溢出就像雨水", a.clusterLine1)
+        assertEquals("周杰伦 - 七里香", a.clusterLine2)
+        assertEquals("七里香", a.info.title)
+        assertEquals("周杰伦", a.info.artist)
+
+        val shapeB = CarPlayNowPlaying(
+            title = "院子落叶 跟我的思念厚厚一叠 - 七里香", artist = "周杰伦", album = "七里香",
+            durationMillis = 300_000L, elapsedMillis = 20_000L, playing = true,
+        )
+        val b = CarPlayMediaKeys.filterLyricMetadata(
+            shapeB, base.genuineTitle, base.genuineArtist, base.genuineAlbum, base.durationMillis,
+        )
+        assertTrue(b.isLyric)
+        assertEquals("院子落叶 跟我的思念厚厚一叠", b.clusterLine1)
+        assertEquals("周杰伦 - 七里香", b.clusterLine2)
+        assertEquals("七里香", b.info.title)
+
+        val shapeC = CarPlayNowPlaying(
+            title = "词：方文山", artist = "周杰伦", album = "七里香",
+            durationMillis = 300_000L, elapsedMillis = 0L, playing = true,
+        )
+        val c = CarPlayMediaKeys.filterLyricMetadata(
+            shapeC, base.genuineTitle, base.genuineArtist, base.genuineAlbum, base.durationMillis,
+        )
+        assertTrue(c.isLyric)
+        assertEquals("词：方文山", c.clusterLine1)
+        assertEquals("周杰伦 - 七里香", c.clusterLine2)
+        assertEquals("七里香", c.info.title)
+    }
+
+    @Test
+    fun clusterLinesKeepSongTitleWhenPacketIsNotALyric() {
+        val base = CarPlayMediaKeys.filterLyricMetadata(
+            CarPlayNowPlaying(
+                title = "七里香", artist = "周杰伦", album = "七里香",
+                durationMillis = 300_000L, elapsedMillis = 0L, playing = true,
+            ),
+            null, null, null, null,
+        )
+        val live = CarPlayNowPlaying(
+            title = "七里香 (Live)", artist = "周杰伦", album = "七里香",
+            durationMillis = 300_000L, elapsedMillis = 0L, playing = true,
+        )
+        val song = CarPlayMediaKeys.filterLyricMetadata(
+            live, base.genuineTitle, base.genuineArtist, base.genuineAlbum, base.durationMillis,
+        )
+        assertFalse(song.isLyric)
+        assertEquals("七里香 (Live)", song.clusterLine1)
+        assertEquals("周杰伦", song.clusterLine2)
+        assertEquals("七里香 (Live)", song.info.title)
+
+        val blank = CarPlayNowPlaying(
+            title = " - 七里香", artist = "周杰伦", album = "七里香",
+            durationMillis = 300_000L, elapsedMillis = 20_000L, playing = true,
+        )
+        val lyric = CarPlayMediaKeys.filterLyricMetadata(
+            blank, base.genuineTitle, base.genuineArtist, base.genuineAlbum, base.durationMillis,
+        )
+        assertTrue(lyric.isLyric)
+        assertEquals("七里香", lyric.clusterLine1)
+        assertEquals("周杰伦 - 七里香", lyric.clusterLine2)
+        assertEquals("七里香", lyric.info.title)
+        assertEquals("周杰伦", lyric.info.artist)
+    }
+
     private class FakeDimTransListener : IDimTransListener.Stub() {
         var sourceChangedCalls = 0
         var updateMediaCalls = 0
