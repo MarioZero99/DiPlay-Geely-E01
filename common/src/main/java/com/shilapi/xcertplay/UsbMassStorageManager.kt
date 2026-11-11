@@ -271,27 +271,55 @@ internal object UsbMassStorageManager {
                 device.init()
                 currentDevice = device
                 var partitions = runCatching { device.partitions }.getOrElse { emptyList() }
+                var openError: String? = null
                 if (partitions.isEmpty()) {
-                    DiagLog.w("UsbMassStorage", "device.partitions is empty, attempting Superfloppy / raw block fallback")
-                    val rawDevice = runCatching {
-                        val commField = UsbMassStorageDevice::class.java.getDeclaredField("usbCommunication").apply { isAccessible = true }
+                    DiagLog.w("UsbMassStorage", "device.partitions is empty, reading LUN 0 sector 0")
+                    try {
+                        val commField = UsbMassStorageDevice::class.java.getDeclaredField("usbCommunication")
+                        commField.isAccessible = true
                         val comm = commField.get(device) as? me.jahnen.libaums.core.usb.UsbCommunication
-                        if (comm != null) {
-                            me.jahnen.libaums.core.driver.BlockDeviceDriverFactory.createBlockDevice(comm, 0.toByte()).apply { init() }
-                        } else null
-                    }.getOrNull()
-                    if (rawDevice != null) {
-                        val entry = PartitionTableEntry(0, 0L, 0L)
-                        val fs = RobustFat32FileSystemCreator.read(entry, rawDevice)
-                            ?: runCatching { FileSystemFactory.createFileSystem(entry, rawDevice) }.getOrNull()
-                        if (fs != null) {
-                            val partition = Partition(rawDevice, entry)
-                            val fsField = Partition::class.java.getDeclaredField("fileSystem").apply { isAccessible = true }
-                            fsField.set(partition, fs)
-                            partitions = listOf(partition)
-                            device.partitions = partitions
-                            DiagLog.i("UsbMassStorage", "Successfully mounted raw Superfloppy FAT32 volume")
+                        if (comm == null) {
+                            openError = "no filesystem"
+                        } else {
+                            // Get Max LUN returns 0xFF here, so libaums never initializes a LUN and a
+                            // stalled control transfer can leave the bulk endpoints halted. Reset the
+                            // device, clear both halts, and read LUN 0 ourselves.
+                            runCatching {
+                                comm.controlTransfer(0x21, 0xFF, 0, comm.usbInterface.id, ByteArray(0), 0)
+                            }
+                            runCatching { comm.clearFeatureHalt(comm.outEndpoint) }
+                            runCatching { comm.clearFeatureHalt(comm.inEndpoint) }
+                            DiagLog.i("UsbMassStorage", "usb recover bulk-reset")
+                            val raw = me.jahnen.libaums.core.driver.BlockDeviceDriverFactory
+                                .createBlockDevice(comm, 0.toByte())
+                            raw.init()
+                            val sector = ByteArray(512)
+                            raw.read(0L, java.nio.ByteBuffer.wrap(sector))
+                            val decision = Fat32VolumeLayout.decide(sector)
+                            DiagLog.i("UsbMassStorage", decision.logLine)
+                            val fs = mountAtDecision(raw, decision)
+                            if (fs != null) {
+                                val lba = decision.mountLba ?: 0L
+                                val entry = PartitionTableEntry(
+                                    decision.partitionType, lba, decision.sectorCount,
+                                )
+                                val partition = Partition(raw, entry)
+                                val fsField = Partition::class.java.getDeclaredField("fileSystem")
+                                fsField.isAccessible = true
+                                fsField.set(partition, fs)
+                                partitions = listOf(partition)
+                                device.partitions = partitions
+                                DiagLog.i("UsbMassStorage", "usb partition mounted lba=$lba")
+                            } else if (decision.mountLba != null) {
+                                DiagLog.w("UsbMassStorage", "usb partition lba=${decision.mountLba} fat32=false")
+                                openError = "no filesystem"
+                            } else {
+                                openError = decision.error
+                            }
                         }
+                    } catch (e: Exception) {
+                        DiagLog.w("UsbMassStorage", "LUN 0 read failed", e)
+                        openError = "${e.javaClass.simpleName}: ${e.message}"
                     }
                 }
                 val primaryFs = partitions.mapNotNull { part ->
@@ -303,7 +331,7 @@ internal object UsbMassStorageManager {
                 lastOpenFacts = UsbOpenFacts(
                     partitionCount = partitions.size,
                     fat32 = primaryFs != null,
-                    error = if (primaryFs == null) "no filesystem" else null,
+                    error = if (primaryFs == null) openError ?: "no filesystem" else null,
                 )
                 if (primaryFs != null) {
                     cachedCapacity = primaryFs.capacity
