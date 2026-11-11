@@ -13,12 +13,14 @@ import android.os.Handler
 import android.os.Looper
 import me.jahnen.libaums.core.UsbMassStorageDevice
 import me.jahnen.libaums.core.driver.BlockDeviceDriver
+import me.jahnen.libaums.core.driver.BlockDeviceDriverFactory
 import me.jahnen.libaums.core.fs.FileSystem
 import me.jahnen.libaums.core.fs.FileSystemCreator
 import me.jahnen.libaums.core.fs.FileSystemFactory
 import me.jahnen.libaums.core.fs.fat32.Fat32FileSystem
 import me.jahnen.libaums.core.partition.Partition
 import me.jahnen.libaums.core.partition.PartitionTableEntry
+import me.jahnen.libaums.core.usb.UsbCommunication
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -277,33 +279,19 @@ internal object UsbMassStorageManager {
                     try {
                         val commField = UsbMassStorageDevice::class.java.getDeclaredField("usbCommunication")
                         commField.isAccessible = true
-                        val comm = commField.get(device) as? me.jahnen.libaums.core.usb.UsbCommunication
+                        val comm = commField.get(device) as? UsbCommunication
                         if (comm == null) {
                             openError = "no filesystem"
                         } else {
-                            // Get Max LUN returns 0xFF here, so libaums never initializes a LUN and a
-                            // stalled control transfer can leave the bulk endpoints halted. Reset the
-                            // device, clear both halts, and read LUN 0 ourselves.
-                            runCatching {
-                                comm.controlTransfer(0x21, 0xFF, 0, comm.usbInterface.id, ByteArray(0), 0)
-                            }
-                            runCatching { comm.clearFeatureHalt(comm.outEndpoint) }
-                            runCatching { comm.clearFeatureHalt(comm.inEndpoint) }
-                            DiagLog.i("UsbMassStorage", "usb recover bulk-reset")
-                            val raw = me.jahnen.libaums.core.driver.BlockDeviceDriverFactory
-                                .createBlockDevice(comm, 0.toByte())
-                            raw.init()
-                            val sector = ByteArray(512)
-                            raw.read(0L, java.nio.ByteBuffer.wrap(sector))
-                            val decision = Fat32VolumeLayout.decide(sector)
-                            DiagLog.i("UsbMassStorage", decision.logLine)
-                            val fs = mountAtDecision(raw, decision)
+                            val recovery = recoverLunZero(comm)
+                            val fs = recovery.fileSystem
+                            val decision = recovery.decision
                             if (fs != null) {
                                 val lba = decision.mountLba ?: 0L
                                 val entry = PartitionTableEntry(
                                     decision.partitionType, lba, decision.sectorCount,
                                 )
-                                val partition = Partition(raw, entry)
+                                val partition = Partition(recovery.blockDevice, entry)
                                 val fsField = Partition::class.java.getDeclaredField("fileSystem")
                                 fsField.isAccessible = true
                                 fsField.set(partition, fs)
@@ -363,6 +351,40 @@ internal object UsbMassStorageManager {
         val entry = PartitionTableEntry(decision.partitionType, lba, decision.sectorCount)
         val target = if (lba == 0L) device else Partition(device, entry)
         return RobustFat32FileSystemCreator.read(entry, target)
+    }
+
+    /** The LUN 0 block device and what [Fat32VolumeLayout] made of its first sector. */
+    internal class LunZeroRecovery(
+        val decision: Fat32VolumeDecision,
+        val blockDevice: BlockDeviceDriver,
+        val fileSystem: FileSystem?,
+    )
+
+    /**
+     * Recovers a stick whose partition table libaums could not read. Get Max LUN returns `0xFF` on
+     * the target stick, so libaums never initializes a LUN, and a stalled control transfer can leave
+     * the bulk endpoints halted. Reset the device, clear both halts, then read LUN 0's first sector
+     * and mount what [Fat32VolumeLayout] decides. [createBlockDevice] is a seam for the unit test.
+     */
+    internal fun recoverLunZero(
+        comm: UsbCommunication,
+        createBlockDevice: (UsbCommunication, Byte) -> BlockDeviceDriver = { communication, lun ->
+            BlockDeviceDriverFactory.createBlockDevice(communication, lun)
+        },
+    ): LunZeroRecovery {
+        runCatching {
+            comm.controlTransfer(0x21, 0xFF, 0, comm.usbInterface.id, ByteArray(0), 0)
+        }
+        runCatching { comm.clearFeatureHalt(comm.outEndpoint) }
+        runCatching { comm.clearFeatureHalt(comm.inEndpoint) }
+        DiagLog.i("UsbMassStorage", "usb recover bulk-reset")
+        val raw = createBlockDevice(comm, 0.toByte())
+        raw.init()
+        val sector = ByteArray(512)
+        raw.read(0L, ByteBuffer.wrap(sector))
+        val decision = Fat32VolumeLayout.decide(sector)
+        DiagLog.i("UsbMassStorage", decision.logLine)
+        return LunZeroRecovery(decision, raw, mountAtDecision(raw, decision))
     }
 
     /**

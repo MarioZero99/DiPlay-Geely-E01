@@ -1,6 +1,9 @@
 package com.shilapi.xcertplay
 
+import android.hardware.usb.UsbEndpoint
+import android.hardware.usb.UsbInterface
 import me.jahnen.libaums.core.driver.BlockDeviceDriver
+import me.jahnen.libaums.core.usb.UsbCommunication
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -8,6 +11,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.nio.ByteBuffer
+import java.util.Locale
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -59,6 +63,17 @@ class Fat32VolumeLayoutTest {
         val back = ByteArray(payload.size)
         me.jahnen.libaums.core.fs.UsbFileInputStream(file).use { it.read(back) }
         org.junit.Assert.assertArrayEquals(payload, back)
+    }
+
+    @Test fun lunZeroRecoveryResetsBulkEndpointsBeforeReadingSectorZero() {
+        val disk = MemoryBlockDevice()
+        TinyFat32.install(disk, partitionLba = 64)
+        val comm = FakeUsbCommunication()
+        val recovery = UsbMassStorageManager.recoverLunZero(comm) { _, _ -> disk }
+        org.junit.Assert.assertNotNull(recovery.fileSystem)
+        org.junit.Assert.assertSame(disk, recovery.blockDevice)
+        assertEquals(64L, recovery.decision.mountLba)
+        assertEquals(listOf("control 21 ff 0 1 0", "halt out", "halt in"), comm.calls)
     }
 
     private fun signatureSector(): ByteArray = ByteArray(512).also {
@@ -123,6 +138,65 @@ private class MemoryBlockDevice : BlockDeviceDriver {
         }
     }
 }
+
+/**
+ * Records the control transfers and halt clears the recovery path issues. The block device comes
+ * from the caller's factory, so no SCSI exchange happens.
+ */
+private class FakeUsbCommunication : UsbCommunication {
+    val calls = mutableListOf<String>()
+    private val out = usbEndpoint(0x01)
+    private val input = usbEndpoint(0x81)
+    private val iface = usbInterface(1)
+
+    override val inEndpoint: UsbEndpoint get() = input
+    override val outEndpoint: UsbEndpoint get() = out
+    override val usbInterface: UsbInterface get() = iface
+
+    override fun bulkOutTransfer(buffer: ByteBuffer): Int = 0
+    override fun bulkInTransfer(buffer: ByteBuffer): Int = 0
+    override fun controlTransfer(
+        requestType: Int,
+        request: Int,
+        value: Int,
+        index: Int,
+        buffer: ByteArray,
+        length: Int,
+    ): Int {
+        calls += String.format(Locale.US, "control %02x %02x %d %d %d", requestType, request, value, index, length)
+        return 0
+    }
+
+    override fun resetDevice() {}
+    override fun clearFeatureHalt(endpoint: UsbEndpoint) {
+        calls += if (endpoint === out) "halt out" else "halt in"
+    }
+
+    override fun close() {}
+}
+
+// The compile SDK hides these constructors; the runtime class Robolectric loads has them public.
+private fun usbEndpoint(address: Int): UsbEndpoint = UsbEndpoint::class.java
+    .getDeclaredConstructor(
+        Int::class.javaPrimitiveType,
+        Int::class.javaPrimitiveType,
+        Int::class.javaPrimitiveType,
+        Int::class.javaPrimitiveType,
+    )
+    .apply { isAccessible = true }
+    .newInstance(address, 0x02, 512, 0)
+
+private fun usbInterface(id: Int): UsbInterface = UsbInterface::class.java
+    .getDeclaredConstructor(
+        Int::class.javaPrimitiveType,
+        Int::class.javaPrimitiveType,
+        String::class.java,
+        Int::class.javaPrimitiveType,
+        Int::class.javaPrimitiveType,
+        Int::class.javaPrimitiveType,
+    )
+    .apply { isAccessible = true }
+    .newInstance(id, 0, "mass storage", 8, 6, 80)
 
 /**
  * One FAT32 partition starting at [partitionLba], small enough to read in a test.
