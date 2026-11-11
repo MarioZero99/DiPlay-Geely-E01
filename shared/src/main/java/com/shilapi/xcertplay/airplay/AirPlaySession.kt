@@ -41,6 +41,17 @@ interface AirPlaySessionListener {
 
     fun onSessionActive(session: AirPlaySession) {}
     fun onSessionEnded(session: AirPlaySession) {}
+
+    /**
+     * Whether a CarPlay session is up, on every path that changes it.
+     *
+     * Separate from [onSessionActive]/[onSessionEnded] because a restart drops the session object
+     * without reporting an end: the old run is stale, and telling the page it ended would schedule a
+     * second reconnect on top of the one the controller is already doing. Media-key routing still
+     * has to stop claiming the wheel the moment the session object goes, so the controller says so
+     * here without invoking the page's reconnect logic.
+     */
+    fun onSessionLiveChanged(live: Boolean) {}
     fun onVideoFrameRendered(session: AirPlaySession) {}
     fun onTransportError(message: String) {}
     fun onDeviceInfo(session: AirPlaySession, info: AirPlayDeviceInfo) {}

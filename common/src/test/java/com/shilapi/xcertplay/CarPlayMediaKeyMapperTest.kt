@@ -41,6 +41,21 @@ class CarPlayMediaKeyMapperTest {
     }
 
     @Test
+    fun aKeyIsClaimedOnlyWhileCarPlayIsLive() {
+        val table = SteeringWheelKeyMappings.DEFAULT
+
+        assertTrue(CarPlayMediaKeyMapper.claims(KeyEvent.KEYCODE_MEDIA_NEXT, table, true))
+        assertFalse(CarPlayMediaKeyMapper.claims(KeyEvent.KEYCODE_MEDIA_NEXT, table, false))
+        assertFalse(
+            CarPlayMediaKeyMapper.claims(
+                KeyEvent.KEYCODE_MEDIA_NEXT,
+                SteeringWheelKeyMappings.from(emptyMap()),
+                true,
+            ),
+        )
+    }
+
+    @Test
     fun whatCountsAsOursIsWhatTheDriverBound() {
         val rebound = SteeringWheelKeyMappings.DEFAULT
             .withKeyCodes(SteeringWheelCommand.NEXT_TRACK, listOf(KeyEvent.KEYCODE_MEDIA_FAST_FORWARD))

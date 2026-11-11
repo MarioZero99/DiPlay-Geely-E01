@@ -54,10 +54,35 @@ internal object CarPlayMediaKeys {
         audioFocusTarget = null
     }
 
+    /**
+     * Releases the media-button claim now, whatever controller the backend happens to hold.
+     *
+     * The identity check in [detach] exists so a superseded controller cannot tear down the live
+     * one. At the end of the app there is nothing left to protect: a backend that still holds a
+     * controller for any reason must not keep the media session alive after the driver has closed
+     * DiPlay, or the wheel stays answered for by an app that is gone.
+     */
+    fun releaseClaim() {
+        backend.release()
+        audioFocusTarget = null
+    }
+
     fun onMediaAudioChanged(active: Boolean) = mainHandler.post { backend.update(active) }
 
     fun onClusterMetadataEnabledChanged(enabled: Boolean) = mainHandler.post {
         backend.onClusterMetadataEnabledChanged(enabled)
+    }
+
+    /**
+     * Whether a CarPlay session is live, as the system's media-button routing sees it.
+     *
+     * On API 21+ the system hands a media key straight to the media-button session. A session left
+     * active after the picture is gone therefore keeps the wheel, and declining the event in the
+     * callback is not a promise that it reaches the head unit's own player. Taking the session down
+     * while nothing is being served is what actually hands the wheel back.
+     */
+    fun onSessionLiveChanged(live: Boolean) = mainHandler.post {
+        backend.onSessionLiveChanged(live)
     }
 
     /** Receives the same focus callbacks as the media-button session. Cleared by [detach]. */
@@ -273,12 +298,21 @@ internal object CarPlayMediaKeys {
         fun regainFocus()
         fun dispatch(event: KeyEvent): Boolean
         fun onClusterMetadataEnabledChanged(enabled: Boolean)
+        fun onSessionLiveChanged(live: Boolean)
+        fun release()
     }
 
     private abstract class FocusBackend : Backend {
         protected var context: Context? = null
         protected var controller: CarPlayController? = null
         private var focusHeld = false
+
+        /** True while CarPlay is being served. Only a live session may take the wheel. */
+        @Volatile protected var sessionLive = false
+
+        override fun onSessionLiveChanged(live: Boolean) {
+            sessionLive = live
+        }
         private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
             Log.i(TAG, "audio focus change=$change")
             if (change == AudioManager.AUDIOFOCUS_LOSS) focusHeld = false
@@ -323,14 +357,16 @@ internal object CarPlayMediaKeys {
          */
         override fun dispatch(event: KeyEvent): Boolean {
             val mappings = mappings()
-            if (!CarPlayMediaKeyMapper.handles(event.keyCode, mappings)) {
+            val live = controller?.hasLiveAirPlaySession() == true
+            if (!CarPlayMediaKeyMapper.claims(event.keyCode, mappings, live)) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                    DiagLog.i(TAG, "steering key unmapped ${describe(event)} -- left to the head unit")
+                    val reason = if (CarPlayMediaKeyMapper.handles(event.keyCode, mappings)) {
+                        "no live CarPlay session"
+                    } else {
+                        "unmapped"
+                    }
+                    DiagLog.i(TAG, "steering key $reason ${describe(event)} -- left to the head unit")
                 }
-                return false
-            }
-            if (controller == null) {
-                DiagLog.i(TAG, "steering key ${describe(event)} -- no session, left to the head unit")
                 return false
             }
             CarPlayMediaKeyMapper.mediaIndex(event.keyCode, event.action, event.repeatCount, mappings)?.let(::send)
@@ -338,7 +374,7 @@ internal object CarPlayMediaKeys {
         }
 
         /** The driver's wheel table as stored. Read per press, as the reference does. */
-        private fun mappings(): SteeringWheelKeyMappings = context
+        protected fun mappings(): SteeringWheelKeyMappings = context
             ?.let { AirPlayPersistence.loadSteeringWheelKeyMappings(it) }
             ?: SteeringWheelKeyMappings.DEFAULT
 
@@ -350,11 +386,12 @@ internal object CarPlayMediaKeys {
         /** Enough to name the key in a report: the number alone says nothing about which one it was. */
         protected fun describe(event: KeyEvent) = "keyCode=${event.keyCode} name=${KeyEvent.keyCodeToString(event.keyCode)}"
 
-        protected open fun release() {
+        override fun release() {
             val audio = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             @Suppress("DEPRECATION")
             audio?.abandonAudioFocus(focusListener)
             focusHeld = false
+            sessionLive = false
             controller = null
             context = null
         }
@@ -449,8 +486,16 @@ internal object CarPlayMediaKeys {
                         MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS,
                 )
                 setMediaButtonReceiver(mediaButtonReceiver)
-                setCallback(CarPlayMediaCallback { index, _ -> send(index) }, mainHandler)
-                isActive = true
+                setCallback(
+                    CarPlayMediaCallback(
+                        // Qualified: inside MediaSession.apply, `controller` is the session's own
+                        // MediaController property, not this backend's controller.
+                        live = { this@Api21Backend.controller?.hasLiveAirPlaySession() == true },
+                        mappings = { mappings() },
+                    ) { index, _ -> send(index) },
+                    mainHandler,
+                )
+                isActive = sessionLive
                 session = this
             }
         }
@@ -469,7 +514,9 @@ internal object CarPlayMediaKeys {
             }
             val wasNull = session == null
             val currentSession = ensureSession(currentContext)
-            currentSession.isActive = true
+            // Audio state is not session liveness: a stream that stops while the picture is still up
+            // must not take the session down, and a reconnect must not put it up.
+            currentSession.isActive = sessionLive
             if (active) regainFocus()
             val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
                 PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or
@@ -585,13 +632,19 @@ internal object CarPlayMediaKeys {
             } else {
                 val currentContext = context ?: return
                 if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) return
-                session?.isActive = true
+                session?.isActive = sessionLive
                 controller?.currentNowPlaying?.let { info ->
                     if (info.title != null || info.artist != null || info.album != null) {
                         applyNowPlaying(info)
                     }
                 }
             }
+        }
+
+        override fun onSessionLiveChanged(live: Boolean) {
+            super.onSessionLiveChanged(live)
+            // The session may not exist yet (no media audio has played). ensureSession reads the field.
+            session?.isActive = live
         }
 
         private fun clearClusterMetadata() {
@@ -613,7 +666,10 @@ internal object CarPlayMediaKeys {
                             0f,
                         ).build(),
                     )
-                    sess.isActive = false
+                    // What this setting clears is the metadata, not the session. While CarPlay is
+                    // live the session still owns the media-button routing with nothing to show;
+                    // taking it down here would hand the wheel back mid-session.
+                    if (!sessionLive) sess.isActive = false
                 }.onFailure { DiagLog.w(TAG, "failed to clear cluster metadata", it) }
             }
             resetBroadcastState()
@@ -727,20 +783,27 @@ internal object CarPlayMediaKeys {
 
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 internal class CarPlayMediaCallback(
+    private val live: () -> Boolean,
+    private val mappings: () -> SteeringWheelKeyMappings,
     private val send: (Int, Bundle?) -> Unit,
 ) : MediaSession.Callback() {
-    override fun onPlay() = send(CarPlayMediaButton.PLAY, null)
-    override fun onPause() = send(CarPlayMediaButton.PAUSE, null)
-    override fun onSkipToNext() = send(CarPlayMediaButton.NEXT, null)
-    override fun onSkipToPrevious() = send(CarPlayMediaButton.PREVIOUS, null)
+    // Transport commands belong to the same rule as a wheel press: a controller that still holds this
+    // token can call them after the session is gone, and forwarding one would answer for a session
+    // that is not there.
+    override fun onPlay() { if (live()) send(CarPlayMediaButton.PLAY, null) }
+    override fun onPause() { if (live()) send(CarPlayMediaButton.PAUSE, null) }
+    override fun onSkipToNext() { if (live()) send(CarPlayMediaButton.NEXT, null) }
+    override fun onSkipToPrevious() { if (live()) send(CarPlayMediaButton.PREVIOUS, null) }
 
     override fun onMediaButtonEvent(intent: Intent): Boolean {
         @Suppress("DEPRECATION")
         val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return false
-        // The same table the broadcast path reads. A press the driver has not bound is declined here
-        // rather than eaten, so the head unit's own handling of that key still happens.
-        if (!CarPlayMediaKeyMapper.handles(event.keyCode)) return false
-        CarPlayMediaKeyMapper.mediaIndex(event.keyCode, event.action, event.repeatCount)?.let { send(it, null) }
+        // The same table and the same liveness question as the broadcast path. A press the driver has
+        // not bound, or one arriving while no CarPlay is being served, is declined here rather than
+        // eaten, so the head unit's own handling of that key still happens.
+        val table = mappings()
+        if (!CarPlayMediaKeyMapper.claims(event.keyCode, table, live())) return false
+        CarPlayMediaKeyMapper.mediaIndex(event.keyCode, event.action, event.repeatCount, table)?.let { send(it, null) }
         return true
     }
 }

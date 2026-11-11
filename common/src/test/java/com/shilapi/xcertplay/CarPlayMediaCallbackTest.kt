@@ -14,7 +14,10 @@ import org.robolectric.annotation.Config
 @Config(sdk = [29], manifest = Config.NONE)
 class CarPlayMediaCallbackTest {
     private val sent = mutableListOf<Int>()
-    private val callback = CarPlayMediaCallback { index, _ -> sent += index }
+    private val callback = CarPlayMediaCallback(
+        live = { true },
+        mappings = { SteeringWheelKeyMappings.DEFAULT },
+    ) { index, _ -> sent += index }
 
     @Test
     fun controllerPlayAndPauseAreExplicit() {
@@ -50,6 +53,45 @@ class CarPlayMediaCallbackTest {
         }
 
         assertEquals(emptyList<Int>(), sent)
+    }
+
+    /**
+     * The session path reads the driver's table, not the default one. A key the driver took off the
+     * wheel must not come back through the MediaSession.
+     */
+    @Test
+    fun theSessionPathReadsTheDriversTable() {
+        val unbound = CarPlayMediaCallback(
+            live = { true },
+            mappings = {
+                SteeringWheelKeyMappings.from(
+                    mapOf(KeyEvent.KEYCODE_MEDIA_PREVIOUS to SteeringWheelCommand.PREVIOUS_TRACK),
+                )
+            },
+        ) { _, _ -> }
+
+        assertFalse(
+            unbound.onMediaButtonEvent(
+                button(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT, 0)),
+            ),
+        )
+    }
+
+    /** No live CarPlay session: the press belongs to the head unit, even for a bound key. */
+    @Test
+    fun noLiveSessionLeavesThePressToTheHeadUnit() {
+        val offlineSent = mutableListOf<Int>()
+        val offline = CarPlayMediaCallback(
+            live = { false },
+            mappings = { SteeringWheelKeyMappings.DEFAULT },
+        ) { index, _ -> offlineSent += index }
+
+        assertFalse(
+            offline.onMediaButtonEvent(
+                button(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT, 0)),
+            ),
+        )
+        assertEquals(emptyList<Int>(), offlineSent)
     }
 
     @Test

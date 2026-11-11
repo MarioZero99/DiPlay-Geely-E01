@@ -15,6 +15,16 @@ object CarPlayMediaKeyMapper {
         mappings: SteeringWheelKeyMappings = SteeringWheelKeyMappings.DEFAULT,
     ): Boolean = mappings.handles(keyCode)
 
+    /**
+     * Whether DiPlay may take this press at all: the driver bound the key, and CarPlay is live.
+     *
+     * Both media-button paths ask this, and both pass the driver's table. A controller object is not a
+     * live session — during a reconnect it exists while no CarPlay session is up, and answering for
+     * it would abort the broadcast the head unit's own player needed.
+     */
+    fun claims(keyCode: Int, mappings: SteeringWheelKeyMappings, sessionLive: Boolean): Boolean =
+        sessionLive && mappings.handles(keyCode)
+
     fun command(
         keyCode: Int,
         action: Int,

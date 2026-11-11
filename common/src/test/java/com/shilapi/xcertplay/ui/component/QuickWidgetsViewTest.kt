@@ -99,9 +99,11 @@ class QuickWidgetsViewTest {
             onEditWifiPass = {},
             onAudioSelect = {},
             onOpenDrawer = {},
+            onRestartBluetooth = {},
+            bluetoothRestartEnabled = true,
             sameWifiOffered = sameWifiOffered,
         )
-        view.updateState(mode, "Geely-5G", null, "Stream 3")
+        view.updateState(mode, "Geely-5G", null, "Stream 3", bluetoothRestartEnabled = true)
         return view
     }
 
