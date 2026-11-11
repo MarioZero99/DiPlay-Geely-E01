@@ -37,6 +37,8 @@ class QuickWidgetsView(
     private val onEditWifiPass: () -> Unit,
     private val onAudioSelect: () -> Unit,
     private val onOpenDrawer: () -> Unit,
+    private val onRestartBluetooth: () -> Unit,
+    bluetoothRestartEnabled: Boolean,
     /**
      * Whether the same-network route is in this package. It is experimental and only a local build
      * carries it; without it the card is the car hotspot and nothing else, rather than two segments
@@ -52,6 +54,7 @@ class QuickWidgetsView(
     private val hotspotEdit: Button
     private val wifiEdit: Button
     private val audioValue: TextView
+    private val bluetoothRow: LinearLayout
 
     /**
      * The mode the segment and the two rows are drawn for. The taps read this rather than the mode
@@ -68,6 +71,7 @@ class QuickWidgetsView(
         val hotspotSsid: String,
         val joinedWifi: String?,
         val audioChannelLabel: String,
+        val bluetoothRestartEnabled: Boolean,
     )
 
     init {
@@ -166,9 +170,37 @@ class QuickWidgetsView(
         addView(audio, LayoutParams(-1, 0, 1.0f))
 
         addView(View(context).apply { layoutParams = LayoutParams(1, dp(14)) })
+
+        // Recovery, next to the way to settings rather than inside the connection card: the card is
+        // the thing being pressed when the phone will not connect, and a destructive control beside
+        // it would be one thumb away from "连接手机". The row is the same shape as the settings row
+        // below it, and it is always visible — a driver whose Bluetooth is down should not have to
+        // find a settings page first.
+        bluetoothRow = row().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = pressable(palette.cardBg, dp(14).toFloat(), dp(1), palette.cardBorder)
+            setPadding(dp(18), 0, dp(18), 0)
+            isClickable = true
+            isFocusable = true
+            addView(TextView(context).apply {
+                text = context.getString(R.string.bluetooth_home_row_label)
+                textSize = 13.5f
+                setTextColor(palette.textMuted)
+            }, LayoutParams(0, -2, 1f))
+            addView(TextView(context).apply {
+                text = context.getString(R.string.bluetooth_restart_short)
+                textSize = 13f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(palette.accent)
+            })
+            setOnClickListener { if (isEnabled) onRestartBluetooth() }
+        }
+        addView(bluetoothRow, LayoutParams(-1, dp(64)))
+
+        addView(View(context).apply { layoutParams = LayoutParams(1, dp(14)) })
         addView(drawerCard(onOpenDrawer), LayoutParams(-1, dp(64)))
 
-        updateState(mode, hotspotSsid, joinedWifi, audioChannelLabel)
+        updateState(mode, hotspotSsid, joinedWifi, audioChannelLabel, bluetoothRestartEnabled)
     }
 
     /**
@@ -184,11 +216,17 @@ class QuickWidgetsView(
         hotspotSsid: String,
         joinedWifi: String?,
         audioChannelLabel: String,
+        bluetoothRestartEnabled: Boolean,
     ) {
-        val state = WidgetState(mode, hotspotSsid, joinedWifi, audioChannelLabel)
+        val state = WidgetState(mode, hotspotSsid, joinedWifi, audioChannelLabel, bluetoothRestartEnabled)
         if (state == shownState) return
         shownState = state
         currentMode = mode
+
+        // The row stays where it is and says "restart" in the accent colour; while a session owns the
+        // car's Bluetooth it is visibly out of reach rather than a press that silently does nothing.
+        bluetoothRow.isEnabled = bluetoothRestartEnabled
+        bluetoothRow.alpha = if (bluetoothRestartEnabled) 1f else 0.4f
 
         val isHotspot = mode == WirelessHotspotMode.MANUAL
         val isExistingWifi = sameWifiOffered && mode == WirelessHotspotMode.EXISTING_WIFI

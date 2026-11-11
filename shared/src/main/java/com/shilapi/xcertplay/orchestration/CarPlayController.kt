@@ -557,6 +557,7 @@ class CarPlayController(
                 "AirPlay session active controller=${session.controllerId ?: "unknown"} " +
                     "peer=${session.host}",
             )
+            uiListener?.onSessionLiveChanged(true)
             uiListener?.onSessionActive(session)
         }
 
@@ -571,6 +572,9 @@ class CarPlayController(
                 }
                 playingResult?.let { playbackListener?.invoke(it) }
                 clearedMetadata?.let { nowPlayingListener?.invoke(it) }
+                // Inside the identity check: a late end for a session this controller no longer
+                // holds is not this session ending, and must not latch the wheel back to the car.
+                uiListener?.onSessionLiveChanged(false)
             }
             debugLog("AirPlay session ended peer=${session.host}")
             uiListener?.onSessionEnded(session)
@@ -628,6 +632,22 @@ class CarPlayController(
         }
     }
 
+    /**
+     * Drops the session object a restart or teardown supersedes, without invoking the page's
+     * "session ended, reconnect" path.
+     *
+     * The run being replaced has already been marked stale, so its own end callback is ignored;
+     * without this the controller would go on saying a session is up while the next run is still
+     * seconds away, and media keys would keep aborting the broadcast the head unit needed.
+     */
+    private fun dropActiveSessionSilently() {
+        val ended = activeSession ?: return
+        activeSession = null
+        touchDispatch.clear()
+        uiListener?.onSessionLiveChanged(false)
+        debugLog("AirPlay session dropped peer=${ended.host}")
+    }
+
     fun attachUi(
         listener: AirPlaySessionListener,
         reportStatus: (CarPlayStatus) -> Unit,
@@ -644,6 +664,15 @@ class CarPlayController(
     fun hasActiveAirPlayAttachment(): Boolean = synchronized(lifecycleLock) {
         !closed && vpnService?.isAttached() == true
     }
+
+    /**
+     * Whether a CarPlay session is up right now — an AirPlay session is attached and has not been
+     * dropped, not a bring-up or a reconnect. It is the controller's answer, not the host page's
+     * visibility: CarPlay stays connected while the car's own UI is in front. Media-key routing asks
+     * this; a controller that exists is only an attempt, and an attempt must not take the driver's
+     * wheel away from the head unit's own player.
+     */
+    fun hasLiveAirPlaySession(): Boolean = activeSession != null
 
     fun start() {
         synchronized(this) {
@@ -1214,6 +1243,9 @@ class CarPlayController(
             return
         }
         wirelessGeneration.incrementAndGet()
+        // The run being replaced is over the moment this decision is made; do not let the backoff
+        // window keep claiming the wheel for a session the old network can no longer carry.
+        dropActiveSessionSilently()
         Thread(
             {
                 debugLog("wireless restart scheduled with backoff=${backoff}ms (attempt=${wirelessRestartLimiter.currentAttempts})")
@@ -2683,6 +2715,7 @@ class CarPlayController(
     }
 
     private fun closeWirelessStack(service: CarPlayVpnService? = vpnService) {
+        dropActiveSessionSilently()
         val diagnostics = wirelessDiagnostics
         wirelessDiagnostics = null
         diagnostics?.close()

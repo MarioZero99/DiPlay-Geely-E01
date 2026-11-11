@@ -107,6 +107,7 @@ class DiPlayActivity : ComponentActivity() {
     private var activeSettingsTab: SettingsTab = SettingsTab.CONNECTION
     /** The exit question, while it is up: one instance, so a second press cannot stack a second sheet. */
     private var exitSheet: ConfirmSheetView? = null
+    private var bluetoothRestartSheet: ConfirmSheetView? = null
     /** The palette this redraw resolved to; the cockpit's views are built from it. */
     private var palette: ThemePalette = CockpitThemeManager.ZEEKR_WHITE_PALETTE
     /**
@@ -345,6 +346,7 @@ class DiPlayActivity : ComponentActivity() {
                 // The exit question is drawn over everything else, so it is answered or dismissed
                 // before back is allowed to mean anything about pages.
                 exitSheet?.let { it.dismiss(); return }
+                bluetoothRestartSheet?.let { it.dismiss(); return }
                 // The firmware page is left by its own control and by nothing else while a write is in
                 // flight: back would take the driver off the one screen that says what is happening.
                 if (page == PAGE_FIRMWARE && firmwareRunning()) return
@@ -507,7 +509,7 @@ class DiPlayActivity : ComponentActivity() {
         // A route that no longer exists — "wireless" and "wired" were pages once — lands on the home
         // page rather than on a header with nothing under it.
         if (page !in KNOWN_PAGES) page = "home"
-        hero = null; widgets = null; cockpitHost = null; exitSheet = null
+        hero = null; widgets = null; cockpitHost = null; exitSheet = null; bluetoothRestartSheet = null
         // exportSheet stays. The page underneath is rebuilt; the card is put back after setContentView.
         // Read here rather than per view: the car's own day/night signal arrives as a configuration
         // change, which calls render(), so one read per redraw is exactly one read per signal.
@@ -704,6 +706,8 @@ class DiPlayActivity : ComponentActivity() {
             },
             onAudioSelect = { openSettings(SettingsTab.AUDIO) },
             onOpenDrawer = { openSettings(SettingsTab.CONNECTION) },
+            onRestartBluetooth = { confirmBluetoothRestart() },
+            bluetoothRestartEnabled = !CarPlayBackgroundSession.hasSession() && !bluetoothRestartInProgress,
             sameWifiOffered = WirelessHotspotMode.EXISTING_WIFI in connectionReport().wirelessModes,
         )
         widgets = quick
@@ -1282,14 +1286,23 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun confirmBluetoothRestart() {
         if (bluetoothRestartInProgress || CarPlayBackgroundSession.hasSession()) return
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.bluetooth_governance_title))
-            .setMessage(getString(R.string.bluetooth_restart_confirm_body))
-            .setNegativeButton(getString(R.string.cancel), null)
-            .setPositiveButton(getString(R.string.maintenance_continue)) { _, _ ->
+        if (exitSheet != null || bluetoothRestartSheet != null) return
+        val host = cockpitHost ?: findViewById<ViewGroup>(android.R.id.content) ?: return
+        val sheet = ConfirmSheetView(
+            this,
+            palette,
+            title = getString(R.string.bluetooth_restart_action),
+            body = getString(R.string.bluetooth_restart_confirm_body),
+            confirmLabel = getString(R.string.bluetooth_restart_confirm_action),
+            cancelLabel = getString(R.string.cancel),
+            onConfirm = {
+                bluetoothRestartSheet = null
                 runBluetoothRestart()
-            }
-            .show()
+            },
+            onDismiss = { bluetoothRestartSheet = null },
+        )
+        bluetoothRestartSheet = sheet
+        host.addView(sheet, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun runBluetoothRestart() {
@@ -1335,6 +1348,10 @@ class DiPlayActivity : ComponentActivity() {
      */
     private fun closeTheApp() {
         VehicleGovernance.onAppExit()
+        // The wheel goes back to the head unit before the process does. With no session stored the
+        // code below kills the process without ever reaching shutdown(), and the media session is
+        // exactly the thing the driver must not keep after closing DiPlay.
+        CarPlayMediaKeys.releaseClaim()
         releaseProcessWirelessResources(applicationContext)
         CarPlayBackgroundSession.exit { android.os.Process.killProcess(android.os.Process.myPid()) }
     }
@@ -3400,6 +3417,7 @@ class DiPlayActivity : ComponentActivity() {
             hotspotSsid(),
             joinedWifiName(),
             audioChannelLabel(),
+            !CarPlayBackgroundSession.hasSession() && !bluetoothRestartInProgress,
         )
     }
     private fun reportFileName() = "DiPlay-${SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())}.txt"

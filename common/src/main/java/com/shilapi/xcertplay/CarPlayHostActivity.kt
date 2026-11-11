@@ -2139,6 +2139,13 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private fun createSessionListener(controllerGeneration: Int): AirPlaySessionListener =
         object : AirPlaySessionListener {
+            override fun onSessionLiveChanged(live: Boolean) {
+                // The controller's own answer, including the restarts whose end callback is
+                // suppressed. Not generation-guarded: a stale-generation live session is still a
+                // session the media keys must not claim.
+                CarPlayMediaKeys.onSessionLiveChanged(live)
+            }
+
             override fun onSessionActive(session: AirPlaySession) {
                 runOnUiThread {
                     if (controllerGeneration != restartGeneration) {
@@ -2268,6 +2275,7 @@ class CarPlayHostActivity : ComponentActivity() {
         controller = snapshot.controller
         sink = snapshot.sink
         CarPlayMediaKeys.bindAudioFocusTarget(snapshot.sink::onExternalAudioFocus)
+        CarPlayMediaKeys.onSessionLiveChanged(snapshot.controller.hasLiveAirPlaySession())
         CarPlayBackgroundSession.store(snapshot.controller, snapshot.sink, snapshot.width, snapshot.height, this) { terminate, completion ->
             runOnUiThread {
                 shutdown(terminateProcess = terminate, reason = "DiPlay disconnect", completion = completion)
@@ -2700,6 +2708,10 @@ class CarPlayHostActivity : ComponentActivity() {
         val oldController = controller
         val oldSink = sink
         CarPlayMediaKeys.detach(oldController)
+        // detach() only releases the controller it was handed. This session is over either way, so
+        // take the claim down unconditionally as well — the quick-bar exit and the page's own exit
+        // both end here, and neither may leave the media session behind.
+        CarPlayMediaKeys.releaseClaim()
         CarPlayBackgroundSession.clear(oldController)
         controller = null
         sink = null
