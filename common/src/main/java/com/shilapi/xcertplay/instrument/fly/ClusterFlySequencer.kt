@@ -41,6 +41,14 @@ object ClusterFlySequencer {
 
     // The broadcasts themselves. Names are the factory's, typos included.
 
+    const val PACKAGE_EXTRASERVICE = "com.neusoft.extraservice"
+
+    /** The receiver that turns KEY_TYPE 10019 into the navigation flag. An implicit broadcast can miss it. */
+    const val RECEIVER_NAV_STATE = "com.neusoft.extraservice.receiver.AutoNaviReceiver"
+
+    /** The receiver that sends opcode 1885. It drops the gesture while the navigation flag is off. */
+    const val RECEIVER_THREE_FINGER = "com.neusoft.extraservice.receiver.ThreeFingerReceiver"
+
     const val ACTION_NAV_STATE = "AUTONAVI_STANDARD_BROADCAST_SEND"
     const val EXTRA_KEY_TYPE = "KEY_TYPE"
     const val KEY_TYPE_NAV_STATE = 10019

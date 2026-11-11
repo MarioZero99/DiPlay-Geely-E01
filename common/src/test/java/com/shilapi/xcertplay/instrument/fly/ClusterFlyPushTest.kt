@@ -73,10 +73,21 @@ class ClusterFlyPushTest {
 
             assertTrue(lines.contains("fly.profile 100"))
             assertFalse(lines.contains("fly.push start reencode"))
+            assertFalse(lines.contains("fly.push start forward"))
         } finally {
             ClusterFlyPush.log = {}
             ClusterFlyPush.reset()
         }
+    }
+
+    @Test
+    fun `encoder output without a start code gains one`() {
+        assertArrayEquals(
+            byteArrayOf(0, 0, 0, 1, 0x65, 0x11),
+            ClusterFlyPush.withStartCode(byteArrayOf(0x65, 0x11)),
+        )
+        val already = byteArrayOf(0, 0, 0, 1, 0x65)
+        assertTrue(ClusterFlyPush.withStartCode(already) === already)
     }
 
     /** The E01 has one small encoder; when a frame takes too long, fewer frames are offered. */

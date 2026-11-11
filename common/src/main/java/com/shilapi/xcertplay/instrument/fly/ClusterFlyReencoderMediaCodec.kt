@@ -13,22 +13,33 @@ import java.nio.ByteBuffer
  * Decodes the phone's picture and encodes it again as Baseline, because that is the only profile
  * the factory ever pushes to this cluster (`mp.java` pins `profile = 1`).
  *
- * Everything here runs on the fly thread. Every dequeue uses a zero timeout: when the codecs are
- * busy the frame is dropped and counted, never waited for, because the centre screen must not slow
- * down for the cluster. Any failure closes both codecs and reports `false` from then on; the layer
- * stays blank rather than risking the main picture.
+ * The decoder is the software one (`OMX.google.h264.decoder`). The centre screen already owns
+ * `OMX.MTK.VIDEO.DECODER.AVC`; a second hardware decoder on this MT6735 stalls or blanks that
+ * picture. Encoding stays on whatever encoder can emit Baseline, which is a different block.
+ *
+ * Everything here runs on the fly thread, at background priority. Every dequeue uses a zero
+ * timeout. The cluster is sent five pictures a second. Reference frames are still decoded so the
+ * five are real pictures; when one access unit takes longer than the budget, later P-frames are
+ * skipped until the next IDR instead of queueing work against the centre screen. Any failure
+ * closes both codecs and reports `false` from then on; the layer stays blank rather than risking
+ * the main picture.
  *
  * The decoder's output is read through `getOutputImage` when the codec offers it and through
  * `getOutputBuffer` with the reported stride otherwise: the MT6735 on this head unit usually hands
  * back a plain YUV buffer, and a null Image must not mean "no picture at all".
  */
 class ClusterFlyReencoderMediaCodec(
-    config: ByteArray,
+    private val config: ByteArray,
     private val onEncoded: (ByteArray) -> Unit,
 ) : ClusterFlyReencoder {
 
     private val decoder: MediaCodec? = createDecoder(config)
     private var encoder: MediaCodec? = null
+    private var encoderFailed = false
+
+    /** False when the software decoder is not on this device. The layer stays blank. */
+    val ready: Boolean
+        get() = decoder != null
     private var encoderWidth = 0
     private var encoderHeight = 0
     private var encoderColor = 0
@@ -42,31 +53,71 @@ class ClusterFlyReencoderMediaCodec(
 
     private var decodeTimeUs = 0L
     private var encodeTimeUs = 0L
-    private var lastAcceptedAtMs = 0L
-    private val rate = ClusterFlyFrameRate()
+    private var lastEncodedAtMs = 0L
+    private var frameNowMs = 0L
+
+    /**
+     * Set until the next IDR. Starts set: the frames before the first keyframe have nothing to
+     * refer to, and decoding them would only spend the core.
+     */
+    @Volatile
+    private var awaitingIdr = true
+
     private var failed = false
     private val info = MediaCodec.BufferInfo()
+
+    override fun dropUntilIdr() {
+        awaitingIdr = true
+    }
 
     override fun submit(nalu: ByteArray, nowMillis: Long): Boolean {
         if (failed) return false
         val decoder = decoder ?: return false
+        frameNowMs = nowMillis
 
-        // The factory's own player settles on five frames a second when encoding is slow; offering
-        // more only makes the queue longer. Off the centre screen's thread, so dropping is cheap.
-        val minimumGap = if (rate.capFps >= 10) 100L else 200L
-        if (lastAcceptedAtMs != 0L && nowMillis - lastAcceptedAtMs < minimumGap) return false
-        lastAcceptedAtMs = nowMillis
+        // A skipped P-frame is a hole in the reference chain. Wait for an IDR, and flush first so
+        // the decoder does not spend a core painting the torn frames in between.
+        if (awaitingIdr && !ClusterFlyPush.isKeyframe(nalu)) {
+            if (ClusterFlyPush.isParameterSet(nalu)) {
+                return try {
+                    feedDecoder(decoder, nalu)
+                } catch (error: Exception) {
+                    fail(error)
+                    false
+                }
+            }
+            return false
+        }
+        if (awaitingIdr) {
+            try {
+                recover(decoder)
+            } catch (error: Exception) {
+                fail(error)
+                return false
+            }
+            awaitingIdr = false
+        }
 
         val startedNs = System.nanoTime()
         return try {
             val accepted = feedDecoder(decoder, nalu)
             val spentMs = (System.nanoTime() - startedNs) / 1_000_000L
-            rate.onEncoded(spentMs, nowMillis)
+            if (spentMs > SLOW_DECODE_MILLIS) {
+                recover(decoder)
+                awaitingIdr = true
+            }
             accepted
         } catch (error: Exception) {
             fail(error)
             false
         }
+    }
+
+    /** Puts the decoder back at the parameter sets. The next submitted unit must be an IDR. */
+    private fun recover(decoder: MediaCodec) {
+        decoder.flush()
+        decoder.start()
+        feedDecoder(decoder, config)
     }
 
     override fun close() {
@@ -78,19 +129,29 @@ class ClusterFlyReencoderMediaCodec(
         runCatching { decoder?.release() }
     }
 
-    private fun createDecoder(config: ByteArray): MediaCodec? = try {
+    private fun createDecoder(config: ByteArray): MediaCodec? {
         val (sps, pps) = AvcConfig.parameterSets(config) ?: return null
         val format = MediaFormat.createVideoFormat(Mime, NominalWidth, NominalHeight).apply {
             setByteBuffer("csd-0", ByteBuffer.wrap(startCode(sps)))
             setByteBuffer("csd-1", ByteBuffer.wrap(startCode(pps)))
         }
-        MediaCodec.createDecoderByType(Mime).also {
-            it.configure(format, null, null, 0)
-            it.start()
+        // Never createDecoderByType: on this head unit that returns the hardware decoder the
+        // centre screen is already using.
+        val decoder = try {
+            MediaCodec.createByCodecName(SOFTWARE_DECODER)
+        } catch (error: Exception) {
+            DiagLog.w(TAG, "cluster decoder unavailable", error)
+            return null
         }
-    } catch (error: Exception) {
-        DiagLog.w(TAG, "cluster decoder unavailable", error)
-        null
+        return try {
+            decoder.configure(format, null, null, 0)
+            decoder.start()
+            decoder
+        } catch (error: Exception) {
+            runCatching { decoder.release() }
+            DiagLog.w(TAG, "cluster decoder unavailable", error)
+            null
+        }
     }
 
     private fun feedDecoder(decoder: MediaCodec, nalu: ByteArray): Boolean {
@@ -151,30 +212,41 @@ class ClusterFlyReencoderMediaCodec(
     }
 
     private fun encodeFrame(decoder: MediaCodec, index: Int) {
+        // Five pictures a second is the whole of what the cluster is given. Decoding still happens
+        // for the frames we keep; encoding them all would spend a second core for no visible gain.
+        if (encoderFailed) return
+        if (lastEncodedAtMs != 0L && frameNowMs - lastEncodedAtMs < ENCODE_INTERVAL_MILLIS) return
+
         val image = try {
             decoder.getOutputImage(index)
         } catch (_: Exception) {
             null
         }
+        try {
+            val encoder = this.encoder ?: createEncoder(image)?.also { this.encoder = it } ?: run {
+                if (encoderWidth > 0) encoderFailed = true
+                return
+            }
+            val input = encoder.dequeueInputBuffer(0)
+            if (input < 0) return
+            val target = encoder.getInputBuffer(input)
+            if (target == null) return
 
-        val encoder = encoder ?: createEncoder(image)?.also { encoder = it } ?: return
-        val input = encoder.dequeueInputBuffer(0)
-        if (input < 0) return
-        val target = encoder.getInputBuffer(input)
-        if (target == null) return
-
-        val copied = if (image != null) {
-            copyImage(image, target)
-        } else {
-            copyBuffer(decoder, index, target)
+            val copied = if (image != null) {
+                copyImage(image, target)
+            } else {
+                copyBuffer(decoder, index, target)
+            }
+            if (!copied) {
+                encoder.queueInputBuffer(input, 0, 0, encodeTimeUs, 0)
+                return
+            }
+            encoder.queueInputBuffer(input, 0, encoderWidth * encoderHeight * 3 / 2, encodeTimeUs, 0)
+            encodeTimeUs += EncodedStepUs
+            lastEncodedAtMs = frameNowMs
+        } finally {
+            runCatching { image?.close() }
         }
-        if (!copied) {
-            encoder.queueInputBuffer(input, 0, 0, encodeTimeUs, 0)
-            return
-        }
-        encoder.queueInputBuffer(input, 0, encoderWidth * encoderHeight * 3 / 2, encodeTimeUs, 0)
-        // Five pictures a second at the factory's rate; one step per encoded frame, not per stage.
-        encodeTimeUs += EncodedStepUs
     }
 
     private fun createEncoder(image: Image?): MediaCodec? {
@@ -195,23 +267,48 @@ class ClusterFlyReencoderMediaCodec(
             MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar
         }
 
-        return try {
-            val format = MediaFormat.createVideoFormat(Mime, encoderWidth, encoderHeight).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, encoderColor)
-                setInteger(MediaFormat.KEY_BIT_RATE, BitRate)
-                setInteger(MediaFormat.KEY_FRAME_RATE, FrameRate)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, KeyframeSeconds)
-                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-                setInteger(MediaFormat.KEY_LEVEL, maxBaselineLevel())
-            }
-            MediaCodec.createEncoderByType(Mime).also {
-                it.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                it.start()
-            }
-        } catch (error: Exception) {
-            DiagLog.w(TAG, "cluster encoder unavailable size=${encoderWidth}x$encoderHeight", error)
-            null
+        val format = MediaFormat.createVideoFormat(Mime, encoderWidth, encoderHeight).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, encoderColor)
+            setInteger(MediaFormat.KEY_BIT_RATE, BitRate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, FrameRate)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, KeyframeSeconds)
+            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            setInteger(MediaFormat.KEY_LEVEL, maxBaselineLevel())
         }
+        return openEncoder(format)
+    }
+
+    /** Hardware encoder first when it can do Baseline; the software encoder if that configure fails. */
+    private fun openEncoder(format: MediaFormat): MediaCodec? {
+        val names = try {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+                .asSequence()
+                .filter { it.isEncoder && Mime in it.supportedTypes }
+                .map { it.name }
+                .sortedBy { if (it.contains("google", ignoreCase = true)) 1 else 0 }
+                .toList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        for (name in names) {
+            val codec = try {
+                MediaCodec.createByCodecName(name)
+            } catch (_: Exception) {
+                continue
+            }
+            try {
+                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                codec.start()
+                val request = android.os.Bundle()
+                request.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                codec.setParameters(request)
+                return codec
+            } catch (_: Exception) {
+                runCatching { codec.release() }
+            }
+        }
+        DiagLog.w(TAG, "cluster encoder unavailable size=${encoderWidth}x$encoderHeight")
+        return null
     }
 
     /**
@@ -356,7 +453,12 @@ class ClusterFlyReencoderMediaCodec(
                         buffer.position(info.offset)
                         buffer.limit(info.offset + info.size)
                         buffer.get(out)
-                        onEncoded(out)
+                        val annex = if (ClusterFlyPush.isConfig(out)) {
+                            ClusterFlyPush.annexB(out)
+                        } else {
+                            ClusterFlyPush.withStartCode(out)
+                        }
+                        if (annex != null) onEncoded(annex)
                     }
                     encoder.releaseOutputBuffer(index, false)
                 }
@@ -392,14 +494,24 @@ class ClusterFlyReencoderMediaCodec(
     private companion object {
         const val TAG = "xcertplay-fly"
         const val Mime = MediaFormat.MIMETYPE_VIDEO_AVC
+        const val SOFTWARE_DECODER = "OMX.google.h264.decoder"
 
-        /** Only used to configure the decoder; the real size comes back from the SPS. */
+        /** This session's main screen. The SPS overrides it once the decoder reports a size. */
         const val NominalWidth = 1920
-        const val NominalHeight = 1080
+        const val NominalHeight = 720
 
         const val BitRate = 2_000_000
         const val FrameRate = 5
         const val KeyframeSeconds = 1
+
+        /** One encoded picture per 200 ms. Decoding may run faster; the wire does not. */
+        const val ENCODE_INTERVAL_MILLIS = 200L
+
+        /**
+         * Longer than this and the fly thread is already missing five pictures a second. Stop
+         * until the next IDR rather than decoding a backlog on the cores the centre screen needs.
+         */
+        const val SLOW_DECODE_MILLIS = 150L
 
         /** 20 ms of decoder input; the encoder's own clock is 5 fps. */
         const val InputStepUs = 20_000L

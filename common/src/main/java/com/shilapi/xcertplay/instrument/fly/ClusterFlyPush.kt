@@ -23,6 +23,12 @@ interface ClusterFlyReencoder {
     /** Feed one codec unit. False means this one was dropped, which is a counter, not an error. */
     fun submit(nalu: ByteArray, nowMillis: Long): Boolean
 
+    /**
+     * A frame was thrown away before this one. The next picture has to be an IDR; decoding the
+     * P-frame in between would paint a torn image and still cost a full software decode.
+     */
+    fun dropUntilIdr()
+
     fun close()
 }
 
@@ -76,19 +82,18 @@ object ClusterFlyPush {
             return PushDecision(send = false, mode = mode(), dropReason = "idle")
         }
 
-        if (!open) {
-            open = true
-            noteMode()
-        }
+        if (!open) open = true
 
         if (reencode) {
             val encoder = reencoder
                 ?: return PushDecision(send = false, mode = PushMode.REENCODE, dropReason = "encoder")
             val accepted = encoder.submit(nalu, nowMillis)
+            // "pace" is a frame the 5 fps cap or a broken GOP skipped. It is not "the phone's
+            // profile cannot be shown": that warning is only for a re-encoder that never started.
             return PushDecision(
                 send = accepted,
                 mode = PushMode.REENCODE,
-                dropReason = if (accepted) null else "encoder",
+                dropReason = if (accepted) null else "pace",
             )
         }
 
@@ -98,16 +103,25 @@ object ClusterFlyPush {
             log(ClusterFlyLog.profile(profile))
         }
         if (profile == null || profile == BASELINE_PROFILE_IDC) {
+            noteMode()
             return PushDecision(send = true, mode = PushMode.FORWARD, dropReason = null)
         }
 
-        // The first non-Baseline unit — usually the configuration with SPS and PPS — is dropped, and
-        // from here on the encoder owns the picture.
+        // The first non-Baseline unit — usually the configuration with SPS and PPS — is consumed
+        // by the encoder and never forwarded. From here the encoder owns the picture.
         reencode = true
         reencoder = reencoderFactory?.invoke(nalu)
-        // Only say a re-encoder started if one did; with the factory off the layer stays blank.
         if (reencoder != null) noteMode()
-        return PushDecision(send = false, mode = PushMode.REENCODE, dropReason = "profile")
+        return PushDecision(
+            send = false,
+            mode = PushMode.REENCODE,
+            dropReason = if (reencoder == null) "encoder" else null,
+        )
+    }
+
+    /** The media thread dropped a frame. The picture waits for the next keyframe. */
+    fun noteDropped() {
+        reencoder?.dropUntilIdr()
     }
 
     /** Forgets the encoder. Called when the layer closes, and safe to call when nothing is open. */
@@ -132,6 +146,27 @@ object ClusterFlyPush {
 
     /** True when the unit carries an IDR, which is what the cluster's player waits for. */
     fun isKeyframe(nalu: ByteArray): Boolean = hasNalType(nalu, NAL_TYPE_IDR)
+
+    /** True when the unit carries SPS or PPS. Those are cheap and a decoder needs them after a flush. */
+    fun isParameterSet(nalu: ByteArray): Boolean =
+        hasNalType(nalu, NAL_TYPE_SPS) || hasNalType(nalu, NAL_TYPE_PPS)
+
+    /**
+     * One NAL ready for RTP. Encoder output sometimes has no start code; the packetizer treats a
+     * buffer without one as a single NAL, which is only true when the start code is added here.
+     */
+    fun withStartCode(nal: ByteArray): ByteArray {
+        if (nal.size >= 3 && nal[0].toInt() == 0 && nal[1].toInt() == 0 && nal[2].toInt() == 1) return nal
+        if (nal.size >= 4 &&
+            nal[0].toInt() == 0 && nal[1].toInt() == 0 && nal[2].toInt() == 0 && nal[3].toInt() == 1
+        ) {
+            return nal
+        }
+        val out = ByteArray(nal.size + 4)
+        out[3] = 1
+        System.arraycopy(nal, 0, out, 4, nal.size)
+        return out
+    }
 
     /**
      * True when the bytes are an avcC record — what the sink's config callback carries — rather
@@ -242,6 +277,7 @@ object ClusterFlyPush {
     }
 
     private const val NAL_TYPE_SPS = 7
+    private const val NAL_TYPE_PPS = 8
     private const val NAL_TYPE_IDR = 5
 }
 

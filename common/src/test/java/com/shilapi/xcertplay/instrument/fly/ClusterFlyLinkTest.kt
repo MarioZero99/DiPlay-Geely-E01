@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.instrument.fly
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
@@ -15,6 +16,7 @@ class ClusterFlyLinkTest {
         val listens = AtomicInteger()
         val link = ClusterFlyLink(
             port = 0,
+            bindHost = "0.0.0.0",
             log = { line -> if (line == "fly.tcp listen") listens.incrementAndGet() },
         )
         try {
@@ -29,6 +31,11 @@ class ClusterFlyLinkTest {
         } finally {
             link.close()
         }
+    }
+
+    @Test
+    fun `the cluster is dialled on the factory address`() {
+        assertEquals("10.255.255.101", ClusterFlyLink.BIND_HOST)
     }
 
     private fun await(condition: () -> Boolean): Boolean {

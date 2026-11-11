@@ -29,6 +29,12 @@ object ClusterFlyLog {
 
     fun tcp(event: TcpEvent): String = "fly.tcp ${event.name.lowercase()}"
 
+    /** Why the listen failed, without a stack trace. The holder, when there is one, is a separate line. */
+    fun tcpBusy(error: Exception): String {
+        val message = error.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(120).orEmpty()
+        return "fly.tcp busy ${error.javaClass.simpleName} $message".trim()
+    }
+
     fun ask(ask: VideoAsk): String = "fly.ask ${ask.name}"
 
     fun reply(reply: FlyReply): String = "fly.reply ${reply.name.lowercase()}"

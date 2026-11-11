@@ -86,6 +86,9 @@ class ClusterFlyController(
     /** A step scheduled before a session ended belongs to the old session and is dropped. */
     private var generation = 0
 
+    /** Set on the fly thread, once. The media thread never pays for the priority change. */
+    private var background = false
+
     private val statPackets = AtomicLong()
     private val statBytes = AtomicLong()
     private val statDrops = AtomicLong()
@@ -96,16 +99,18 @@ class ClusterFlyController(
         // The push policy logs through this controller, so its lines land in the same session log.
         ClusterFlyPush.reset()
         ClusterFlyPush.log = log
-        // Only a controller with a real link is a production one; tests leave the factory alone, so
-        // no MediaCodec is ever constructed in a JVM test.
-        // The re-encoder is deliberately off this round: a second hardware decode competes with the
-        // picture the driver is looking at. The class is kept and wired only when this is turned on.
-        if (REENCODE_PICTURE && linkFactory != null) {
+        // Only a controller with a real link builds a codec. Tests leave the factory alone.
+        // The decoder inside is the software one, so this does not take the centre screen's decoder.
+        if (linkFactory != null) {
             ClusterFlyPush.reencoderFactory = { config ->
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                    ClusterFlyReencoderMediaCodec(config) { unit -> sendEncoded(unit) }
-                } else {
+                if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.LOLLIPOP) {
                     null
+                } else {
+                    val created = ClusterFlyReencoderMediaCodec(config) { unit -> sendEncoded(unit) }
+                    if (created.ready) created else {
+                        created.close()
+                        null
+                    }
                 }
             }
         }
@@ -193,7 +198,9 @@ class ClusterFlyController(
             frameExecutor.execute { processFrame(type, bytes) }
         } catch (_: RejectedExecutionException) {
             // The queue is full or the layer is closed: one countable drop, never a wait.
+            // The GOP is now missing a frame, so the fly thread waits for the next IDR.
             statDrops.incrementAndGet()
+            ClusterFlyPush.noteDropped()
         }
     }
 
@@ -205,6 +212,13 @@ class ClusterFlyController(
      * if it were a NAL. Only the main screen's 110 is ever considered, and only while pushing.
      */
     private fun processFrame(type: Int, bytes: ByteArray) {
+        if (!background) {
+            background = true
+            // Below the UI and the media thread. The software decode uses whatever core is left.
+            runCatching {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            }
+        }
         val now = clock()
         val phase: FlyPhase = synchronized(lock) { session.currentPhase }
         val unit = if (ClusterFlyPush.isConfig(bytes)) {
@@ -217,8 +231,10 @@ class ClusterFlyController(
         if (phase != FlyPhase.PUSHING) return
 
         if (!decision.send) {
-            if (decision.dropReason == "profile") warnUnsupportedPicture()
-            if (decision.dropReason != "idle") statDrops.incrementAndGet()
+            // "pace" is a frame held for the 5 fps cap. "encoder" means the re-encoder never
+            // started, which the driver can see. A consumed parameter set is neither.
+            if (decision.dropReason == "encoder") warnUnsupportedPicture()
+            if (decision.dropReason != null && decision.dropReason != "idle") statDrops.incrementAndGet()
             return
         }
         // In re-encode mode this unit has only been accepted by the encoder; its own output is what
@@ -454,15 +470,11 @@ class ClusterFlyController(
         const val NO_TIME = Long.MIN_VALUE
         const val STAT_INTERVAL_MILLIS = 5_000L
 
-        /** Four frames is a fifth of a second at 25 fps; more than that is already stale. */
-        const val FRAME_QUEUE_CAPACITY = 4
-
         /**
-         * Off until the car says the phone's picture is not Baseline. A second hardware decode
-         * competes with the main picture on a head unit with 26 MB free, so the layer stays black
-         * and says why instead of switching it on by itself.
+         * One frame waiting, one frame being decoded. A third is dropped: a backlog here is a
+         * software decode running ahead of the picture the driver is looking at.
          */
-        const val REENCODE_PICTURE = false
+        const val FRAME_QUEUE_CAPACITY = 1
 
         const val ProfileWarning = "手机画面格式暂不支持飞屏"
     }

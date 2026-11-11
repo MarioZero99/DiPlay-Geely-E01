@@ -128,8 +128,21 @@ class AndroidMediaSink(    surface: Surface? = null,
     @Volatile
     private var mainVideoObserver: ((Int, ByteArray) -> Unit)? = null
 
+    /** The last main-screen configuration. Subscription starts later, and the re-encoder needs it. */
+    private var lastMainConfig: ByteArray? = null
+
+    private val observerLock = Any()
+
     fun setMainVideoObserver(observer: ((Int, ByteArray) -> Unit)?) {
-        mainVideoObserver = observer
+        synchronized(observerLock) {
+            mainVideoObserver = observer
+            if (observer != null) {
+                val config = lastMainConfig
+                // Hand the configuration over before any later frame, or the re-encoder starts
+                // on a slice and never sees the parameter sets.
+                if (config != null) invokeObserver(observer, SCREEN_TYPE_MAIN, config)
+            }
+        }
     }
 
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
@@ -138,6 +151,7 @@ class AndroidMediaSink(    surface: Surface? = null,
         // every session: it is the answer to whether the cluster can take the picture untouched.
         if (type == SCREEN_TYPE_MAIN) {
             DiagLog.i("xcertplay-fly", VideoCodecConfigLog.line(codec, codecData))
+            synchronized(observerLock) { lastMainConfig = codecData.copyOf() }
         }
         deliverToObserver(type, codecData)
         videoDecoder(type).configure(codec, codecData)
@@ -155,8 +169,14 @@ class AndroidMediaSink(    surface: Surface? = null,
      * driver is looking at, and the cluster layer is the extra one.
      */
     private fun deliverToObserver(type: Int, bytes: ByteArray) {
-        val observer = mainVideoObserver ?: return
         if (type != SCREEN_TYPE_MAIN) return
+        synchronized(observerLock) {
+            val observer = mainVideoObserver ?: return
+            invokeObserver(observer, type, bytes)
+        }
+    }
+
+    private fun invokeObserver(observer: (Int, ByteArray) -> Unit, type: Int, bytes: ByteArray) {
         try {
             observer(type, bytes)
         } catch (error: Exception) {
@@ -166,6 +186,9 @@ class AndroidMediaSink(    surface: Surface? = null,
 
     override fun onScreenStreamActive(type: Int, active: Boolean) {
         if (!active) {
+            if (type == SCREEN_TYPE_MAIN) {
+                synchronized(observerLock) { lastMainConfig = null }
+            }
             videoRecoveryHandlers.remove(type)
             videoDiagnosticHandlers.remove(type)
             videoDecoders.remove(type)?.close()

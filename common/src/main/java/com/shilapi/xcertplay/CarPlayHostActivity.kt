@@ -117,6 +117,7 @@ import com.shilapi.xcertplay.instrument.fly.ClusterFlyLink
 import com.shilapi.xcertplay.instrument.fly.ClusterFlyLog
 import com.shilapi.xcertplay.instrument.fly.ClusterFlySequencer
 import com.shilapi.xcertplay.instrument.fly.FlyCommand
+import com.shilapi.xcertplay.instrument.fly.FlyTrace
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector
 import com.shilapi.xcertplay.ui.component.QuickHudView
 import java.io.File
@@ -2694,24 +2695,40 @@ class CarPlayHostActivity : ComponentActivity() {
             linkFactory = { ClusterFlyLink(log = { line -> DiagLog.i(ClusterFlyLog.TAG, line) }) },
         ).also { clusterFly = it }
 
-    /** The two factory broadcasts. The order and the extras are the whole contract. */
+    /**
+     * The two factory broadcasts, addressed to the receivers that actually act on them.
+     *
+     * AutoNaviReceiver sets the navigation flag on EXTRA_STATE 8. ThreeFingerReceiver sends opcode
+     * 1885 only after that flag is set, and only when the car is not reversing, alarming, or in an
+     * emergency call. An implicit broadcast does not name those classes, so the flag can stay off
+     * and the cluster never changes page.
+     */
     private fun sendFlyCommand(command: FlyCommand) {
         val intent = when (command) {
             FlyCommand.NAV_ON -> Intent(ClusterFlySequencer.ACTION_NAV_STATE)
+                .setClassName(ClusterFlySequencer.PACKAGE_EXTRASERVICE, ClusterFlySequencer.RECEIVER_NAV_STATE)
                 .putExtra(ClusterFlySequencer.EXTRA_KEY_TYPE, ClusterFlySequencer.KEY_TYPE_NAV_STATE)
                 .putExtra(ClusterFlySequencer.EXTRA_STATE, ClusterFlySequencer.STATE_NAV_ON)
 
             FlyCommand.NAV_OFF -> Intent(ClusterFlySequencer.ACTION_NAV_STATE)
+                .setClassName(ClusterFlySequencer.PACKAGE_EXTRASERVICE, ClusterFlySequencer.RECEIVER_NAV_STATE)
                 .putExtra(ClusterFlySequencer.EXTRA_KEY_TYPE, ClusterFlySequencer.KEY_TYPE_NAV_STATE)
                 .putExtra(ClusterFlySequencer.EXTRA_STATE, ClusterFlySequencer.STATE_NAV_OFF)
 
             FlyCommand.FLY_LEFT -> Intent(ClusterFlySequencer.ACTION_THREE_FINGER)
+                .setClassName(ClusterFlySequencer.PACKAGE_EXTRASERVICE, ClusterFlySequencer.RECEIVER_THREE_FINGER)
                 .putExtra(ClusterFlySequencer.EXTRA_DIRECTION, ClusterFlySequencer.DIRECTION_LEFT)
 
             FlyCommand.FLY_RIGHT -> Intent(ClusterFlySequencer.ACTION_THREE_FINGER)
+                .setClassName(ClusterFlySequencer.PACKAGE_EXTRASERVICE, ClusterFlySequencer.RECEIVER_THREE_FINGER)
                 .putExtra(ClusterFlySequencer.EXTRA_DIRECTION, ClusterFlySequencer.DIRECTION_RIGHT)
         }
         sendBroadcast(intent)
+        // 1885 is logged by Extraservice, not by this process. Pull that line into the report
+        // once the finger broadcast has been handed off. The nav broadcast is already 400 ms old.
+        if (command == FlyCommand.FLY_LEFT || command == FlyCommand.FLY_RIGHT) {
+            FlyTrace.captureAfterGesture()
+        }
     }
 
     private fun setFlyVideoSubscribed(subscribed: Boolean) {

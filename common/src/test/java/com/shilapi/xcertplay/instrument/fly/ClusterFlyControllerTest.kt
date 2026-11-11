@@ -153,6 +153,39 @@ class ClusterFlyControllerTest {
     }
 
     @Test
+    fun `high profile is reencoded and the original slice is not forwarded`() {
+        val executor = ManualExecutor()
+        val controller = pushing(executor)
+        val submitted = mutableListOf<ByteArray>()
+        ClusterFlyPush.reset()
+        ClusterFlyPush.log = { lines.add(it) }
+        ClusterFlyPush.reencoderFactory = {
+            object : ClusterFlyReencoder {
+                override fun submit(nalu: ByteArray, nowMillis: Long): Boolean {
+                    submitted.add(nalu)
+                    return true
+                }
+
+                override fun dropUntilIdr() = Unit
+
+                override fun close() = Unit
+            }
+        }
+        try {
+            controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x67, 100, 0, 0))
+            controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x41, 0x9A.toByte()))
+            executor.runAll()
+
+            assertTrue(lines.contains("fly.push start reencode"))
+            assertFalse(lines.contains("fly.push start forward"))
+            assertEquals(1, submitted.size)
+        } finally {
+            ClusterFlyPush.reencoderFactory = null
+            ClusterFlyPush.reset()
+        }
+    }
+
+    @Test
     fun `the picture being forwarded is logged`() {
         val executor = ManualExecutor()
         val controller = pushing(executor)

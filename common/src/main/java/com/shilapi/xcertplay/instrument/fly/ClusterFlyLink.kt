@@ -8,6 +8,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
 /**
@@ -20,9 +21,18 @@ import kotlin.concurrent.thread
  */
 class ClusterFlyLink(
     private val port: Int = DEFAULT_PORT,
+    /**
+     * Where this process listens. The cluster dials [BIND_HOST]; that address is added for the
+     * session when it is missing, and a wildcard socket is what then receives the dial.
+     */
+    private val bindHost: String = LISTEN_HOST,
     private val rtpHost: String = RTP_HOST,
     private val rtpPort: Int = RTP_PORT,
     private val log: (String) -> Unit = {},
+    private val clusterAddress: FlyClusterAddress = FlyClusterAddress(),
+    private val portReport: (Exception, Int) -> List<String> = { error, listened ->
+        FlyPortHolder.report(error, listened)
+    },
 ) {
 
     /** Called for each 24-byte ask; what it returns is written back on the same connection. */
@@ -41,6 +51,9 @@ class ClusterFlyLink(
     @Volatile
     private var running = false
 
+    /** Bumped on every start and every close, so a restart does not keep the old listen thread. */
+    private val listenGeneration = AtomicInteger()
+
     @Volatile
     private var client: Socket? = null
 
@@ -57,14 +70,19 @@ class ClusterFlyLink(
      * Starts listening, or does nothing if already listening.
      *
      * A port already taken is not fatal and not worth spinning on: the layer stays waiting for a
-     * video, and the retry is slow enough to leave the CPU alone. The log says `busy` on the first
-     * failure and then once every ten.
+     * video, and the retry is slow enough to leave the CPU alone. The first failure, and every
+     * tenth after it, names the exception. When the port is taken, the same lines name the holder.
      */
     fun start() {
         if (running) return
         running = true
-        rtp = RtpWriter(rtpHost, rtpPort)
-        thread(isDaemon = true, name = "cluster-fly-listen") { acceptLoop() }
+        val generation = listenGeneration.incrementAndGet()
+        thread(isDaemon = true, name = "cluster-fly-listen") {
+            if (running && listenGeneration.get() == generation) {
+                clusterAddress.prepare().forEach(log)
+            }
+            acceptLoop(generation)
+        }
     }
 
     /** Pushes one access unit. False means the frame was dropped, which is a counter, not a throw. */
@@ -72,6 +90,7 @@ class ClusterFlyLink(
 
     fun close() {
         running = false
+        listenGeneration.incrementAndGet()
         try {
             client?.close()
         } catch (_: IOException) {
@@ -85,15 +104,29 @@ class ClusterFlyLink(
         server = null
         rtp?.close()
         rtp = null
+        clusterAddress.release()
     }
 
-    private fun acceptLoop() {
+    private fun acceptLoop(generation: Int) {
         var failures = 0
-        while (running) {
+        while (running && listenGeneration.get() == generation) {
+            var listening: ServerSocket? = null
+            var writer: RtpWriter? = null
             try {
-                val listening = ServerSocket()
-                listening.reuseAddress = true
-                listening.bind(InetSocketAddress(port))
+                // TCP listens on every interface. The cluster dials 10.255.255.101 once that
+                // address is local; binding the socket to the address itself fails when it is not.
+                // RTP uses an ephemeral port. The route, after the address is added, selects it
+                // as the source toward 10.255.255.106.
+                val udp = DatagramSocket(null).apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(0))
+                }
+                writer = RtpWriter(udp, rtpHost, rtpPort)
+                rtp = writer
+                listening = ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(bindHost, port))
+                }
                 server = listening
                 log(ClusterFlyLog.tcp(TcpEvent.LISTEN))
                 failures = 0
@@ -102,21 +135,26 @@ class ClusterFlyLink(
                     log(ClusterFlyLog.tcp(TcpEvent.ACCEPT))
                     serve(socket)
                 }
-            } catch (_: Exception) {
-                if (!running) return
+            } catch (error: Exception) {
+                if (!running || listenGeneration.get() != generation) return
                 failures++
-                if (failures == 1 || failures % 10 == 0) log(ClusterFlyLog.tcp(TcpEvent.BUSY))
+                if (failures == 1 || failures % 10 == 0) {
+                    bindFailureLines(error, port, portReport).forEach(log)
+                }
                 try {
                     Thread.sleep(RETRY_MILLIS)
                 } catch (_: InterruptedException) {
                     return
                 }
             } finally {
+                // Close only this attempt. A restart may already own the fields.
                 try {
-                    server?.close()
+                    listening?.close()
                 } catch (_: IOException) {
                 }
-                server = null
+                if (server === listening) server = null
+                if (rtp === writer) rtp = null
+                writer?.close()
             }
         }
     }
@@ -195,8 +233,7 @@ class ClusterFlyLink(
      * is not synchronising us with anything, and a fixed step keeps the stream monotonic across the
      * bursts a busy head unit produces.
      */
-    private class RtpWriter(host: String, private val port: Int) {
-        private val socket = DatagramSocket()
+    private class RtpWriter(private val socket: DatagramSocket, host: String, private val port: Int) {
         private val address: InetAddress? = try {
             InetAddress.getByName(host)
         } catch (_: Exception) {
@@ -340,9 +377,15 @@ class ClusterFlyLink(
         }
     }
 
-    private companion object {
-        const val DEFAULT_PORT = 1028
-        const val RTP_HOST = "10.255.255.106"
+    companion object {
+        /** Where this process listens. The cluster dials [BIND_HOST], not this wildcard. */
+        const val LISTEN_HOST = "0.0.0.0"
+
+        /** The address the cluster dials. Added for the session when no interface has it. */
+        const val BIND_HOST = "10.255.255.101"
+
+        private const val DEFAULT_PORT = 1028
+        private const val RTP_HOST = "10.255.255.106"
         const val RTP_PORT = 9026
         const val ASK_SIZE = 24
         const val HEARTBEAT_MILLIS = 3_000L
@@ -357,3 +400,10 @@ class ClusterFlyLink(
         const val MAX_STEP_MILLIS = 200L
     }
 }
+
+/** The busy line, then the holder lines when the port is taken. */
+internal fun bindFailureLines(
+    error: Exception,
+    port: Int,
+    report: (Exception, Int) -> List<String>,
+): List<String> = listOf(ClusterFlyLog.tcpBusy(error)) + if (port > 0) report(error, port) else emptyList()
