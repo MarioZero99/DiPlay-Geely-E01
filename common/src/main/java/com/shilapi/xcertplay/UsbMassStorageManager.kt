@@ -327,6 +327,17 @@ internal object UsbMassStorageManager {
     fun getCachedFreeSpace(): Long = synchronized(this) { currentFs?.freeSpace ?: cachedFreeSpace }
 
     /**
+     * Mounts the FAT32 volume [decision] points at. A partition table entry puts the volume at its
+     * start sector, so the block device is offset there; a superfloppy is mounted on the device as is.
+     */
+    internal fun mountAtDecision(device: BlockDeviceDriver, decision: Fat32VolumeDecision): FileSystem? {
+        val lba = decision.mountLba ?: return null
+        val entry = PartitionTableEntry(decision.partitionType, lba, decision.sectorCount)
+        val target = if (lba == 0L) device else Partition(device, entry)
+        return RobustFat32FileSystemCreator.read(entry, target)
+    }
+
+    /**
      * Closes the active USB device and releases USB endpoints (matching CX File Explorer ax.b2.l.d()).
      */
     fun close() {
