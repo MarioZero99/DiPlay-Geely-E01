@@ -256,21 +256,11 @@ internal object DiagnosticExportStore {
             if (fs == null) {
                 DiagLog.w("DiagnosticExport", "saveToUsb: libaums returned no filesystem")
             } else {
-                val root = fs.rootDirectory
-                val diplayDir = root.search("DiPlay") ?: root.createDirectory("DiPlay")
-                if (!diplayDir.isDirectory) {
-                    throw IOException("Target DiPlay path exists but is not a directory")
-                }
-                val targetFile = diplayDir.search(fileName) ?: diplayDir.createFile(fileName)
-                UsbFileOutputStream(targetFile).use { out ->
-                    out.write(bytes)
-                    out.flush()
-                }
-                written = targetFile.length == bytes.size.toLong()
+                written = writeReport(fs, fileName, bytes)
                 if (written) {
                     DiagLog.i("DiagnosticExport", "saveToUsb success via libaums: $primaryPath bytes=${bytes.size}")
                 } else {
-                    DiagLog.w("DiagnosticExport", "saveToUsb length mismatch path=$primaryPath expected=${bytes.size} actual=${targetFile.length}")
+                    DiagLog.w("DiagnosticExport", "saveToUsb length mismatch path=$primaryPath expected=${bytes.size}")
                 }
             }
             DiagLog.i("DiagnosticExport", describeSave(written, bytes.size, logPath))
@@ -293,6 +283,24 @@ internal object DiagnosticExportStore {
 
     internal fun describeSave(written: Boolean, bytes: Int, path: String): String =
         "usb save written=$written bytes=$bytes path=$path"
+
+    /**
+     * Writes `<fs>/DiPlay/<fileName>` and reports whether the file took every byte.
+     * An existing file of the same name is replaced so a retry cannot leave the old report behind.
+     */
+    internal fun writeReport(fs: me.jahnen.libaums.core.fs.FileSystem, fileName: String, bytes: ByteArray): Boolean {
+        val root = fs.rootDirectory
+        val folder = root.search("DiPlay") ?: root.createDirectory("DiPlay")
+        if (!folder.isDirectory) return false
+        val existing = folder.search(fileName)
+        existing?.delete()
+        val file = folder.createFile(fileName)
+        UsbFileOutputStream(file).use { out ->
+            out.write(bytes)
+            out.flush()
+        }
+        return file.length == bytes.size.toLong()
+    }
 
     private data class Backup(val uri: Uri?, val file: File)
 
