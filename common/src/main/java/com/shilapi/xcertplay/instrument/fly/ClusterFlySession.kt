@@ -68,7 +68,7 @@ class ClusterFlySession(
 
         val steps = ClusterFlySequencer.open(nowMillis, conditions)
         phase = FlyPhase.ARMING
-        flyStepAt = nowMillis + ClusterFlySequencer.STEP_DELAY_MILLIS
+        flyStepAt = steps.first { it.command == FlyCommand.FLY_LEFT }.sendAtMillis
         return effect(steps = steps)
     }
 
@@ -231,11 +231,12 @@ class ClusterFlySession(
         val steps = listOf(
             FlyStep(FlyCommand.FLY_RIGHT, at),
             FlyStep(FlyCommand.NAV_OFF, at + ClusterFlySequencer.STEP_DELAY_MILLIS),
+            FlyStep(FlyCommand.NAV_BACK, at + ClusterFlySequencer.MCU_GAP_MILLIS),
         )
         phase = FlyPhase.CLOSING
         closeOwed = false
         openPending = false
-        closeNavOffAt = at + ClusterFlySequencer.STEP_DELAY_MILLIS
+        closeNavOffAt = steps.last().sendAtMillis
         return effect(steps = steps)
     }
 

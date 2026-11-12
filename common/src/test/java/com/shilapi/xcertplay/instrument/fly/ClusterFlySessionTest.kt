@@ -31,11 +31,11 @@ class ClusterFlySessionTest {
         millisSinceLastClusterCommand = millisSinceLastClusterCommand,
     )
 
-    /** Left at 1000 ms: `FLY_LEFT` is due at 1400 ms and the cluster has until 4400 ms to ask. */
+    /** Left at 1000 ms: `FLY_LEFT` is due at 2400 ms. */
     private fun pushing(): ClusterFlySession {
         session.onLeft(1_000L, openConditions())
-        session.onWaitTimeout(1_400L)
-        session.onVideoAsk(VideoAsk.OPEN, 1_500L)
+        session.onWaitTimeout(2_400L)
+        session.onVideoAsk(VideoAsk.OPEN, 2_500L)
         return session
     }
 
@@ -48,12 +48,15 @@ class ClusterFlySessionTest {
         val early = session.onVideoAsk(VideoAsk.OPEN, 1_200L)
         assertFalse(early.push)
         assertEquals(FlyPhase.ARMING, early.phase)
+
+        // The wait does not begin until the fly step itself is due at 2400.
+        assertEquals(FlyPhase.ARMING, session.onWaitTimeout(2_000L).phase)
     }
 
     @Test
     fun `video starts only after the cluster asks`() {
         assertEquals(FlyPhase.ARMING, session.onLeft(1_000L, openConditions()).phase)
-        assertEquals(FlyPhase.WAITING_FOR_VIDEO, session.onWaitTimeout(1_400L).phase)
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, session.onWaitTimeout(2_400L).phase)
 
         val open = session.onVideoAsk(VideoAsk.OPEN, 1_500L)
         assertTrue(open.push)
@@ -101,9 +104,9 @@ class ClusterFlySessionTest {
     @Test
     fun `an open under radar is refused`() {
         session.onLeft(1_000L, openConditions())
-        session.onWaitTimeout(1_400L)
+        session.onWaitTimeout(2_400L)
 
-        val open = session.onVideoAsk(VideoAsk.OPEN, 1_500L, openConditions(radar = true))
+        val open = session.onVideoAsk(VideoAsk.OPEN, 2_500L, openConditions(radar = true))
 
         assertFalse(open.push)
         assertEquals(FlyPhase.WAITING_FOR_VIDEO, open.phase)
@@ -121,6 +124,8 @@ class ClusterFlySessionTest {
         assertEquals(FlyPhase.CLOSING, close.phase)
         assertEquals(FlyCommand.FLY_RIGHT, close.steps.first().command)
         assertEquals(2_800L, close.steps.first().sendAtMillis)
+        assertEquals(FlyCommand.NAV_BACK, close.steps.last().command)
+        assertEquals(3_800L, close.steps.last().sendAtMillis)
     }
 
     /** A right swipe made too quickly still has to close the layer; it just has to wait. */
@@ -150,7 +155,7 @@ class ClusterFlySessionTest {
 
         assertEquals(FlyPhase.CLOSING, cleared.phase)
         assertEquals(FlyCommand.FLY_RIGHT, cleared.steps.first().command)
-        assertEquals(FlyCommand.NAV_OFF, cleared.steps.last().command)
+        assertEquals(FlyCommand.NAV_BACK, cleared.steps.last().command)
     }
 
     /**
@@ -166,7 +171,7 @@ class ClusterFlySessionTest {
         assertTrue(early.holdOpen)
         assertEquals(FlyPhase.ARMING, early.phase)
 
-        val waited = session.onWaitTimeout(1_400L)
+        val waited = session.onWaitTimeout(2_400L)
 
         assertTrue(waited.push)
         assertEquals(FlyPhase.PUSHING, waited.phase)
