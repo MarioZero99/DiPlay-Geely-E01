@@ -305,7 +305,9 @@ internal object DiagnosticExportStore {
     private data class Backup(val uri: Uri?, val file: File)
 
     private fun saveInternalBackup(context: Context, fileName: String, report: String): Backup =
-        saveBackupIn(context, File(context.filesDir, "diagnostic-reports"), fileName, report)
+        PerfTrace.span("export/backup") {
+            saveBackupIn(context, File(context.filesDir, "diagnostic-reports"), fileName, report)
+        }
 
     private fun saveBackupIn(context: Context, directory: File, fileName: String, report: String): Backup {
         if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Report storage is unavailable")
