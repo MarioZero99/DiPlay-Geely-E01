@@ -18,10 +18,34 @@ internal object DiagnosticRedactor {
     /** The leading boundary is what keeps `filename:` and `username:` out of it. */
     private val namedDevice = Regex("(?i)\\b(phone|device|peer|host)?name\\s*[=:]")
     private val ipv6 = Regex("(?i)(?:[0-9a-f]{1,4}:)*[0-9a-f]{0,4}::[0-9a-f:]*(?:%[a-z0-9_.-]+)?|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}")
+    private fun colonCount(line: String): Int {
+        var count = 0
+        for (c in line) if (c == ':' && ++count >= 7) return 7
+        return count
+    }
+
+    private fun hasHexRun(line: String, minimum: Int): Boolean {
+        var run = 0
+        for (c in line) {
+            if (c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F') {
+                if (++run >= minimum) return true
+            } else {
+                run = 0
+            }
+        }
+        return false
+    }
+
     fun redact(line: String): String? {
         if (line.contains("TRACE ") || line.contains("PHONE ") || line.contains('\n') || line.contains('\r')) return null
         if (secret.containsMatchIn(line) || namedDevice.containsMatchIn(line)) return WITHHELD
-        return line.replace(mac, "[address]").replace(identifier, "[identifier]")
-            .replace(address, "[ip]").replace(ipv6, "[ip]").take(700)
+        val colons = colonCount(line)
+        var result = line
+        // mac 需要 5 个冒号；ipv6 需要 "::" 或 7 个冒号；两者都是匹配的必要条件，跳过不可能命中。
+        if (colons >= 5) result = result.replace(mac, "[address]")
+        if (hasHexRun(line, 8)) result = result.replace(identifier, "[identifier]")
+        if (line.contains('.')) result = result.replace(address, "[ip]")
+        if (colons >= 7 || line.contains("::")) result = result.replace(ipv6, "[ip]")
+        return result.take(700)
     }
 }

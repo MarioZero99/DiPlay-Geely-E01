@@ -75,6 +75,14 @@ class DiagnosticRedactorTest {
         assertTrue(line.contains("connected"))
         assertFalse(line.contains("C0:A6")); assertFalse(line.contains("192.168")); assertFalse(line.contains("012345")); assertFalse(line.contains("fe80"))
     }
+    /** 预检的边界：5 个冒号、7 个冒号、8 个连续十六进制字符之上都必须仍被替换。 */
+    @Test fun addressShapesAtThePrecheckBoundariesAreStillReplaced() {
+        assertEquals("[address] only", DiagnosticRedactor.redact("C0:A6:00:29:58:0A only"))
+        assertEquals("[ip] only", DiagnosticRedactor.redact("2001:db8:0:0:0:0:0:1 only"))
+        assertEquals("[ip] only", DiagnosticRedactor.redact("10.0.0.1 only"))
+        assertEquals("[identifier] only", DiagnosticRedactor.redact("0123456789abcdef01234567 only"))
+    }
+
     @Test fun logRotationIsBoundedAndRedactionHappensBeforeDisk() {
         val folder = Files.createTempDirectory("diplay-log-test").toFile()
         try {
