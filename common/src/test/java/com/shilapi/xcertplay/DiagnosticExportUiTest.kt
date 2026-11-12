@@ -331,6 +331,30 @@ class DiagnosticExportUiTest {
         assertTrue("the detail must name a class and a message", detail!!.contains(":"))
     }
 
+    /** 保存后车轮上要能回答"慢在哪"：每个导出阶段都必须有自己的 PerfTrace series。 */
+    @Test fun eachExportStageIsTimed() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        registerReportProvider(activity.applicationContext)
+        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        try {
+            // exportHere 没有卡片就直接返回，所以先打开地点卡。
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
+            awaitText(activity, activity.getString(R.string.export_internal_storage))
+            ReflectionHelpers.callInstanceMethod<Unit>(
+                activity, "exportHere",
+                ReflectionHelpers.ClassParameter.from(File::class.java, downloads),
+            )
+            awaitText(activity, "/DiPlay/DiPlay-")
+            val summary = PerfTrace.summary()
+            for (name in listOf("export/report", "export/redact", "export/folder-write", "export/backup")) {
+                assertTrue(summary, summary.contains(name))
+            }
+        } finally {
+            controller.pause().stop().destroy()
+        }
+    }
+
     private fun registerReportProvider(context: Context) {
         val authority = "${context.packageName}.diagnostic-reports"
         if (context.packageManager.resolveContentProvider(authority, PackageManager.GET_META_DATA) == null) return

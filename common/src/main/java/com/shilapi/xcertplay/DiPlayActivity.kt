@@ -3533,8 +3533,11 @@ class DiPlayActivity : ComponentActivity() {
         handler.postDelayed(timeout, usbSaveTimeoutMillis)
         Thread({
             val result = runCatching {
-                val report = buildCompleteReport(appContext)
-                DiagnosticExportStore.saveToUsb(appContext, device, fileName, report) to report
+                val report = PerfTrace.span("export/report") { buildCompleteReport(appContext) }
+                val outcome = PerfTrace.span("export/usb-write") {
+                    DiagnosticExportStore.saveToUsb(appContext, device, fileName, report)
+                }
+                outcome to report
             }
             runOnUiThread {
                 if (token != usbSaveToken) return@runOnUiThread
@@ -3674,8 +3677,11 @@ class DiPlayActivity : ComponentActivity() {
                 "chosen ${directory.absolutePath} exists=${directory.exists()} dir=${directory.isDirectory} list=${listed?.size ?: "null"} write=${directory.canWrite()}",
             )
             val result = runCatching {
-                val report = buildCompleteReport(appContext)
-                DiagnosticExportStore.save(appContext, directory, fileName, report) to report
+                val report = PerfTrace.span("export/report") { buildCompleteReport(appContext) }
+                val outcome = PerfTrace.span("export/folder-write") {
+                    DiagnosticExportStore.save(appContext, directory, fileName, report)
+                }
+                outcome to report
             }
             runOnUiThread {
                 exportInProgress = false
@@ -3901,12 +3907,14 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun buildDiagnosticSections(appContext: android.content.Context): List<DiagnosticSection> {
-        val logs = SessionLogFile.reportFiles(File(appContext.filesDir, "logs")).map { file ->
-            DiagnosticSection(
-                name = file.name,
-                lines = file.useLines { lines -> lines.mapNotNull { DiagnosticRedactor.redact(it) }.toList() },
-                newest = file.name == "diplay.log",
-            )
+        val logs = PerfTrace.span("export/redact") {
+            SessionLogFile.reportFiles(File(appContext.filesDir, "logs")).map { file ->
+                DiagnosticSection(
+                    name = file.name,
+                    lines = file.useLines { lines -> lines.mapNotNull { DiagnosticRedactor.redact(it) }.toList() },
+                    newest = file.name == "diplay.log",
+                )
+            }
         }
         // Appended without the generic redaction pass. A record is redacted when it is written, and that
         // pass replaces a whole line that mentions a credential with a single token — for a JSON line
