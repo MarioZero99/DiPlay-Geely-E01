@@ -107,6 +107,43 @@ class XingruiClusterMediaFormatterTest {
     }
 
     @Test
+    fun stripTranslationSuffix_removesTranslationWhenBaseHasNoKanaOrHangul() {
+        // 英文歌/纯汉字日文歌的歌词包后缀同样不带括号翻译
+        assertEquals("See You Again", XingruiClusterMediaFormatter.stripTranslationSuffix("See You Again (当我们再相见)"))
+        assertEquals("愛唄", XingruiClusterMediaFormatter.stripTranslationSuffix("愛唄 (爱之歌)"))
+    }
+
+    @Test
+    fun optimizeCjkDisplay_extractsEnglishGlossWithPunctuationAndDigits() {
+        // 韩文字库缺失，括号里的英文释义是唯一能显示的内容；撇号、连字符、数字不能让它失效
+        assertEquals("Don't Cry", XingruiClusterMediaFormatter.optimizeCjkDisplay("노래 (Don't Cry)"))
+        assertEquals("It's Okay", XingruiClusterMediaFormatter.optimizeCjkDisplay("노래 (It's Okay)"))
+        assertEquals("Fate - OST", XingruiClusterMediaFormatter.optimizeCjkDisplay("인연 (Fate - OST)"))
+        assertEquals("I Love You 2", XingruiClusterMediaFormatter.optimizeCjkDisplay("사랑해 (I Love You 2)"))
+    }
+
+    @Test
+    fun optimizeCjkDisplay_keepsCompoundLiveVersions() {
+        assertEquals("夜に駆ける (Live in Tokyo)", XingruiClusterMediaFormatter.optimizeCjkDisplay("夜に駆ける (Live in Tokyo)"))
+        // 韩文分支不能把版本标记当成歌名显示
+        assertEquals("노래 (Live in Tokyo)", XingruiClusterMediaFormatter.optimizeCjkDisplay("노래 (Live in Tokyo)"))
+        // 但不能宽到把 Liverpool 也当 Live 版本，它仍按罗马音注音剥掉
+        assertEquals("夜に駆ける", XingruiClusterMediaFormatter.optimizeCjkDisplay("夜に駆ける (Liverpool)"))
+    }
+
+    @Test
+    fun optimizeCjkDisplay_normalizesFullWidthSlash() {
+        assertEquals("さよなら/再见", XingruiClusterMediaFormatter.cleanClusterText("さよなら／再见"))
+        assertEquals("再见", XingruiClusterMediaFormatter.optimizeCjkDisplay("さよなら／再见"))
+    }
+
+    @Test
+    fun optimizeCjkDisplay_keepsWholeTitleInBrackets() {
+        // 整首曲名都在括号里时剥完会变空，必须回退原串
+        assertEquals("(ボーノ)", XingruiClusterMediaFormatter.optimizeCjkDisplay("(ボーノ)"))
+    }
+
+    @Test
     fun buildMediaPath_alwaysSkipsTheAlbumLayer() {
         assertEquals("http://carplay", XingruiClusterMediaFormatter.buildMediaPath(null))
         assertEquals("http://carplay", XingruiClusterMediaFormatter.buildMediaPath(""))

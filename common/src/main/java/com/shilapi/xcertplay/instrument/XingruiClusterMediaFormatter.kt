@@ -31,6 +31,7 @@ internal object XingruiClusterMediaFormatter {
             .replace('　', ' ')
             .replace('～', '~')
             .replace('〜', '~')
+            .replace('／', '/')
             .replace("・", " · ")
             .replace(RE_WHITESPACE, " ")
             .trim()
@@ -41,6 +42,7 @@ internal object XingruiClusterMediaFormatter {
     private val RE_KANA = Regex("[\\u3040-\\u30ff]")
     private val RE_HANZI = Regex("[\\u4e00-\\u9fff]")
     private val RE_BRACKETS = Regex("[\\(\\[（【](.*?)[\\)\\]）】]")
+    private val RE_LIVE = Regex("(?i)^live\\b")
 
     /**
      * 仪表字库只有 ASCII + GBK：假名不全，韩文整片空白。
@@ -73,7 +75,7 @@ internal object XingruiClusterMediaFormatter {
         if (hasHangul) {
             val displayable = chineseTranslation ?: brackets.firstOrNull { bracket ->
                 val content = bracket.groupValues[1].trim()
-                isAsciiWord(content) && !isVersionMarker(content)
+                isDisplayableGloss(content) && !isVersionMarker(content)
             }?.groupValues?.get(1)?.trim()
             return formatText(displayable ?: cleaned)
         }
@@ -91,6 +93,8 @@ internal object XingruiClusterMediaFormatter {
             }
         }
         result = cleanClusterText(result)
+        // 整首曲名都在括号里时剥完会变空：回退原串，不能让第一行只剩一个空格。
+        if (result.isBlank()) return formatText(cleaned)
 
         // 4. 日文超长：中文翻译是完整可显示的那一半，优先于被截断的原歌名。
         if (hasKana && chineseTranslation != null && result.length > MAX_CAN_TEXT_LENGTH) {
@@ -115,7 +119,6 @@ internal object XingruiClusterMediaFormatter {
     fun stripTranslationSuffix(raw: String?): String {
         val cleaned = cleanClusterText(raw)
         if (cleaned.isBlank()) return " "
-        if (!RE_KANA.containsMatchIn(cleaned) && !RE_HANGUL.containsMatchIn(cleaned)) return cleaned
 
         // 取最后一个中文括号，而不是最后一个括号："(中文) (Live)" 也要能找到翻译。
         val match = RE_BRACKETS.findAll(cleaned)
@@ -129,7 +132,8 @@ internal object XingruiClusterMediaFormatter {
     private fun isVersionMarker(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return false
-        if (trimmed.equals("Live", ignoreCase = true)) return true
+        // "Live"/"Live in Tokyo" 是一类；用词边界，避免把 Liverpool 也当成 Live 版本。
+        if (RE_LIVE.containsMatchIn(trimmed)) return true
         val lower = trimmed.lowercase()
         if (lower.startsWith("feat") ||
             lower.startsWith("instrumental") ||
@@ -164,6 +168,20 @@ internal object XingruiClusterMediaFormatter {
         for (c in text) {
             if (c.code >= 0x80) return false
             if (c.isLetter()) hasLetter = true else if (!c.isWhitespace()) return false
+        }
+        return hasLetter
+    }
+
+    /**
+     * 韩文曲目括号里的英文释义：仪表字库只认 ASCII，只要全是可打印 ASCII 且含字母就能显示。
+     * 撇号、连字符、数字都常见（Don't Cry / Fate - OST / I Love You 2），不能像罗马音那样严。
+     */
+    private fun isDisplayableGloss(text: String): Boolean {
+        if (text.isEmpty()) return false
+        var hasLetter = false
+        for (c in text) {
+            if (c.code < 0x20 || c.code > 0x7e) return false
+            if (c.isLetter()) hasLetter = true
         }
         return hasLetter
     }
