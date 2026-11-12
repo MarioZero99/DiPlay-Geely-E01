@@ -150,8 +150,10 @@ internal class SessionLogFile(
         /**
          * The files a report may read: today's earlier runs, earliest first, then the run in progress.
          *
-         * Nothing older, on purpose. The report is what a driver sends about today; the retained
-         * days are on disk for the seven-day window and are not silently mixed in.
+         * Nothing older, on purpose. The retained days are on disk for the seven-day window and are
+         * never silently mixed in. The exporter reads only the last non-empty file from this list —
+         * the run in progress, or the latest archived run when it has just rotated
+         * (`DiPlayActivity.buildDiagnosticSections`).
          */
         fun reportFiles(directory: File, nowMillis: Long = System.currentTimeMillis()): List<File> {
             val today = dayString(nowMillis)

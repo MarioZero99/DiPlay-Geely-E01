@@ -3833,14 +3833,24 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun buildDiagnosticSections(appContext: android.content.Context): List<DiagnosticSection> {
+        val logDir = File(appContext.filesDir, "logs")
+        val current = File(logDir, "diplay.log")
+        val target = if (current.isFile && current.length() > 0L) {
+            current
+        } else {
+            SessionLogFile.reportFiles(logDir).lastOrNull { it.length() > 0L }
+        }
         val logs = PerfTrace.span("export/redact") {
-            SessionLogFile.reportFiles(File(appContext.filesDir, "logs")).map { file ->
-                DiagnosticSection(
-                    name = file.name,
-                    lines = file.useLines { lines -> lines.mapNotNull { DiagnosticRedactor.redact(it) }.toList() },
-                    newest = file.name == "diplay.log",
+            target?.let { file ->
+                listOf(
+                    DiagnosticSection(
+                        name = file.name,
+                        // 落盘时已脱敏；这一遍兜住非当前构建写入的行（当天升级、直接写盘），不省。
+                        lines = file.useLines { lines -> lines.mapNotNull { DiagnosticRedactor.redact(it) }.toList() },
+                        newest = true,
+                    )
                 )
-            }
+            } ?: emptyList()
         }
         // Appended without the generic redaction pass. A record is redacted when it is written, and that
         // pass replaces a whole line that mentions a credential with a single token — for a JSON line
