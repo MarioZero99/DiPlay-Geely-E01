@@ -85,7 +85,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
-import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -196,7 +195,6 @@ class DiPlayActivity : ComponentActivity() {
     private var usbSaveToken = 0
     private var usbSaveTimeout: Runnable? = null
     private val usbSaveTimeoutMillis = 25_000L
-    private val directoryListTimeoutMillis = 8_000L
     private var exportSheet: ExportFolderSheet? = null
     private var exportRoots: List<ExportFolder> = emptyList()
     private var uploadInProgress = false
@@ -3459,7 +3457,7 @@ class DiPlayActivity : ComponentActivity() {
                 if (folder.usbDevice != null) {
                     saveUsb(folder)
                 } else if (folder.directory != null) {
-                    openDirectory(folder.directory, folder.directory)
+                    exportHere(folder.directory)
                 }
             }
         }
@@ -3584,78 +3582,6 @@ class DiPlayActivity : ComponentActivity() {
                 )
             }
         }, "diplay-export-usb-save").start()
-    }
-
-    private fun openDirectory(directory: File, mountRoot: File) {
-        if (exportInProgress) return
-        val sheet = exportSheet ?: return
-        val generation = browseGeneration
-        val request = ++browseRequest
-        DiagLog.i("DiagnosticExport", "list ${directory.absolutePath}")
-        sheet.showLoading(directory.name.ifBlank { mountRoot.name }, getString(R.string.export_loading))
-        val settled = AtomicBoolean(false)
-        val startedAt = SystemClock.uptimeMillis()
-        lateinit var listTimeout: Runnable
-        listTimeout = Runnable {
-            if (!browseAlive(generation, request) || settled.get()) return@Runnable
-            val elapsed = SystemClock.uptimeMillis() - startedAt
-            if (elapsed < directoryListTimeoutMillis) {
-                handler.postDelayed(listTimeout, (directoryListTimeoutMillis - elapsed).coerceAtLeast(1L))
-                return@Runnable
-            }
-            if (!settled.compareAndSet(false, true)) return@Runnable
-            if (!browseAlive(generation, request)) return@Runnable
-            DiagLog.w("DiagnosticExport", "list timed out ${directory.absolutePath}")
-            showDirectory(directory, mountRoot, emptyList(), readable = false)
-        }
-        handler.postDelayed(listTimeout, directoryListTimeoutMillis)
-        Thread({
-            val readable = DiagnosticExportStore.isReadable(directory)
-            val entries = if (readable) DiagnosticExportStore.children(directory) else emptyList()
-            runOnUiThread {
-                if (!settled.compareAndSet(false, true)) return@runOnUiThread
-                if (!browseAlive(generation, request)) return@runOnUiThread
-                showDirectory(directory, mountRoot, entries, readable)
-            }
-        }, "diplay-export-list").start()
-    }
-
-    private fun showDirectory(directory: File, mountRoot: File, entries: List<File>, readable: Boolean) {
-        val sheet = exportSheet ?: return
-        val rows = mutableListOf<ExportFolderSheet.Choice>()
-        rows += ExportFolderSheet.Choice(getString(R.string.export_up), null, clickable = true) {
-            when {
-                sameFile(directory, mountRoot) -> showMountList()
-                directory.parentFile == null || sameFile(directory.parentFile!!, mountRoot) -> openDirectory(mountRoot, mountRoot)
-                else -> openDirectory(directory.parentFile!!, mountRoot)
-            }
-        }
-        when {
-            !readable -> rows += ExportFolderSheet.Choice(getString(R.string.export_unreadable), null, clickable = false, onClick = null)
-            entries.isEmpty() -> rows += ExportFolderSheet.Choice(getString(R.string.export_empty), null, clickable = false, onClick = null)
-            else -> for (entry in entries) {
-                if (entry.isDirectory) {
-                    rows += ExportFolderSheet.Choice(entry.name + "/", null, clickable = true) {
-                        openDirectory(entry, mountRoot)
-                    }
-                } else {
-                    val fileLength = runCatching { entry.length() }.getOrDefault(0L)
-                    val sizeDetail = if (fileLength > 0L) {
-                        android.text.format.Formatter.formatFileSize(applicationContext, fileLength)
-                    } else null
-                    rows += ExportFolderSheet.Choice(entry.name, sizeDetail, clickable = false, onClick = null)
-                }
-            }
-        }
-        sheet.showChoices(
-            directory.name.ifBlank { mountRoot.name },
-            File(mountRoot, "DiPlay").absolutePath,
-            rows,
-            // 目录列不出来也要能保存。应用读不了 /mnt/media_rw 时，保存会再走 root 拷贝。
-            saveLabel = getString(R.string.export_save_to_disk),
-            onSave = { exportHere(mountRoot) },
-            closeLabel = getString(R.string.close),
-        )
     }
 
     private fun exportHere(directory: File) {

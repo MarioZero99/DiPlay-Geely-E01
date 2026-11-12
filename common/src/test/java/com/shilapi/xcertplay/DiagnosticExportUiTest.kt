@@ -63,7 +63,6 @@ class DiagnosticExportUiTest {
         try {
             ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
             clickRow(activity, activity.getString(R.string.export_internal_storage))
-            clickRow(activity, activity.getString(R.string.export_save_to_disk))
             val body = awaitText(activity, "/DiPlay/DiPlay-")
             val downloads = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
@@ -77,11 +76,8 @@ class DiagnosticExportUiTest {
         }
     }
 
-    /**
-     * A stick is confirmed by the files on it. Saving from a subfolder still writes the mount root,
-     * and tapping a file leaves the card and the save button where they are.
-     */
-    @Test fun browsingAStickShowsItsFilesAndSavesAtTheMountRoot() {
+    /** 地点卡点一下就是保存：写到卷根 /DiPlay，不再进入子目录。 */
+    @Test fun tappingAStickSavesAtTheMountRoot() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
         val activity = controller.get()
         val context = activity.applicationContext
@@ -97,22 +93,10 @@ class DiagnosticExportUiTest {
             awaitText(activity, stick.name)
             awaitText(activity, stick.absolutePath)
             clickRow(activity, stick.name)
-            awaitText(activity, "readme.txt")
-            awaitText(activity, "Music/")
-            texts(activity).first { it.text == "readme.txt" }.performClick()
-            shadowOf(Looper.getMainLooper()).idle()
-            val save = texts(activity).first { it.text == activity.getString(R.string.export_save_to_disk) }
-            assertTrue(save.isEnabled)
-            assertTrue(save.isAttachedToWindow)
-            clickRow(activity, "Music/")
-            awaitText(activity, activity.getString(R.string.export_empty))
-            val whileInside = texts(activity).map { it.text.toString() }
-            assertTrue(whileInside.any { it == File(stick, "DiPlay").absolutePath })
-            assertFalse(whileInside.any { it.contains("/Music/DiPlay") })
-            clickRow(activity, activity.getString(R.string.export_save_to_disk))
             val body = awaitText(activity, "/DiPlay/DiPlay-")
             val saved = File(stick, "DiPlay").listFiles()!!.single { it.isFile }
             assertEquals(saved.absolutePath, body.text.lines().first { it.contains("usb-otg-sda1") })
+            assertTrue(texts(activity).none { it.text == "readme.txt" })
             assertFalse(File(stick, "Music/DiPlay").exists())
             assertNotNull(texts(activity).firstOrNull { it.text == activity.getString(R.string.share) })
         } finally {
@@ -271,7 +255,6 @@ class DiagnosticExportUiTest {
         try {
             ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
             clickRow(activity, activity.getString(R.string.export_internal_storage))
-            clickRow(activity, activity.getString(R.string.export_save_to_disk))
             awaitText(activity, "/DiPlay/DiPlay-")
             val downloads = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
