@@ -150,53 +150,6 @@ internal object DiagnosticExportStore {
     }
 
     /**
-     * In-memory representation of a file or directory discovered via RootShellBridge.
-     */
-    open class VirtualFile(
-        parent: File,
-        name: String,
-        private val isDir: Boolean,
-        private val fileLength: Long = 0L,
-    ) : File(parent, name) {
-        override fun isDirectory(): Boolean = isDir
-        override fun isFile(): Boolean = !isDir
-        override fun length(): Long = fileLength
-    }
-
-    fun isReadable(directory: File): Boolean {
-        if (runCatching { directory.listFiles() }.getOrNull() != null) return true
-        if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-            val (rc, _) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("ls -d \"${directory.absolutePath}\"")
-            return rc == 0
-        }
-        return false
-    }
-
-    /** Directories first, then files, by lower-case name. Falls back to RootShellBridge if normal File API is blocked. */
-    fun children(directory: File): List<File> {
-        val listed = runCatching { directory.listFiles() }.getOrNull()
-        if (listed != null) {
-            return listed.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-        }
-        if (com.shilapi.xcertplay.system.RootShellBridge.isAvailable()) {
-            val (rc, output) = com.shilapi.xcertplay.system.RootShellBridge.executeWithOutput("ls -1p \"${directory.absolutePath}\"")
-            if (rc == 0 && output.isNotBlank()) {
-                return output.lineSequence()
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .map { name ->
-                        val isDir = name.endsWith("/")
-                        val cleanName = name.removeSuffix("/")
-                        VirtualFile(directory, cleanName, isDir)
-                    }
-                    .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-                    .toList()
-            }
-        }
-        return emptyList()
-    }
-
-    /**
      * Writes `<directory>/DiPlay/<fileName>`. The private backup is what the share sheet opens,
      * and it is still written when the chosen place does not take the file. [ExportOutcome.written]
      * is false in that case. Both writes failing throws, so the card does not claim a save.

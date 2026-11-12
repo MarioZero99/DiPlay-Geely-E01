@@ -68,14 +68,6 @@ class DiagnosticExportStoreTest {
         assertTrue(folders.any { it.usb && it.directory?.absolutePath == raw.absolutePath })
     }
 
-    @Test fun childrenPutsDirectoriesFirst() {
-        val dir = File(context.cacheDir, "stick-list").apply { mkdirs() }
-        File(dir, "b.txt").writeText("b")
-        File(dir, "a-dir").mkdirs()
-        val names = DiagnosticExportStore.children(dir).map { it.name }
-        assertEquals(listOf("a-dir", "b.txt"), names)
-    }
-
     @Test fun exportViaRootGracefullyHandlesUnavailableService() {
         val target = File("/storage/usbotg/DiPlay/report.txt")
         assertFalse(DiagnosticExportStore.exportViaRoot(target, "test report", context.cacheDir))
@@ -222,22 +214,6 @@ class DiagnosticExportStoreTest {
             assertFalse(outcome.primaryPath.contains("/storage/usbotg"))
         }
         assertTrue(shells.none { it.exists() })
-    }
-
-    @Test fun isReadableReturnsTrueForNormalDirectory() {
-        val dir = File(context.cacheDir, "readable-test").apply { mkdirs() }
-        assertTrue(DiagnosticExportStore.isReadable(dir))
-    }
-
-    @Test fun virtualFileCorrectlyReportsDirectoryProperty() {
-        val parent = File(context.cacheDir, "vdir")
-        val dirFile = DiagnosticExportStore.VirtualFile(parent, "subfolder", isDir = true)
-        val regFile = DiagnosticExportStore.VirtualFile(parent, "report.txt", isDir = false, fileLength = 1234L)
-        assertTrue(dirFile.isDirectory)
-        assertFalse(dirFile.isFile)
-        assertFalse(regFile.isDirectory)
-        assertTrue(regFile.isFile)
-        assertEquals(1234L, regFile.length())
     }
 
     companion object {
