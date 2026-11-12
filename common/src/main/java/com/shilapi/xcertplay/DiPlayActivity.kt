@@ -3833,13 +3833,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun buildDiagnosticSections(appContext: android.content.Context): List<DiagnosticSection> {
-        val logDir = File(appContext.filesDir, "logs")
-        val current = File(logDir, "diplay.log")
-        val target = if (current.isFile && current.length() > 0L) {
-            current
-        } else {
-            SessionLogFile.reportFiles(logDir).lastOrNull { it.length() > 0L }
-        }
+        val target = SessionLogFile.latestLog(File(appContext.filesDir, "logs"))
         val logs = PerfTrace.span("export/redact") {
             target?.let { file ->
                 listOf(

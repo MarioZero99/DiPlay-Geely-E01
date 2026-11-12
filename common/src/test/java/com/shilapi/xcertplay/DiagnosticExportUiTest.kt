@@ -288,8 +288,29 @@ class DiagnosticExportUiTest {
         }
     }
 
-    /**
-     * The header is what places a report: which build, which car, which settings. It is also the only
+    /** 跨零点轮转：归档按开场那天命名，今天没有任何归档时仍要取到刚写出的那一份。 */
+    @Test fun aReportAfterMidnightRotationStillFindsTheArchive() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        val logs = File(activity.filesDir, "logs").apply { mkdirs() }
+        val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            .format(Date(System.currentTimeMillis() - 24L * 60 * 60 * 1000))
+        File(logs, "diplay-$yesterday.log").writeText("MIDNIGHT-SESSION-LINE\n")
+        File(logs, "diplay.log").writeText("")
+        try {
+            val report = ReflectionHelpers.callInstanceMethod<String>(
+                activity, "buildCompleteReport",
+                ReflectionHelpers.ClassParameter.from(Context::class.java, activity.applicationContext),
+            )
+            assertTrue(report.contains("MIDNIGHT-SESSION-LINE"))
+            assertTrue(report.contains("--- diplay-$yesterday.log ---"))
+        } finally {
+            logs.deleteRecursively()
+            controller.pause().stop().destroy()
+        }
+    }
+
+    /** The header is where a reader looks for "why is it slow"; a timing block that only appears in a
      * place the reason authentication failed can appear — "authentication unavailable" on its own cannot
      * tell a missing asset from a rejected certificate, and the exception itself went to logcat, which a
      * head unit with no adb cannot show anyone.
