@@ -301,8 +301,8 @@ class ClusterFlyController(
         }
 
         if (effect.phase == FlyPhase.ARMING || effect.phase == FlyPhase.WAITING_FOR_VIDEO) {
-            // Listening starts with the opening pair, not with the wait: the cluster may ask inside
-            // those 400 ms and the ask is remembered rather than refused.
+            // Listening starts with the opening steps: the cluster may ask after 1887, before the
+            // left swipe, and that ask is remembered rather than refused.
             link?.start()
         }
 
@@ -377,8 +377,8 @@ class ClusterFlyController(
                             reply(FlyReply.READY, ClusterFlyProtocol.videoReady()),
                             reply(FlyReply.START, ClusterFlyProtocol.videoStart()),
                         )
-                        // Asked during the 400 ms before the left step. A refusal here is the
-                        // answer the cluster keeps; the ready and start go out with that step.
+                        // An open asked before the left step goes out is remembered; the ready
+                        // and start go out with that step.
                         effect.holdOpen -> emptyList()
                         else -> listOf(reply(FlyReply.REFUSED, ClusterFlyProtocol.videoRefused()))
                     }

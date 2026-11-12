@@ -53,13 +53,13 @@ class ClusterFlyControllerTest {
         return packet
     }
 
-    /** Left at 1000, the fly step at 1400, the cluster's ask at 1500: a live PUSHING session. */
+    /** Gesture at 1000, front at 1400, left at 2400, the cluster's ask at 2500. */
     private fun pushing(frameExecutor: java.util.concurrent.ExecutorService? = null): ClusterFlyController {
         val controller = controller(frameExecutor)
         controller.onGesture(Decision.FLY_LEFT)
-        now = 1_400L
+        now = 2_400L
         runScheduled()
-        now = 1_500L
+        now = 2_500L
         controller.onPacket(openAsk())
         runScheduled()
         return controller
@@ -83,17 +83,23 @@ class ClusterFlyControllerTest {
     }
 
     @Test
-    fun `left sends navigation before the fly`() {
+    fun `left sends navigation, then front, then the fly`() {
         controller().onGesture(Decision.FLY_LEFT)
 
         assertEquals(listOf(FlyCommand.NAV_ON), sent)
-        assertEquals(400L, scheduled.single().first)
+        assertEquals(listOf(400L, 1_400L), scheduled.map { it.first })
         assertTrue(lines.contains("fly.command NAV_ON"))
+        assertFalse(lines.contains("fly.command NAV_FRONT"))
         assertFalse(lines.contains("fly.command FLY_LEFT"))
 
-        scheduled.single().second()
-        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.FLY_LEFT), sent)
-        assertTrue(lines.contains("fly.command FLY_LEFT"))
+        now = 1_400L
+        scheduled[0].second()
+        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT), sent)
+        assertFalse(lines.contains("fly.command FLY_LEFT"))
+
+        now = 2_400L
+        scheduled[1].second()
+        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT), sent)
     }
 
     @Test
@@ -129,7 +135,7 @@ class ClusterFlyControllerTest {
         assertEquals(emptyList<ByteArray>(), replies)
         assertFalse(lines.contains("fly.reply refused"))
 
-        now = 1_400L
+        now = 2_400L
         runScheduled()
 
         assertTrue(lines.contains("fly.reply ready"))
@@ -141,9 +147,9 @@ class ClusterFlyControllerTest {
     fun `open is answered ready then start`() {
         val controller = controller()
         controller.onGesture(Decision.FLY_LEFT)
-        now = 1_400L
+        now = 2_400L
         runScheduled()
-        now = 1_500L
+        now = 2_500L
 
         val replies = controller.onPacket(openAsk())
 
@@ -236,16 +242,16 @@ class ClusterFlyControllerTest {
     @Test
     fun `car play ending closes the layer it opened`() {
         val controller = pushing()
-        now = 2_600L
+        now = 3_400L
 
         controller.onCarPlayEnded()
 
         assertEquals(
-            listOf(FlyCommand.NAV_ON, FlyCommand.FLY_LEFT, FlyCommand.FLY_RIGHT),
+            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT, FlyCommand.FLY_RIGHT),
             sent,
         )
         runScheduled()
-        assertEquals(FlyCommand.NAV_OFF, sent.last())
+        assertEquals(FlyCommand.NAV_BACK, sent.last())
     }
 
     /** Runs the fly-thread tasks by hand, so the test can see what was deferred. */
