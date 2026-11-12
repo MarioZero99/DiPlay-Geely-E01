@@ -151,9 +151,8 @@ internal class SessionLogFile(
          * The files a report may read: today's earlier runs, earliest first, then the run in progress.
          *
          * Nothing older, on purpose. The retained days are on disk for the seven-day window and are
-         * never silently mixed in. The exporter reads only the last non-empty file from this list —
-         * the run in progress, or the latest archived run when it has just rotated
-         * (`DiPlayActivity.buildDiagnosticSections`).
+         * never silently mixed in. The exporter reads only [latestLog] — the run in progress, or the
+         * latest archived run when it has just rotated (`DiPlayActivity.buildDiagnosticSections`).
          */
         fun reportFiles(directory: File, nowMillis: Long = System.currentTimeMillis()): List<File> {
             val today = dayString(nowMillis)
@@ -165,6 +164,24 @@ internal class SessionLogFile(
                 .orEmpty()
             val current = File(directory, CURRENT_NAME).takeIf { it.isFile }
             return archived + listOfNotNull(current)
+        }
+
+        /**
+         * The newest non-empty log in the directory, whatever day it is named for: the run in
+         * progress, or the most recently archived run right after a rotation. A run that crosses
+         * midnight is archived under the day it started, so a today-only lookup finds nothing.
+         */
+        fun latestLog(directory: File): File? {
+            val current = File(directory, CURRENT_NAME).takeIf { it.isFile && it.length() > 0L }
+            if (current != null) return current
+            return directory.listFiles()
+                ?.filter { it.isFile && ARCHIVE_NAME.matches(it.name) && it.length() > 0L }
+                ?.maxWithOrNull(
+                    compareBy(
+                        { file: File -> ARCHIVE_NAME.find(file.name)?.groupValues?.get(1).orEmpty() },
+                        { file: File -> ARCHIVE_NAME.find(file.name)?.groupValues?.get(3)?.toIntOrNull() ?: 1 },
+                    ),
+                )
         }
 
         private fun dayString(millis: Long): String =
