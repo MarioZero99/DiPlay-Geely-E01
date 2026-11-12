@@ -1,23 +1,28 @@
 package com.shilapi.xcertplay.instrument.fly
 
 /** What gets sent to the head unit's extraservice. The order it is sent in is part of the contract. */
-enum class FlyCommand { NAV_ON, FLY_LEFT, FLY_RIGHT, NAV_OFF }
+enum class FlyCommand { NAV_ON, NAV_FRONT, FLY_LEFT, FLY_RIGHT, NAV_OFF, NAV_BACK }
 
 /** One command and the moment it is due, counted on the caller's clock. */
 data class FlyStep(val command: FlyCommand, val sendAtMillis: Long)
 
 /**
- * Turns a gesture into the pair of commands the factory expects.
+ * Turns a gesture into the commands the factory expects.
  *
- * Opening goes `NAV_ON`, then `FLY_LEFT` 400 ms later. Closing goes `FLY_RIGHT`, then `NAV_OFF` 400 ms
- * later — the reverse order is dropped by the head unit and the cluster is left on the map page with
- * nothing behind the layer. No steps are returned when the gate refuses, and the caller may not move
- * its "last command" clock until it has actually sent one.
+ * Opening goes `NAV_ON`, then `NAV_FRONT` (the factory's "navigation is in front" message) 400 ms
+ * later, then `FLY_LEFT` another 1000 ms after that. Closing goes `FLY_RIGHT`, then `NAV_OFF` 400 ms
+ * later, then `NAV_BACK` 1000 ms after the swipe — clearing the navigation flag before the swipe
+ * makes the head unit drop it, and the cluster is left on the map page with nothing behind the
+ * layer. No steps are returned when the gate refuses, and the caller may not move its "last
+ * command" clock until it has actually sent one.
  */
 object ClusterFlySequencer {
 
     /** Enough for the extraservice to notice the first broadcast before the second arrives. */
     const val STEP_DELAY_MILLIS = 400L
+
+    /** Two MCU opcodes, 1887 and 1885, must be at least this far apart. */
+    const val MCU_GAP_MILLIS = 1_000L
 
     fun open(nowMillis: Long, conditions: FlyConditions): List<FlyStep> =
         if (ClusterFlyGate.decide(conditions) != FlyBlock.NONE) {
@@ -25,7 +30,8 @@ object ClusterFlySequencer {
         } else {
             listOf(
                 FlyStep(FlyCommand.NAV_ON, nowMillis),
-                FlyStep(FlyCommand.FLY_LEFT, nowMillis + STEP_DELAY_MILLIS),
+                FlyStep(FlyCommand.NAV_FRONT, nowMillis + STEP_DELAY_MILLIS),
+                FlyStep(FlyCommand.FLY_LEFT, nowMillis + STEP_DELAY_MILLIS + MCU_GAP_MILLIS),
             )
         }
 
@@ -36,6 +42,7 @@ object ClusterFlySequencer {
             listOf(
                 FlyStep(FlyCommand.FLY_RIGHT, nowMillis),
                 FlyStep(FlyCommand.NAV_OFF, nowMillis + STEP_DELAY_MILLIS),
+                FlyStep(FlyCommand.NAV_BACK, nowMillis + MCU_GAP_MILLIS),
             )
         }
 

@@ -28,20 +28,31 @@ class ClusterFlySequencerTest {
     )
 
     @Test
-    fun `open sends navigation before the left swipe`() {
+    fun `open arms the cluster before the left swipe`() {
         val steps = ClusterFlySequencer.open(1_000L, openConditions())
         assertEquals(
-            listOf(FlyStep(FlyCommand.NAV_ON, 1_000L), FlyStep(FlyCommand.FLY_LEFT, 1_400L)),
+            listOf(
+                FlyStep(FlyCommand.NAV_ON, 1_000L),
+                FlyStep(FlyCommand.NAV_FRONT, 1_400L),
+                FlyStep(FlyCommand.FLY_LEFT, 2_400L),
+            ),
             steps,
         )
+        assertEquals(1_000L, steps[2].sendAtMillis - steps[1].sendAtMillis)
     }
 
     @Test
     fun `close keeps navigation until after the right swipe`() {
         val steps = ClusterFlySequencer.close(5_000L, openConditions(millisSinceLastClusterCommand = 5_000))
-        assertEquals(FlyCommand.FLY_RIGHT, steps[0].command)
-        assertEquals(FlyCommand.NAV_OFF, steps[1].command)
-        assertEquals(400L, steps[1].sendAtMillis - steps[0].sendAtMillis)
+        assertEquals(
+            listOf(
+                FlyStep(FlyCommand.FLY_RIGHT, 5_000L),
+                FlyStep(FlyCommand.NAV_OFF, 5_400L),
+                FlyStep(FlyCommand.NAV_BACK, 6_000L),
+            ),
+            steps,
+        )
+        assertEquals(1_000L, steps[2].sendAtMillis - steps[0].sendAtMillis)
     }
 
     @Test
