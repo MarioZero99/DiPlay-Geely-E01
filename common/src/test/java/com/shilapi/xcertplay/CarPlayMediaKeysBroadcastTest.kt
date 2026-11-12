@@ -636,6 +636,25 @@ class CarPlayMediaKeysBroadcastTest {
     }
 
     @Test
+    fun filterLyricMetadata_matchesEnglishSongWhoseTitleCarriesChineseTranslation() {
+        // 英文歌同样会被音乐 App 加上中文翻译括号；歌词包后缀只带原歌名
+        val base = CarPlayNowPlaying(
+            title = "See You Again (当我们再相见)", artist = "Wiz Khalifa", album = "Furious 7",
+            durationMillis = 200_000L, elapsedMillis = 0L, playing = true,
+        )
+        val baseFilter = CarPlayMediaKeys.filterLyricMetadata(base, null, null, null, null)
+        val lyric = CarPlayNowPlaying(
+            title = "It's been a long day - See You Again", artist = "Wiz Khalifa", album = "Furious 7",
+            durationMillis = 200_000L, elapsedMillis = 15_000L, playing = true,
+        )
+        val filtered = CarPlayMediaKeys.filterLyricMetadata(
+            lyric, baseFilter.genuineTitle, baseFilter.genuineArtist, baseFilter.genuineAlbum, baseFilter.durationMillis,
+        )
+        assertTrue("英文歌带中文翻译时，省略翻译的歌词后缀仍要判定为歌词", filtered.isLyric)
+        assertEquals("It's been a long day", filtered.clusterLine1)
+    }
+
+    @Test
     fun filterLyricMetadata_formatsClusterLinesWithCjkOptimization() {
         // 歌名带中文翻译与注音歌手
         val raw = CarPlayNowPlaying(
