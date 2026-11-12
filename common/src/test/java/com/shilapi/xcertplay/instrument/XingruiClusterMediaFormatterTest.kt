@@ -35,6 +35,20 @@ class XingruiClusterMediaFormatterTest {
     }
 
     @Test
+    fun cleanClusterText_normalizesWhitespaceAndCjkPunctuation() {
+        // 全角空格折叠与转半角
+        assertEquals("A B", XingruiClusterMediaFormatter.cleanClusterText("A　B"))
+        // 换行符替换为空格
+        assertEquals("Line1 Line2", XingruiClusterMediaFormatter.cleanClusterText("Line1\nLine2"))
+        assertEquals("Line1 Line2", XingruiClusterMediaFormatter.cleanClusterText("Line1\r\nLine2"))
+        // 日文波浪号与全角符号规整化
+        assertEquals("夏~コクリコ坂から", XingruiClusterMediaFormatter.cleanClusterText("夏～コクリコ坂から"))
+        assertEquals("A · B", XingruiClusterMediaFormatter.cleanClusterText("A・B"))
+        // 多余空白折叠与首尾 trim
+        assertEquals("Hello World", XingruiClusterMediaFormatter.cleanClusterText("  Hello   World  "))
+    }
+
+    @Test
     fun buildMediaPath_alwaysSkipsTheAlbumLayer() {
         assertEquals("http://carplay", XingruiClusterMediaFormatter.buildMediaPath(null))
         assertEquals("http://carplay", XingruiClusterMediaFormatter.buildMediaPath(""))
