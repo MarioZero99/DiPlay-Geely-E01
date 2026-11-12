@@ -238,37 +238,50 @@ class DiagnosticExportUiTest {
         }
     }
 
-    /** The file on disk holds today's earlier runs, not the one-megabyte digest. */
-    @Test fun theSavedFileKeepsEveryRetainedLogLine() {
+    /** 报告只带当前这一场；当天更早的归档留在盘上，但不进报告。 */
+    @Test fun theSavedFileHoldsOnlyTheCurrentRun() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
         val activity = controller.get()
         registerReportProvider(activity.applicationContext)
         val logs = File(activity.filesDir, "logs").apply { mkdirs() }
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-        val older = buildString {
-            appendLine("HEAD-KEPT-LINE")
-            repeat(40_000) { append("older-line-").append(it).append(" xxxxxxxxxxxxxxxxxxxx\n") }
-            appendLine("TAIL-KEPT-LINE")
-        }
-        File(logs, "diplay-$today.log").writeText(older)
+        File(logs, "diplay-$today.log").writeText("HEAD-KEPT-LINE\n")
         File(logs, "diplay.log").writeText("password=hunter2\nNEWER-LINE marker\n")
         try {
             ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
             clickRow(activity, activity.getString(R.string.export_internal_storage))
             awaitText(activity, "/DiPlay/DiPlay-")
-            val downloads = File(
+            val saved = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                 "DiPlay",
-            )
-            val saved = downloads.listFiles()!!.single { it.name.startsWith("DiPlay-") && it.readText().contains("TAIL-KEPT-LINE") }
+            ).listFiles()!!.single { it.name.startsWith("DiPlay-") && it.readText().contains("NEWER-LINE marker") }
             val text = saved.readText()
-            assertTrue(text.contains("HEAD-KEPT-LINE"))
-            assertTrue(text.contains("TAIL-KEPT-LINE"))
             assertTrue(text.contains("NEWER-LINE marker"))
-            assertTrue(text.contains("--- diplay-$today.log ---"))
+            assertFalse(text.contains("HEAD-KEPT-LINE"))
+            assertFalse(text.contains("--- diplay-$today.log ---"))
             assertTrue(text.contains(DiagnosticRedactor.WITHHELD))
             assertFalse(text.contains("hunter2"))
-            assertFalse(text.contains("lines omitted"))
+        } finally {
+            logs.deleteRecursively()
+            controller.pause().stop().destroy()
+        }
+    }
+
+    /** diplay.log 刚轮转成 0 字节时退回当天最新一份非空归档。 */
+    @Test fun aReportWithAnEmptyCurrentLogFallsBackToTheLatestArchiveToday() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        val logs = File(activity.filesDir, "logs").apply { mkdirs() }
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        File(logs, "diplay-$today.log").writeText("ARCHIVE-LINE\n")
+        File(logs, "diplay.log").writeText("")
+        try {
+            val report = ReflectionHelpers.callInstanceMethod<String>(
+                activity, "buildCompleteReport",
+                ReflectionHelpers.ClassParameter.from(Context::class.java, activity.applicationContext),
+            )
+            assertTrue(report.contains("ARCHIVE-LINE"))
+            assertTrue(report.contains("--- diplay-$today.log ---"))
         } finally {
             logs.deleteRecursively()
             controller.pause().stop().destroy()
