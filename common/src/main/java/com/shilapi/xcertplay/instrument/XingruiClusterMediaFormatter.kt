@@ -37,5 +37,117 @@ internal object XingruiClusterMediaFormatter {
         return if (cleaned.isEmpty()) " " else cleaned
     }
 
+    private val RE_HANGUL = Regex("[\\u1100-\\u11ff\\u3130-\\u318f\\uac00-\\ud7af]")
+    private val RE_KANA = Regex("[\\u3040-\\u30ff]")
+    private val RE_HANZI = Regex("[\\u4e00-\\u9fff]")
+    private val RE_BRACKETS = Regex("[\\(\\[（【](.*?)[\\)\\]）】]")
+
+    /**
+     * 仪表字库只有 ASCII + GBK：假名不全，韩文整片空白。
+     * 日韩曲目能做的三件事，按优先级：
+     * 1. "日文 / 中文" 斜杠双语：取中文。
+     * 2. 韩文曲目（完全没有字库）或有中文翻译的日文曲目超长时：只显示中文翻译。
+     * 3. 括号里是纯假名/罗马音注音：剥掉，把 31 字让给正文。
+     */
+    fun optimizeCjkDisplay(raw: String?): String {
+        val cleaned = cleanClusterText(raw)
+        if (cleaned.isBlank()) return " "
+
+        val hasHangul = RE_HANGUL.containsMatchIn(cleaned)
+        val hasKana = RE_KANA.containsMatchIn(cleaned)
+        if (!hasHangul && !hasKana) return formatText(cleaned)
+
+        val brackets = RE_BRACKETS.findAll(cleaned).toList()
+        val chineseTranslation = brackets.firstOrNull { bracket ->
+            val content = bracket.groupValues[1].trim()
+            isChineseTranslation(content) && !isVersionMarker(content)
+        }?.groupValues?.get(1)?.trim()
+
+        // 1. "日文 / 中文"
+        if (hasKana && cleaned.contains("/")) {
+            val parts = cleaned.split("/").map { it.trim() }
+            if (parts.size == 2 && isChineseTranslation(parts[1])) return formatText(parts[1])
+        }
+
+        // 2. 韩文没有字库，整首都没法显示，只留中文翻译。
+        if (hasHangul && chineseTranslation != null) return formatText(chineseTranslation)
+
+        // 3. 剥注音。中文翻译和版本标记（Live/伴奏/feat. …）不是注音，不能动。
+        var result = cleaned
+        for (bracket in brackets) {
+            val content = bracket.groupValues[1].trim()
+            val kanaOnly = RE_KANA.containsMatchIn(content) &&
+                !RE_HANZI.containsMatchIn(content) &&
+                !RE_HANGUL.containsMatchIn(content)
+            val romajiOnly = isAsciiWord(content) && !isVersionMarker(content)
+            if (kanaOnly || romajiOnly) result = result.replace(bracket.value, "").trim()
+        }
+        result = cleanClusterText(result)
+
+        // 4. 日文超长：中文翻译是完整可显示的那一半，优先于被截断的原歌名。
+        if (hasKana && chineseTranslation != null && result.length > MAX_CAN_TEXT_LENGTH) {
+            return formatText(chineseTranslation)
+        }
+        return formatText(result)
+    }
+
+    /**
+     * 判断文本是否是中文翻译：包含汉字，且绝不包含日文假名与韩文。
+     */
+    fun isChineseTranslation(text: String): Boolean {
+        return RE_HANZI.containsMatchIn(text) &&
+            !RE_KANA.containsMatchIn(text) &&
+            !RE_HANGUL.containsMatchIn(text)
+    }
+
+    /**
+     * 去掉歌名末尾的中文翻译括号，给歌词包的后缀匹配用：
+     * 上一首是 "日文 (中文)" 时，歌词包往往只带 " - 日文" 这一截。
+     */
+    fun stripTranslationSuffix(raw: String?): String {
+        val cleaned = cleanClusterText(raw)
+        if (cleaned.isBlank()) return " "
+        if (!RE_KANA.containsMatchIn(cleaned) && !RE_HANGUL.containsMatchIn(cleaned)) return cleaned
+
+        val match = RE_BRACKETS.findAll(cleaned).lastOrNull() ?: return cleaned
+        if (!isChineseTranslation(match.groupValues[1])) return cleaned
+        val stripped = cleaned.removeRange(match.range).trim()
+        return stripped.ifEmpty { cleaned }
+    }
+
+    /** 版本/编制信息，不是翻译：不能被当成中文翻译替换歌名，也不能当罗马音注音剥掉。 */
+    private fun isVersionMarker(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed.equals("Live", ignoreCase = true)) return true
+        val lower = trimmed.lowercase()
+        if (lower.startsWith("feat") ||
+            lower.startsWith("instrumental") ||
+            lower.startsWith("inst") ||
+            lower.startsWith("remix") ||
+            lower.startsWith("acoustic") ||
+            lower.startsWith("cover") ||
+            lower.startsWith("version") ||
+            lower.startsWith("tv size") ||
+            lower.startsWith("tv ver") ||
+            lower.startsWith("edit")
+        ) {
+            return true
+        }
+        return trimmed == "伴奏" || trimmed == "纯音乐" || trimmed == "翻唱" ||
+            trimmed == "カラオケ" || trimmed == "インスト"
+    }
+
+    /** 纯 ASCII 字母与空白，才是罗马音注音；汉字不是。 */
+    private fun isAsciiWord(text: String): Boolean {
+        if (text.isEmpty()) return false
+        var hasLetter = false
+        for (c in text) {
+            if (c.code >= 0x80) return false
+            if (c.isLetter()) hasLetter = true else if (!c.isWhitespace()) return false
+        }
+        return hasLetter
+    }
+
     fun buildMediaPath(sdcardUriOrPath: String?): String = PLAYING_MEDIA_PATH
 }
