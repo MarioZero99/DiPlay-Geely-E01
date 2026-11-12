@@ -616,6 +616,23 @@ class CarPlayMediaKeysBroadcastTest {
         )
         assertTrue("歌词后缀即使省略翻译也应精准匹配", filtered.isLyric)
         assertEquals("Hop Step Jump", filtered.clusterLine1)
+
+        // 原歌名带全角波浪号：清洗后仍要命中，否则这条特性在日文曲目上全是哑的
+        val tildeBase = CarPlayNowPlaying(
+            title = "さよならの夏～コクリコ坂から～ (道别之夏)", artist = "手嶌葵", album = "Album",
+            durationMillis = 200_000L, elapsedMillis = 0L, playing = true,
+        )
+        val tildeBaseFilter = CarPlayMediaKeys.filterLyricMetadata(tildeBase, null, null, null, null)
+        val tildeLyric = CarPlayNowPlaying(
+            title = "歌詞 - さよならの夏～コクリコ坂から～", artist = "手嶌葵", album = "Album",
+            durationMillis = 200_000L, elapsedMillis = 15_000L, playing = true,
+        )
+        val tildeFiltered = CarPlayMediaKeys.filterLyricMetadata(
+            tildeLyric, tildeBaseFilter.genuineTitle, tildeBaseFilter.genuineArtist,
+            tildeBaseFilter.genuineAlbum, tildeBaseFilter.durationMillis,
+        )
+        assertTrue("全角波浪号歌名去翻译后仍应命中歌词后缀", tildeFiltered.isLyric)
+        assertEquals("歌詞", tildeFiltered.clusterLine1)
     }
 
     @Test
@@ -630,9 +647,10 @@ class CarPlayMediaKeysBroadcastTest {
             playing = true,
         )
         val filtered = CarPlayMediaKeys.filterLyricMetadata(raw, null, null, null, null)
+        assertEquals("道别之夏 ~虞美人盛开的山坡~", filtered.clusterLine1)
+        assertEquals("手嶌葵", filtered.clusterLine2)
         assertTrue("Line1 长度不超过31", filtered.clusterLine1!!.length <= 31)
         assertTrue("Line2 长度不超过31", filtered.clusterLine2!!.length <= 31)
-        assertTrue("注音括号被清理", !filtered.clusterLine2!!.contains("てしま あおい"))
     }
 
     private class FakeDimTransListener : IDimTransListener.Stub() {

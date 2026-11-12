@@ -195,9 +195,14 @@ internal object CarPlayMediaKeys {
         val rawDuration = info.durationMillis
 
         // 上一首带中文翻译括号（"日文 (中文)"）时，歌词包常常只带 " - 日文" 那一截。
-        val translatedBaseTitle = lastGenuineTitle
+        // 比对两侧都先过清洗：raw 里的 ～／・／全角空格会被 cleanClusterText 改写，
+        // 拿清洗过的名字去比 raw 歌名永远对不上。
+        val cleanTitle = normalize(rawTitle)
+        val cleanArtist = normalize(rawArtist)
+        val cleanGenuineTitle = normalize(lastGenuineTitle)
+        val translatedBaseTitle = cleanGenuineTitle
             ?.let { XingruiClusterMediaFormatter.stripTranslationSuffix(it) }
-            ?.takeIf { it.isNotBlank() && it != lastGenuineTitle }
+            ?.takeIf { it != cleanGenuineTitle }
 
         // 1. 还没有上一首真歌名：这包就是第一首，放行。
         if (lastGenuineTitle.isNullOrBlank()) {
@@ -222,12 +227,28 @@ internal object CarPlayMediaKeys {
         //    - 歌手等于上一首真歌名。
         //    - 歌名以 " - " 加上一首真歌名结尾。不要用 contains。
         //    - 歌名以制作信息前缀开头（中英文冒号均兼容）
+        // 先试 raw 的完整歌名（保留 " - 七里香" 这种前导空格的原文），再试去翻译后缀的版本，
+        // 最后才在清洗后的文本上比——日文歌名里 ～／・ 在 raw 与 clean 两个域里长得不一样。
+        val suffixMatch: Pair<String, String>? = when {
+            lastGenuineTitle != null && rawTitle != null &&
+                rawTitle.endsWith(" - $lastGenuineTitle") ->
+                rawTitle to " - $lastGenuineTitle"
+            translatedBaseTitle != null && rawTitle != null &&
+                rawTitle.endsWith(" - $translatedBaseTitle") ->
+                rawTitle to " - $translatedBaseTitle"
+            cleanTitle != null && cleanGenuineTitle != null &&
+                cleanTitle.endsWith(" - $cleanGenuineTitle") ->
+                cleanTitle to " - $cleanGenuineTitle"
+            cleanTitle != null && translatedBaseTitle != null &&
+                cleanTitle.endsWith(" - $translatedBaseTitle") ->
+                cleanTitle to " - $translatedBaseTitle"
+            else -> null
+        }
         val isLyricSwap = rawArtist == lastGenuineTitle ||
-            (translatedBaseTitle != null && rawArtist == translatedBaseTitle)
-        val isLyricSuffix = !rawTitle.isNullOrBlank() && (
-            rawTitle.endsWith(" - $lastGenuineTitle") ||
-                (translatedBaseTitle != null && rawTitle.endsWith(" - $translatedBaseTitle"))
-            )
+            (translatedBaseTitle != null &&
+                (rawArtist == translatedBaseTitle || cleanArtist == translatedBaseTitle)) ||
+            (cleanGenuineTitle != null && cleanArtist == cleanGenuineTitle)
+        val isLyricSuffix = suffixMatch != null
         val isLyricCredit = !rawTitle.isNullOrBlank() &&
             LYRIC_CREDIT_PREFIXES.any { rawTitle.startsWith(it) }
 
@@ -238,15 +259,8 @@ internal object CarPlayMediaKeys {
             val effArtist = lastGenuineArtist ?: (if (rawArtist != lastGenuineTitle) rawArtist else null)
             val effAlbum = lastGenuineAlbum ?: rawAlbum
             val rawLine1 = when {
-                isLyricSuffix -> {
-                    val title = rawTitle!!
-                    val suffix = if (title.endsWith(" - $lastGenuineTitle")) {
-                        " - $lastGenuineTitle"
-                    } else {
-                        " - $translatedBaseTitle"
-                    }
-                    title.removeSuffix(suffix).ifBlank { lastGenuineTitle }
-                }
+                suffixMatch != null ->
+                    suffixMatch.first.removeSuffix(suffixMatch.second).ifBlank { lastGenuineTitle }
                 else -> rawTitle?.takeIf { it.isNotBlank() } ?: lastGenuineTitle
             }
             val line1 = clusterText(rawLine1) ?: clusterText(lastGenuineTitle)
@@ -289,6 +303,9 @@ internal object CarPlayMediaKeys {
             )
         }
     }
+
+    private fun normalize(raw: String?): String? =
+        raw?.let { XingruiClusterMediaFormatter.cleanClusterText(it) }?.takeIf { it.isNotBlank() }
 
     private fun clusterText(raw: String?): String? =
         if (raw.isNullOrBlank()) null else XingruiClusterMediaFormatter.optimizeCjkDisplay(raw)

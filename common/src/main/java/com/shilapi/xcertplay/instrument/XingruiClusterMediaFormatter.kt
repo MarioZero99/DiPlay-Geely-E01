@@ -63,14 +63,20 @@ internal object XingruiClusterMediaFormatter {
             isChineseTranslation(content) && !isVersionMarker(content)
         }?.groupValues?.get(1)?.trim()
 
-        // 1. "日文 / 中文"
-        if (hasKana && cleaned.contains("/")) {
+        // 1. "日文或韩文 / 中文"
+        if ((hasKana || hasHangul) && cleaned.contains("/")) {
             val parts = cleaned.split("/").map { it.trim() }
             if (parts.size == 2 && isChineseTranslation(parts[1])) return formatText(parts[1])
         }
 
-        // 2. 韩文没有字库，整首都没法显示，只留中文翻译。
-        if (hasHangul && chineseTranslation != null) return formatText(chineseTranslation)
+        // 2. 韩文没有字库，整首都没法显示：优先中文翻译，其次括号里的英文释义，都没有就原样。
+        if (hasHangul) {
+            val displayable = chineseTranslation ?: brackets.firstOrNull { bracket ->
+                val content = bracket.groupValues[1].trim()
+                isAsciiWord(content) && !isVersionMarker(content)
+            }?.groupValues?.get(1)?.trim()
+            return formatText(displayable ?: cleaned)
+        }
 
         // 3. 剥注音。中文翻译和版本标记（Live/伴奏/feat. …）不是注音，不能动。
         var result = cleaned
@@ -80,7 +86,9 @@ internal object XingruiClusterMediaFormatter {
                 !RE_HANZI.containsMatchIn(content) &&
                 !RE_HANGUL.containsMatchIn(content)
             val romajiOnly = isAsciiWord(content) && !isVersionMarker(content)
-            if (kanaOnly || romajiOnly) result = result.replace(bracket.value, "").trim()
+            if ((kanaOnly || romajiOnly) && !isVersionMarker(content)) {
+                result = result.replace(bracket.value, "").trim()
+            }
         }
         result = cleanClusterText(result)
 
@@ -109,10 +117,12 @@ internal object XingruiClusterMediaFormatter {
         if (cleaned.isBlank()) return " "
         if (!RE_KANA.containsMatchIn(cleaned) && !RE_HANGUL.containsMatchIn(cleaned)) return cleaned
 
-        val match = RE_BRACKETS.findAll(cleaned).lastOrNull() ?: return cleaned
-        if (!isChineseTranslation(match.groupValues[1])) return cleaned
-        val stripped = cleaned.removeRange(match.range).trim()
-        return stripped.ifEmpty { cleaned }
+        // 取最后一个中文括号，而不是最后一个括号："(中文) (Live)" 也要能找到翻译。
+        val match = RE_BRACKETS.findAll(cleaned)
+            .lastOrNull { isChineseTranslation(it.groupValues[1]) } ?: return cleaned
+        // 去掉括号后可能留下两个空格，重新折一遍
+        val stripped = cleanClusterText(cleaned.removeRange(match.range))
+        return if (stripped.isBlank()) cleaned else stripped
     }
 
     /** 版本/编制信息，不是翻译：不能被当成中文翻译替换歌名，也不能当罗马音注音剥掉。 */
@@ -128,12 +138,21 @@ internal object XingruiClusterMediaFormatter {
             lower.startsWith("acoustic") ||
             lower.startsWith("cover") ||
             lower.startsWith("version") ||
+            lower.startsWith("ver.") ||
+            lower.startsWith("ver ") ||
             lower.startsWith("tv size") ||
             lower.startsWith("tv ver") ||
-            lower.startsWith("edit")
+            lower.startsWith("edit") ||
+            lower.endsWith(" version") ||
+            lower.endsWith(" edit") ||
+            lower.endsWith(" mix") ||
+            lower == "remastered" ||
+            lower == "deluxe"
         ) {
             return true
         }
+        // "中文版"/"日本版" 这类 CJK 版本标记
+        if (trimmed.endsWith("版") || trimmed.contains("バージョン")) return true
         return trimmed == "伴奏" || trimmed == "纯音乐" || trimmed == "翻唱" ||
             trimmed == "カラオケ" || trimmed == "インスト"
     }
