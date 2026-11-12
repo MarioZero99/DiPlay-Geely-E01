@@ -20,6 +20,7 @@ import android.util.Log
 import android.view.KeyEvent
 import androidx.annotation.RequiresApi
 import com.shilapi.xcertplay.airplay.CarPlayMediaButton
+import com.shilapi.xcertplay.instrument.XingruiClusterMediaFormatter
 import com.shilapi.xcertplay.instrument.XingruiInstrumentBridge
 import com.shilapi.xcertplay.media.CarPlayNowPlaying
 import com.shilapi.xcertplay.orchestration.CarPlayController
@@ -41,6 +42,12 @@ internal object CarPlayMediaKeys {
         "编曲：", "编曲:",
         "制作：", "制作:", "制作人：", "制作人:",
         "监制：", "监制:", "混音：", "混音:", "出品：", "出品:",
+        // 日文
+        "作詞：", "作詞:", "編曲：", "編曲:", "唄：", "唄:",
+        // 英文
+        "Lyrics:", "Lyricist:", "Composer:", "Arranger:", "Producer:",
+        // 韩文
+        "작사:", "작곡:", "편곡:",
     )
     private val mainHandler = Handler(Looper.getMainLooper())
     private val backend: Backend by lazy {
@@ -187,6 +194,11 @@ internal object CarPlayMediaKeys {
         val rawAlbum = info.album
         val rawDuration = info.durationMillis
 
+        // 上一首带中文翻译括号（"日文 (中文)"）时，歌词包常常只带 " - 日文" 那一截。
+        val translatedBaseTitle = lastGenuineTitle
+            ?.let { XingruiClusterMediaFormatter.stripTranslationSuffix(it) }
+            ?.takeIf { it.isNotBlank() && it != lastGenuineTitle }
+
         // 1. 还没有上一首真歌名：这包就是第一首，放行。
         if (lastGenuineTitle.isNullOrBlank()) {
             val genTitle = if (!rawTitle.isNullOrBlank()) rawTitle else null
@@ -200,8 +212,8 @@ internal object CarPlayMediaKeys {
                 genuineArtist = genArtist,
                 genuineAlbum = genAlbum,
                 durationMillis = genDuration,
-                clusterLine1 = info.title,
-                clusterLine2 = info.artist,
+                clusterLine1 = clusterText(rawTitle),
+                clusterLine2 = clusterText(rawArtist),
             )
         }
 
@@ -210,8 +222,12 @@ internal object CarPlayMediaKeys {
         //    - 歌手等于上一首真歌名。
         //    - 歌名以 " - " 加上一首真歌名结尾。不要用 contains。
         //    - 歌名以制作信息前缀开头（中英文冒号均兼容）
-        val isLyricSwap = rawArtist == lastGenuineTitle
-        val isLyricSuffix = !rawTitle.isNullOrBlank() && rawTitle.endsWith(" - $lastGenuineTitle")
+        val isLyricSwap = rawArtist == lastGenuineTitle ||
+            (translatedBaseTitle != null && rawArtist == translatedBaseTitle)
+        val isLyricSuffix = !rawTitle.isNullOrBlank() && (
+            rawTitle.endsWith(" - $lastGenuineTitle") ||
+                (translatedBaseTitle != null && rawTitle.endsWith(" - $translatedBaseTitle"))
+            )
         val isLyricCredit = !rawTitle.isNullOrBlank() &&
             LYRIC_CREDIT_PREFIXES.any { rawTitle.startsWith(it) }
 
@@ -221,11 +237,30 @@ internal object CarPlayMediaKeys {
             val effTitle = lastGenuineTitle
             val effArtist = lastGenuineArtist ?: (if (rawArtist != lastGenuineTitle) rawArtist else null)
             val effAlbum = lastGenuineAlbum ?: rawAlbum
-            val line1 = when {
-                isLyricSuffix -> rawTitle!!.removeSuffix(" - $lastGenuineTitle").ifBlank { lastGenuineTitle }
+            val rawLine1 = when {
+                isLyricSuffix -> {
+                    val title = rawTitle!!
+                    val suffix = if (title.endsWith(" - $lastGenuineTitle")) {
+                        " - $lastGenuineTitle"
+                    } else {
+                        " - $translatedBaseTitle"
+                    }
+                    title.removeSuffix(suffix).ifBlank { lastGenuineTitle }
+                }
                 else -> rawTitle?.takeIf { it.isNotBlank() } ?: lastGenuineTitle
             }
-            val line2 = joinNonBlank(lastGenuineArtist, lastGenuineTitle, " - ") ?: lastGenuineTitle
+            val line1 = clusterText(rawLine1) ?: clusterText(lastGenuineTitle)
+            // 第二行在仪表上只有 31 字：先试 "歌手 - 歌名"，放不下就只留歌手。
+            val artistText = clusterText(lastGenuineArtist)
+            val titleText = clusterText(lastGenuineTitle)
+            val combinedLine2 = joinNonBlank(artistText, titleText, " - ")
+            val line2 = if (combinedLine2 != null &&
+                combinedLine2.length > XingruiClusterMediaFormatter.MAX_CAN_TEXT_LENGTH
+            ) {
+                artistText ?: titleText
+            } else {
+                combinedLine2 ?: titleText
+            }
             FilteredTrack(
                 info = info.copy(title = effTitle, artist = effArtist, album = effAlbum),
                 isLyric = true,
@@ -249,11 +284,14 @@ internal object CarPlayMediaKeys {
                 genuineArtist = genArtist,
                 genuineAlbum = genAlbum,
                 durationMillis = genDuration,
-                clusterLine1 = info.title,
-                clusterLine2 = info.artist,
+                clusterLine1 = clusterText(rawTitle),
+                clusterLine2 = clusterText(rawArtist),
             )
         }
     }
+
+    private fun clusterText(raw: String?): String? =
+        if (raw.isNullOrBlank()) null else XingruiClusterMediaFormatter.optimizeCjkDisplay(raw)
 
     private fun joinNonBlank(first: String?, second: String?, separator: String): String? {
         val a = first?.trim().orEmpty()

@@ -567,6 +567,74 @@ class CarPlayMediaKeysBroadcastTest {
         assertEquals("周杰伦", lyric.info.artist)
     }
 
+    @Test
+    fun filterLyricMetadata_recognizesJapaneseKoreanEnglishCredits() {
+        val base = CarPlayNowPlaying(
+            title = "どうして", artist = "高瀬統也", album = "Album",
+            durationMillis = 200_000L, elapsedMillis = 0L, playing = true,
+        )
+        val baseFilter = CarPlayMediaKeys.filterLyricMetadata(base, null, null, null, null)
+
+        // 日文制作信息前缀
+        val jpLyric = CarPlayNowPlaying(
+            title = "作詞：野田愛実", artist = "高瀬統也", album = "Album",
+            durationMillis = 200_000L, elapsedMillis = 10_000L, playing = true,
+        )
+        val filteredJp = CarPlayMediaKeys.filterLyricMetadata(
+            jpLyric, baseFilter.genuineTitle, baseFilter.genuineArtist, baseFilter.genuineAlbum, baseFilter.durationMillis,
+        )
+        assertTrue("日文作词应识别为歌词行", filteredJp.isLyric)
+        assertEquals("作詞：野田愛実", filteredJp.clusterLine1)
+
+        // 英文制作信息前缀
+        val enLyric = CarPlayNowPlaying(
+            title = "Lyrics: Singer", artist = "高瀬統也", album = "Album",
+            durationMillis = 200_000L, elapsedMillis = 10_000L, playing = true,
+        )
+        val filteredEn = CarPlayMediaKeys.filterLyricMetadata(
+            enLyric, baseFilter.genuineTitle, baseFilter.genuineArtist, baseFilter.genuineAlbum, baseFilter.durationMillis,
+        )
+        assertTrue("英文 Lyrics 应识别为歌词行", filteredEn.isLyric)
+    }
+
+    @Test
+    fun filterLyricMetadata_matchesLyricsWhenSuffixOmitsTranslation() {
+        // 主歌名带有中文翻译括号
+        val base = CarPlayNowPlaying(
+            title = "こころのたまご (心灵之蛋)", artist = "Buono!", album = "Album",
+            durationMillis = 200_000L, elapsedMillis = 0L, playing = true,
+        )
+        val baseFilter = CarPlayMediaKeys.filterLyricMetadata(base, null, null, null, null)
+
+        // 歌词包的后缀只带有原歌名 " - こころのたまご"，没有带括号翻译
+        val lyricNoZh = CarPlayNowPlaying(
+            title = "Hop Step Jump - こころのたまご", artist = "Buono!", album = "Album",
+            durationMillis = 200_000L, elapsedMillis = 15_000L, playing = true,
+        )
+        val filtered = CarPlayMediaKeys.filterLyricMetadata(
+            lyricNoZh, baseFilter.genuineTitle, baseFilter.genuineArtist, baseFilter.genuineAlbum, baseFilter.durationMillis,
+        )
+        assertTrue("歌词后缀即使省略翻译也应精准匹配", filtered.isLyric)
+        assertEquals("Hop Step Jump", filtered.clusterLine1)
+    }
+
+    @Test
+    fun filterLyricMetadata_formatsClusterLinesWithCjkOptimization() {
+        // 歌名带中文翻译与注音歌手
+        val raw = CarPlayNowPlaying(
+            title = "さよならの夏～コクリコ坂から～ (道别之夏 ~虞美人盛开的山坡~)",
+            artist = "手嶌葵 (てしま あおい)",
+            album = "Album",
+            durationMillis = 300_000L,
+            elapsedMillis = 0L,
+            playing = true,
+        )
+        val filtered = CarPlayMediaKeys.filterLyricMetadata(raw, null, null, null, null)
+        assertTrue("Line1 长度不超过31", filtered.clusterLine1!!.length <= 31)
+        assertTrue("Line2 长度不超过31", filtered.clusterLine2!!.length <= 31)
+        assertTrue("注音括号被清理", !filtered.clusterLine2!!.contains("てしま あおい"))
+    }
+
     private class FakeDimTransListener : IDimTransListener.Stub() {
         var sourceChangedCalls = 0
         var updateMediaCalls = 0
