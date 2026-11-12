@@ -52,4 +52,7 @@ object ClusterFlyLog {
     fun safetyOn(block: FlyBlock): String = "fly.safety on ${block.name}"
 
     fun safetyOff(): String = "fly.safety off"
+
+    fun mcu(front: Boolean, ok: Boolean): String =
+        "fly.mcu 1887 ${if (front) "front" else "back"} $ok"
 }
