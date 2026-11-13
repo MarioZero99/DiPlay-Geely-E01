@@ -3833,18 +3833,18 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun buildDiagnosticSections(appContext: android.content.Context): List<DiagnosticSection> {
-        val target = SessionLogFile.latestLog(File(appContext.filesDir, "logs"))
+        // 导出的单位是「当前这一场」：APP 没关过的这一场，包括它在一场中间因为超过 512KB
+        // 轮转出去的每一份 part，最后是正在写的那份。只读 diplay.log 会把这一场的前半截丢掉。
+        val targets = SessionLogFile.currentRunFiles(File(appContext.filesDir, "logs"))
         val logs = PerfTrace.span("export/redact") {
-            target?.let { file ->
-                listOf(
-                    DiagnosticSection(
-                        name = file.name,
-                        // 落盘时已脱敏；这一遍兜住非当前构建写入的行（当天升级、直接写盘），不省。
-                        lines = file.useLines { lines -> lines.mapNotNull { DiagnosticRedactor.redact(it) }.toList() },
-                        newest = true,
-                    )
+            targets.map { file ->
+                DiagnosticSection(
+                    name = file.name,
+                    // 落盘时已脱敏；这一遍兜住非当前构建写入的行（当天升级、直接写盘），不省。
+                    lines = file.useLines { lines -> lines.mapNotNull { DiagnosticRedactor.redact(it) }.toList() },
+                    newest = file.name == SessionLogFile.CURRENT_NAME,
                 )
-            } ?: emptyList()
+            }
         }
         // Appended without the generic redaction pass. A record is redacted when it is written, and that
         // pass replaces a whole line that mentions a credential with a single token — for a JSON line
@@ -3858,9 +3858,10 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     /**
-     * The report in full, oldest run of today first. Saving and uploading both use this, so both
-     * are the day they were asked about rather than a stack of drives. Each log file is still
-     * capped on disk; this does not read past that. Uploading then splits the text across objects
+     * The report in full: the run in progress from its first part to the file being written right
+     * now, then the attempt journal. Saving and uploading both use this, so both are the session
+     * the driver is in rather than the last five minutes of it. Each part is still capped on disk;
+     * this does not read past that. Uploading then splits the text across objects
      * ([SupabaseLogUpload.parts]).
      */
     private fun buildCompleteReport(appContext: android.content.Context): String = buildString {

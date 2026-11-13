@@ -238,15 +238,31 @@ class DiagnosticExportUiTest {
         }
     }
 
-    /** 报告只带当前这一场；当天更早的归档留在盘上，但不进报告。 */
-    @Test fun theSavedFileHoldsOnlyTheCurrentRun() {
+    /**
+     * 报告带当前这一场：这一场在一场中间超过 512KB 轮转出去的 part，和正在写的文件，都要在；
+     * 上一场的归档在盘上，但不能混进来。
+     */
+    @Test fun theSavedFileHoldsTheWholeCurrentRun() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
         val activity = controller.get()
         registerReportProvider(activity.applicationContext)
         val logs = File(activity.filesDir, "logs").apply { mkdirs() }
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-        File(logs, "diplay-$today.log").writeText("HEAD-KEPT-LINE\n")
-        File(logs, "diplay.log").writeText("password=hunter2\nNEWER-LINE marker\n")
+        val path = File(logs, "diplay.log")
+
+        val previous = SessionLogFile(path)
+        previous.reset("DiPlay log started $today 09:00:00.000 pid=1 path=$path")
+        previous.append("PREVIOUS-RUN-LINE")
+        val writer = SessionLogFile(path)
+        writer.reset("DiPlay log started $today 10:00:00.000 pid=2 path=$path")
+        writer.append("password=hunter2")
+        val filler = "connection state " + "x".repeat(690)
+        var appends = 0
+        while (SessionLogFile.currentRunFiles(logs).size < 2 && appends < 3000) {
+            writer.append(filler)
+            appends++
+        }
+        writer.append("TAIL-LINE marker")
         try {
             ReflectionHelpers.callInstanceMethod<Unit>(activity, "showExportBrowser")
             clickRow(activity, activity.getString(R.string.export_internal_storage))
@@ -254,14 +270,17 @@ class DiagnosticExportUiTest {
             val saved = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                 "DiPlay",
-            ).listFiles()!!.single { it.name.startsWith("DiPlay-") && it.readText().contains("NEWER-LINE marker") }
+            ).listFiles()!!.single { it.name.startsWith("DiPlay-") && it.readText().contains("TAIL-LINE marker") }
             val text = saved.readText()
-            assertTrue(text.contains("NEWER-LINE marker"))
-            assertFalse(text.contains("HEAD-KEPT-LINE"))
+            assertTrue("轮转出去的前半段也要在报告里", text.contains("connection state"))
+            assertTrue(text.contains("TAIL-LINE marker"))
+            assertFalse("上一场不能混进来", text.contains("PREVIOUS-RUN-LINE"))
             assertFalse(text.contains("--- diplay-$today.log ---"))
             assertTrue(text.contains(DiagnosticRedactor.WITHHELD))
             assertFalse(text.contains("hunter2"))
         } finally {
+            writer.close()
+            previous.close()
             logs.deleteRecursively()
             controller.pause().stop().destroy()
         }
