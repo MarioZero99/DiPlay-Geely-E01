@@ -22,16 +22,21 @@ internal class SessionLogFile(
             purge()
             file.writeText("")
             state.length = 0L
+            // 开新的一场：上一场轮转出去的文件属于上一场，不能带进这一场的导出。
+            state.runParts.clear()
+            state.runActive = true
             append(header)
         }
     }
     fun append(line: String) = synchronized(state) {
         if (closed) return@synchronized
+        state.runActive = true
         val safe = DiagnosticRedactor.redact(line) ?: return@synchronized
         runCatching {
             val payload = (safe + "\n").toByteArray(Charsets.UTF_8)
             if (lengthBytes() > MAX_BYTES) {
-                archive()
+                // 轮转发生在场中间：这份 part 属于正在写的这一场，导出时要带上。
+                archive()?.let(state.runParts::add)
                 file.writeText("")
                 state.length = 0L
             }
@@ -58,13 +63,18 @@ internal class SessionLogFile(
      * file name can say. One run that outgrew [MAX_BYTES] is written as further parts of the same
      * day, so a busy day keeps every line and every file stays capped.
      */
-    private fun archive() {
-        if (!file.exists() || file.length() == 0L) return
+    private fun archive(): File? {
+        if (!file.exists() || file.length() == 0L) return null
         val day = dayOf(file)
         val parts = archivesOf(file.parentFile, day).size
         val suffix = if (parts == 0) "" else "-${parts + 1}"
-        runCatching { file.copyTo(File(file.parentFile, "$ARCHIVE_PREFIX$day$suffix$LOG_SUFFIX"), overwrite = true) }
-            .onFailure { DiagnosticCounters.noteLogWriteFailure() }
+        val target = File(file.parentFile, "$ARCHIVE_PREFIX$day$suffix$LOG_SUFFIX")
+        return runCatching {
+            file.copyTo(target, overwrite = true)
+            target
+        }.onFailure {
+            DiagnosticCounters.noteLogWriteFailure()
+        }.getOrNull()
     }
 
     /**
@@ -125,6 +135,12 @@ internal class SessionLogFile(
     private class State {
         /** Byte length of the file. Negative until the first read. */
         var length = -1L
+
+        /** 这一场因为超过 [MAX_BYTES] 已经轮转出去的文件，最早的在前。开场时清空。 */
+        val runParts = ArrayList<File>()
+
+        /** 这一场已经开过（[reset] 或写入过）；没有它时导不出这一场，只能退回旧行为。 */
+        var runActive = false
     }
 
     companion object {
@@ -133,7 +149,7 @@ internal class SessionLogFile(
         /** Whole days kept on disk; today counts as one of them. */
         const val KEEP_DAYS = 7
 
-        private const val CURRENT_NAME = "diplay.log"
+        internal const val CURRENT_NAME = "diplay.log"
         private const val ARCHIVE_PREFIX = "diplay-"
         private const val LOG_SUFFIX = ".log"
         private const val DAY_MILLIS = 24 * 60 * 60 * 1000L
@@ -148,11 +164,29 @@ internal class SessionLogFile(
         private val LEGACY_ARCHIVE = Regex("""previous(-\d+)?\.log""")
 
         /**
+         * 当前这一场（APP 没关过的这一场）的全部日志：轮转出去的每一份 part，最早的在前，
+         * 最后是正在写的 [CURRENT_NAME]。一场因为超过 [MAX_BYTES] 会写成多份，导出必须把它们
+         * 一起带上，否则报告只剩这一场的尾巴。
+         *
+         * 轮转出去的 part 按路径记在这一场的写者状态里，所以只有本进程开过场时才拿得到；
+         * 拿不到时（旧构建、或本进程还没开过场）退回旧行为：当前文件，或刚轮转时的最新归档。
+         */
+        fun currentRunFiles(directory: File): List<File> {
+            val current = File(directory, CURRENT_NAME).takeIf { it.isFile && it.length() > 0L }
+            val state = states[File(directory, CURRENT_NAME).absolutePath]
+            if (state != null && state.runActive) {
+                val parts = synchronized(state) { state.runParts.toList() }
+                return parts + listOfNotNull(current)
+            }
+            return listOfNotNull(current ?: latestLog(directory))
+        }
+
+        /**
          * The files a report may read: today's earlier runs, earliest first, then the run in progress.
          *
          * Nothing older, on purpose. The retained days are on disk for the seven-day window and are
-         * never silently mixed in. The exporter reads only [latestLog] — the run in progress, or the
-         * latest archived run when it has just rotated (`DiPlayActivity.buildDiagnosticSections`).
+         * never silently mixed in. This is the by-day list; the exporter asks for the run in progress
+         * instead ([currentRunFiles]).
          */
         fun reportFiles(directory: File, nowMillis: Long = System.currentTimeMillis()): List<File> {
             val today = dayString(nowMillis)
