@@ -9,8 +9,9 @@ data class Nic(val name: String, val up: Boolean, val addresses: List<String>)
 /**
  * Which interface may carry 10.255.255.101.
  *
- * The phone's hotspot, Wi-Fi, and the T-Box are not the cable to the cluster. Adding the address
- * there would not make the cluster's dial arrive, so those names are never chosen.
+ * The cluster dials that address. On this head unit it is reached through tbox0.
+ * An ethernet NIC is used when exactly one is up. The phone hotspot, Wi-Fi,
+ * cellular data, and tunnels are never chosen.
  */
 object FlyNet {
 
@@ -24,8 +25,20 @@ object FlyNet {
 
     fun has(nics: List<Nic>, host: String): Boolean = nics.any { host in it.addresses }
 
-    /** The single up interface that can face the cluster, or null when there is not exactly one. */
-    fun aliasTarget(nics: List<Nic>): String? = eligible(nics).singleOrNull()?.name
+    /**
+     * The interface that receives 10.255.255.101, or null when the choice is ambiguous.
+     * One up eth* wins. Otherwise one up tbox*. Otherwise the only remaining eligible NIC.
+     */
+    fun aliasTarget(nics: List<Nic>): String? {
+        val up = eligible(nics)
+        val eth = up.filter { it.name.startsWith("eth", ignoreCase = true) }
+        if (eth.size == 1) return eth[0].name
+        if (eth.size > 1) return null
+        val tbox = up.filter { it.name.startsWith("tbox", ignoreCase = true) }
+        if (tbox.size == 1) return tbox[0].name
+        if (tbox.size > 1) return null
+        return up.singleOrNull()?.name
+    }
 
     fun skipLine(nics: List<Nic>): String {
         val names = eligible(nics).joinToString(",") { it.name }
@@ -65,5 +78,7 @@ object FlyNet {
         return EXCLUDED.any { normalized == it || normalized.startsWith(it) }
     }
 
-    private val EXCLUDED = listOf("ap", "wlan", "tbox", "p2p", "dummy", "rmnet", "ccmni", "sit", "ifb")
+    private val EXCLUDED = listOf(
+        "ap", "wlan", "p2p", "dummy", "rmnet", "ccmni", "sit", "ifb", "tunl", "ip6tnl",
+    )
 }

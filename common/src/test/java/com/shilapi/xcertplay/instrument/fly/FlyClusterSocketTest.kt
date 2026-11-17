@@ -26,22 +26,79 @@ class FlyClusterSocketTest {
     }
 
     @Test
-    fun `the cluster address is added only on the one up interface that is not the phone or the tbox`() {
-        val only = listOf(
-            Nic("lo", true, listOf("127.0.0.1")),
-            Nic("wlan0", true, listOf("192.168.1.20")),
+    fun `this car adds the address on tbox0`() {
+        val car = listOf(
+            Nic("ip6tnl0", true, emptyList()),
+            Nic("sit0", true, emptyList()),
+            Nic("ifb0", true, emptyList()),
+            Nic("ifb1", true, emptyList()),
             Nic("ap0", true, listOf("192.168.43.1")),
+            Nic("lo", true, listOf("127.0.0.1")),
             Nic("tbox0", true, listOf("192.168.225.1")),
-            Nic("eth0", true, emptyList()),
+            Nic("wlan0", false, emptyList()),
+            Nic("tunl0", true, emptyList()),
+            Nic("ccmni2", false, emptyList()),
+            Nic("ccmni0", false, emptyList()),
+            Nic("ccmni1", false, emptyList()),
         )
-        assertEquals("eth0", FlyNet.aliasTarget(only))
+        assertEquals("tbox0", FlyNet.aliasTarget(car))
+        assertEquals("fly.net skip none", FlyNet.skipLine(listOf(Nic("ap0", true, listOf("192.168.43.1")))))
+    }
 
-        val two = only + Nic("usb0", true, emptyList())
-        assertNull(FlyNet.aliasTarget(two))
-        assertEquals("fly.net skip eth0,usb0", FlyNet.skipLine(two))
+    @Test
+    fun `one ethernet interface wins over tbox`() {
+        val both = listOf(
+            Nic("eth0", true, emptyList()),
+            Nic("tbox0", true, listOf("192.168.225.1")),
+            Nic("usb0", true, emptyList()),
+        )
+        assertEquals("eth0", FlyNet.aliasTarget(both))
+    }
 
-        val present = listOf(Nic("eth0", true, listOf("10.255.255.101")))
-        assertTrue(FlyNet.has(present, FlyClusterAddress.HOST))
+    @Test
+    fun `two ethernet interfaces and two tbox interfaces are not guessed`() {
+        assertNull(
+            FlyNet.aliasTarget(
+                listOf(Nic("eth0", true, emptyList()), Nic("eth1", true, emptyList())),
+            ),
+        )
+        assertEquals(
+            "fly.net skip eth0,eth1",
+            FlyNet.skipLine(listOf(Nic("eth0", true, emptyList()), Nic("eth1", true, emptyList()))),
+        )
+        assertNull(
+            FlyNet.aliasTarget(
+                listOf(Nic("tbox0", true, emptyList()), Nic("tbox1", true, emptyList())),
+            ),
+        )
+    }
+
+    @Test
+    fun `prepare on this car adds and removes the address on tbox0`() {
+        val commands = mutableListOf<String>()
+        val address = FlyClusterAddress(
+            shell = { command ->
+                commands += command
+                0 to ""
+            },
+            interfaces = {
+                listOf(
+                    Nic("ap0", true, listOf("192.168.43.1")),
+                    Nic("lo", true, listOf("127.0.0.1")),
+                    Nic("tbox0", true, listOf("192.168.225.1")),
+                    Nic("wlan0", false, emptyList()),
+                )
+            },
+        )
+
+        val lines = address.prepare()
+
+        assertTrue(lines.contains("fly.net add tbox0"))
+        assertEquals("/system/bin/busybox ip addr add 10.255.255.101/24 dev tbox0", commands.single())
+        assertTrue(rootWrapped(commands.single()).toByteArray(Charsets.UTF_8).size <= 220)
+
+        address.release()
+        assertEquals("/system/bin/busybox ip addr del 10.255.255.101/24 dev tbox0", commands[1])
     }
 
     @Test

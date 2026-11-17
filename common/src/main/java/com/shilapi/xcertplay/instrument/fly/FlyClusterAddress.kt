@@ -5,10 +5,9 @@ import com.shilapi.xcertplay.system.RootShellBridge
 /**
  * Makes 10.255.255.101 exist for as long as the fly link is open.
  *
- * Navi writes that address down and the cluster dials it, but this head unit does not configure
- * it. Listening on every interface still receives nothing until the address is local. The address
- * is added on the one up interface that is not the phone or the T-Box, and removed when the link
- * closes. It is never written into /system.
+ * The cluster dials that address. Listening on every interface still receives
+ * nothing until the address is local. [FlyNet.aliasTarget] picks the interface.
+ * The address is removed when the link closes. It is never written into /system.
  */
 class FlyClusterAddress(
     private val shell: (String) -> Pair<Int?, String> = { RootShellBridge.executeWithOutput(it) },
