@@ -43,6 +43,12 @@ class FlyClusterSocketTest {
         )
         assertEquals("tbox0", FlyNet.aliasTarget(car))
         assertEquals("fly.net skip none", FlyNet.skipLine(listOf(Nic("ap0", true, listOf("192.168.43.1")))))
+        assertEquals(
+            "tbox0",
+            FlyNet.aliasTarget(listOf(Nic("tbox0", true, emptyList()), Nic("usb0", true, emptyList()))),
+        )
+        assertNull(FlyNet.aliasTarget(listOf(Nic("tunl0", true, emptyList()))))
+        assertNull(FlyNet.aliasTarget(listOf(Nic("ip6tnl0", true, emptyList()))))
     }
 
     @Test
