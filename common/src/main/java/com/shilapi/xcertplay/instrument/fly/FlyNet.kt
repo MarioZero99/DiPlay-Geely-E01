@@ -79,6 +79,7 @@ object FlyNet {
     }
 
     private val EXCLUDED = listOf(
-        "ap", "wlan", "p2p", "dummy", "rmnet", "ccmni", "sit", "ifb", "tunl", "ip6tnl",
+        "ap", "wlan", "p2p", "dummy", "rmnet", "ccmni", "sit", "ifb",
+        "tun", "ppp", "ip6", "gre", "bond",
     )
 }

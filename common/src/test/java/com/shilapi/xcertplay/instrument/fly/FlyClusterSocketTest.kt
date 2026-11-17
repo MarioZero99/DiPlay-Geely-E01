@@ -47,8 +47,13 @@ class FlyClusterSocketTest {
             "tbox0",
             FlyNet.aliasTarget(listOf(Nic("tbox0", true, emptyList()), Nic("usb0", true, emptyList()))),
         )
-        assertNull(FlyNet.aliasTarget(listOf(Nic("tunl0", true, emptyList()))))
-        assertNull(FlyNet.aliasTarget(listOf(Nic("ip6tnl0", true, emptyList()))))
+    }
+
+    @Test
+    fun `no tunnel, ppp, gre, or bond interface is ever chosen`() {
+        for (name in listOf("tun0", "tunl0", "ip6tnl0", "ip6gre0", "ppp0", "gre0", "bond0")) {
+            assertNull(name, FlyNet.aliasTarget(listOf(Nic(name, true, emptyList()))))
+        }
     }
 
     @Test
