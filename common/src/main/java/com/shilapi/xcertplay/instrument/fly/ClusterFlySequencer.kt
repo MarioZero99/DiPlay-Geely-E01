@@ -3,8 +3,19 @@ package com.shilapi.xcertplay.instrument.fly
 /** What gets sent to the head unit's extraservice. The order it is sent in is part of the contract. */
 enum class FlyCommand { NAV_ON, NAV_FRONT, FLY_LEFT, FLY_RIGHT, NAV_OFF, NAV_BACK }
 
-/** One command and the moment it is due, counted on the caller's clock. */
-data class FlyStep(val command: FlyCommand, val sendAtMillis: Long)
+/**
+ * One command and the moment it is due, counted on the caller's clock.
+ *
+ * A [retraction] withdraws what a failed attempt already sent (navigation off, the factory's front
+ * message back). It is a command like any other on the wire, but it must not restart the
+ * one-second interval: that interval protects the *next* attempt, and counting the withdrawal
+ * would make the driver wait 1.4 s instead of 1 s before the next swipe is accepted.
+ */
+data class FlyStep(
+    val command: FlyCommand,
+    val sendAtMillis: Long,
+    val retraction: Boolean = false,
+)
 
 /**
  * Turns a gesture into the commands the factory expects.

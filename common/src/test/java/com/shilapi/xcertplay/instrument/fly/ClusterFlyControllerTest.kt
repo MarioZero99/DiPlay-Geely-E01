@@ -293,11 +293,61 @@ class ClusterFlyControllerTest {
         assertEquals(listOf("刚才那次还没完成，请稍等"), warnings.drop(1))
         assertFalse(sent.drop(4).contains(FlyCommand.NAV_ON))
 
+        // The abort's own front message goes out at 2800. It is a withdrawal, not a new command,
+        // so the one-second interval still counts from the failed 1885 at 2400.
+        now = 2_800L
+        scheduled.removeAt(0).second()
+        assertEquals(FlyCommand.NAV_BACK, sent.last())
+
         now = 3_400L
         controller.onGesture(Decision.FLY_LEFT)
         assertEquals(FlyCommand.NAV_ON, sent.last())
+    }
+
+    /**
+     * The cluster asked at the same millisecond the left step was due, so the session is already
+     * pushing by the time the failed 1885 is known. There is nothing to take back: the picture is
+     * live and the next swipe must not find a half-torn-down layer.
+     */
+    @Test
+    fun `a failed 1885 after the cluster already asked keeps the picture`() {
+        val subscriptions = mutableListOf<Boolean>()
+        val controller = ClusterFlyController(
+            commands = { command ->
+                sent.add(command)
+                command != FlyCommand.FLY_LEFT
+            },
+            showWarning = { warnings.add(it) },
+            setMainVideoSubscribed = { subscriptions.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+        )
+        controller.onGesture(Decision.FLY_LEFT)
+        now = 1_400L
         scheduled.removeAt(0).second()
-        assertFalse(sent.contains(FlyCommand.NAV_BACK))
+
+        now = 2_400L
+        controller.onPacket(openAsk())
+        runScheduled()
+
+        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT), sent)
+        assertEquals(listOf(true), subscriptions)
+        assertFalse(warnings.contains(ClusterFlyWarning.pageUnchanged()))
+    }
+
+    /** Closing the Activity takes the pending three-second abort with it. */
+    @Test
+    fun `closing the controller cancels the silent timeout`() {
+        val controller = controller()
+        openToLeft(controller)
+
+        controller.close()
+        now = 5_400L
+        runScheduled()
+
+        assertFalse(sent.contains(FlyCommand.NAV_OFF))
+        assertTrue(warnings.isEmpty())
     }
 
     @Test

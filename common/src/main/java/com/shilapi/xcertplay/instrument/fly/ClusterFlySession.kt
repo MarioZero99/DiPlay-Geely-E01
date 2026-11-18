@@ -224,8 +224,12 @@ class ClusterFlySession(
         closeOwed = false
         return effect(
             steps = listOf(
-                FlyStep(FlyCommand.NAV_OFF, nowMillis),
-                FlyStep(FlyCommand.NAV_BACK, nowMillis + ClusterFlySequencer.STEP_DELAY_MILLIS),
+                FlyStep(FlyCommand.NAV_OFF, nowMillis, retraction = true),
+                FlyStep(
+                    FlyCommand.NAV_BACK,
+                    nowMillis + ClusterFlySequencer.STEP_DELAY_MILLIS,
+                    retraction = true,
+                ),
             ),
         )
     }

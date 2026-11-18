@@ -184,6 +184,8 @@ class ClusterFlyController(
     fun close() {
         synchronized(lock) {
             generation++
+            // The three-second abort belongs to this Activity; if it is gone, so is the timer.
+            videoTimeoutGeneration++
             stopEverything()
         }
         // The queue may still hold frames; they belong to a dead layer and are not worth sending.
@@ -333,13 +335,14 @@ class ClusterFlyController(
     private fun sendStep(step: FlyStep) {
         log(ClusterFlyLog.command(step.command))
         val ok = commands.send(step.command)
-        lastCommandAt = clock()
+        // A withdrawal does not restart the interval: the driver waits one second from the failure,
+        // not one second from the message that takes the failure back.
+        if (!step.retraction) lastCommandAt = clock()
         if (step.command != FlyCommand.FLY_LEFT) return
         if (!ok) {
             // The write never reached RpcService. Waiting three seconds for a page change nobody
             // asked the cluster to make would just keep the next swipe locked out.
-            log(ClusterFlyLog.abort("1885 left false"))
-            abortSession()
+            abortSession("1885 left false")
             return
         }
         // The left step has gone out; from here the cluster may ask for the picture. An ask that
@@ -363,8 +366,7 @@ class ClusterFlyController(
             synchronized(lock) {
                 if (videoTimeoutGeneration != expected) return@synchronized
                 if (session.currentPhase != FlyPhase.WAITING_FOR_VIDEO) return@synchronized
-                log(ClusterFlyLog.abort("cluster silent"))
-                abortSession()
+                abortSession("cluster silent")
             }
         }
     }
@@ -376,9 +378,14 @@ class ClusterFlyController(
      * navigation flag and the factory's front message are withdrawn; `handle` puts the owed
      * `NAV_BACK` on the queue under a new generation, so a second swipe cancels it.
      */
-    private fun abortSession() {
+    private fun abortSession(reason: String) {
         videoTimeoutGeneration++
         val effect = session.onAbort(clock())
+        // The session refuses to abort a picture that is already flowing (it has no steps). Tearing
+        // the link down anyway would leave the state machine pushing with nothing behind it, and
+        // the next swipe would be swallowed in silence — the exact symptom this abort exists to end.
+        if (effect.steps.isEmpty()) return
+        log(ClusterFlyLog.abort(reason))
         showWarning(ClusterFlyWarning.pageUnchanged())
         handle(effect)
         stopEverything()
