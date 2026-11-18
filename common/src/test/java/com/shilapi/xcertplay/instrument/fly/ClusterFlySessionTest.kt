@@ -177,4 +177,46 @@ class ClusterFlySessionTest {
         assertEquals(FlyPhase.PUSHING, waited.phase)
         assertTrue(session.takePendingOpen())
     }
+
+    @Test
+    fun `abort from arming returns to idle without fly right`() {
+        session.onLeft(1_000L, openConditions())
+        assertEquals(FlyPhase.ARMING, session.currentPhase)
+
+        val effect = session.onAbort(1_500L)
+        assertEquals(FlyPhase.IDLE, effect.phase)
+        assertEquals(FlyPhase.IDLE, session.currentPhase)
+        assertFalse(effect.push)
+        assertEquals(listOf(FlyCommand.NAV_OFF, FlyCommand.NAV_BACK), effect.steps.map { it.command })
+        assertEquals(1_500L, effect.steps[0].sendAtMillis)
+        assertEquals(1_900L, effect.steps[1].sendAtMillis)
+        assertFalse(effect.steps.any { it.command == FlyCommand.FLY_RIGHT })
+
+        assertEquals(FlyPhase.IDLE, session.onWaitTimeout(3_000L).phase)
+
+        val next = session.onLeft(3_100L, openConditions())
+        assertEquals(FlyPhase.ARMING, next.phase)
+        assertEquals(FlyCommand.NAV_ON, next.steps.first().command)
+    }
+
+    @Test
+    fun `abort from waiting returns to idle without fly right`() {
+        session.onLeft(1_000L, openConditions())
+        session.onWaitTimeout(2_400L)
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, session.currentPhase)
+
+        val effect = session.onAbort(5_400L)
+        assertEquals(FlyPhase.IDLE, session.currentPhase)
+        assertEquals(listOf(FlyCommand.NAV_OFF, FlyCommand.NAV_BACK), effect.steps.map { it.command })
+        assertFalse(effect.steps.any { it.command == FlyCommand.FLY_RIGHT })
+    }
+
+    @Test
+    fun `abort during pushing does not drop the layer`() {
+        pushing()
+        val effect = session.onAbort(3_000L)
+        assertEquals(FlyPhase.PUSHING, effect.phase)
+        assertTrue(effect.steps.isEmpty())
+        assertTrue(effect.push)
+    }
 }

@@ -205,6 +205,32 @@ class ClusterFlySession(
     }
 
     /**
+     * 1885 went out but the cluster never asked for the picture, or 1885 never went out at all.
+     *
+     * Back to idle at once and the left step's time is cleared: running [advance] first would turn a
+     * stale `ARMING` into a wait the next swipe could not escape. The navigation flag and the
+     * factory's front message are taken back. No `FLY_RIGHT`: this page change never took effect, so
+     * there is nothing to cover. A picture already flowing is left alone; its close is the normal
+     * right swipe or the disconnect.
+     */
+    fun onAbort(nowMillis: Long): FlyEffect {
+        if (phase != FlyPhase.ARMING && phase != FlyPhase.WAITING_FOR_VIDEO) {
+            return effect()
+        }
+        phase = FlyPhase.IDLE
+        flyStepAt = NO_TIME
+        closeNavOffAt = NO_TIME
+        openPending = false
+        closeOwed = false
+        return effect(
+            steps = listOf(
+                FlyStep(FlyCommand.NAV_OFF, nowMillis),
+                FlyStep(FlyCommand.NAV_BACK, nowMillis + ClusterFlySequencer.STEP_DELAY_MILLIS),
+            ),
+        )
+    }
+
+    /**
      * Takes the layer down, or promises to.
      *
      * A close that arrives before the one-second interval is not dropped: it is placed at the

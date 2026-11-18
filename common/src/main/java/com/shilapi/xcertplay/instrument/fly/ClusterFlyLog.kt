@@ -59,4 +59,6 @@ object ClusterFlyLog {
     /** Binder accepted the 1885 write. This is not the cluster changing page. */
     fun mcu1885(open: Boolean, ok: Boolean): String =
         "fly.mcu 1885 ${if (open) "left" else "right"} $ok"
+
+    fun abort(reason: String): String = "fly.abort $reason"
 }
