@@ -12,9 +12,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-/** Where the two factory broadcasts really go. The Activity posts them; tests record them. */
+/** Where the factory commands really go. The Activity sends them; tests record them. */
 fun interface FlyCommandSink {
-    fun send(command: FlyCommand)
+    /** False means the command did not get out. Only a failed [FlyCommand.FLY_LEFT] aborts. */
+    fun send(command: FlyCommand): Boolean
 }
 
 /**
@@ -85,6 +86,9 @@ class ClusterFlyController(
 
     /** A step scheduled before a session ended belongs to the old session and is dropped. */
     private var generation = 0
+
+    /** The three-second wait for the cluster's ask; a newer wait or an answered ask cancels it. */
+    private var videoTimeoutGeneration = 0
 
     /** Set on the fly thread, once. The media thread never pays for the priority change. */
     private var background = false
@@ -328,21 +332,56 @@ class ClusterFlyController(
 
     private fun sendStep(step: FlyStep) {
         log(ClusterFlyLog.command(step.command))
-        commands.send(step.command)
+        val ok = commands.send(step.command)
         lastCommandAt = clock()
-        if (step.command == FlyCommand.FLY_LEFT) {
-            // The left step has gone out; from here the cluster may ask for the picture. An ask that
-            // arrived while arming is answered now, before the subscription makes frames flow.
-            val effect = session.onWaitTimeout(clock())
-            if (effect.push && session.takePendingOpen()) {
-                val replies = listOf(
-                    reply(FlyReply.READY, ClusterFlyProtocol.videoReady()),
-                    reply(FlyReply.START, ClusterFlyProtocol.videoStart()),
-                )
-                link?.reply(replies)
-            }
-            handle(effect)
+        if (step.command != FlyCommand.FLY_LEFT) return
+        if (!ok) {
+            // The write never reached RpcService. Waiting three seconds for a page change nobody
+            // asked the cluster to make would just keep the next swipe locked out.
+            log(ClusterFlyLog.abort("1885 left false"))
+            abortSession()
+            return
         }
+        // The left step has gone out; from here the cluster may ask for the picture. An ask that
+        // arrived while arming is answered now, before the subscription makes frames flow.
+        val effect = session.onWaitTimeout(clock())
+        if (effect.push && session.takePendingOpen()) {
+            val replies = listOf(
+                reply(FlyReply.READY, ClusterFlyProtocol.videoReady()),
+                reply(FlyReply.START, ClusterFlyProtocol.videoStart()),
+            )
+            link?.reply(replies)
+        }
+        handle(effect)
+        if (session.currentPhase == FlyPhase.WAITING_FOR_VIDEO) scheduleVideoTimeout()
+    }
+
+    /** Starts the three-second clock. Only a real ask from the cluster cancels it. */
+    private fun scheduleVideoTimeout() {
+        val expected = ++videoTimeoutGeneration
+        postDelayed(VIDEO_ASK_TIMEOUT_MILLIS) {
+            synchronized(lock) {
+                if (videoTimeoutGeneration != expected) return@synchronized
+                if (session.currentPhase != FlyPhase.WAITING_FOR_VIDEO) return@synchronized
+                log(ClusterFlyLog.abort("cluster silent"))
+                abortSession()
+            }
+        }
+    }
+
+    /**
+     * Takes back what the opening sent and returns to idle.
+     *
+     * No `FLY_RIGHT`: the page change never took effect, so there is no layer to cover. The
+     * navigation flag and the factory's front message are withdrawn; `handle` puts the owed
+     * `NAV_BACK` on the queue under a new generation, so a second swipe cancels it.
+     */
+    private fun abortSession() {
+        videoTimeoutGeneration++
+        val effect = session.onAbort(clock())
+        showWarning(ClusterFlyWarning.pageUnchanged())
+        handle(effect)
+        stopEverything()
     }
 
     /**
@@ -382,6 +421,9 @@ class ClusterFlyController(
                         effect.holdOpen -> emptyList()
                         else -> listOf(reply(FlyReply.REFUSED, ClusterFlyProtocol.videoRefused()))
                     }
+                    // A real ask is the page change: the three-second wait has done its job. A
+                    // refused ask leaves the clock running, so the abort still happens.
+                    if (effect.push) videoTimeoutGeneration++
                     // The held ask is answered from the left step. Handling this effect later
                     // would run after the picture had started and turn the subscription back off.
                     if (!effect.holdOpen) {
@@ -469,6 +511,9 @@ class ClusterFlyController(
     private companion object {
         const val NO_TIME = Long.MIN_VALUE
         const val STAT_INTERVAL_MILLIS = 5_000L
+
+        /** How long the cluster has to dial 1028 after a successful 1885 before this is a failure. */
+        const val VIDEO_ASK_TIMEOUT_MILLIS = 3_000L
 
         /**
          * One frame waiting, one frame being decoded. A third is dropped: a backlog here is a

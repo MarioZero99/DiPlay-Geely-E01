@@ -118,7 +118,6 @@ import com.shilapi.xcertplay.instrument.fly.ClusterFlyLog
 import com.shilapi.xcertplay.instrument.fly.ClusterFlyMcu
 import com.shilapi.xcertplay.instrument.fly.ClusterFlySequencer
 import com.shilapi.xcertplay.instrument.fly.FlyCommand
-import com.shilapi.xcertplay.instrument.fly.FlyTrace
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector
 import com.shilapi.xcertplay.ui.component.QuickHudView
 import java.io.File
@@ -2707,50 +2706,47 @@ class CarPlayHostActivity : ComponentActivity() {
     /**
      * The factory commands, in the order the sequencer asks for them.
      *
-     * The navigation and three-finger broadcasts still name the factory receivers: AutoNaviReceiver
-     * sets the navigation flag on EXTRA_STATE 8, and ThreeFingerReceiver sends opcode 1885 only
-     * after that flag is set. Opcode 1887 does not travel by broadcast; it is written straight to
-     * RpcService, the same parcel the factory's own proxy writes.
+     * The navigation broadcast still names AutoNaviReceiver: it sets the factory's navigation flag
+     * on EXTRA_STATE 8. Opcodes 1887 and 1885 do not travel by broadcast; both are written straight
+     * to RpcService, the same parcel the factory's own proxy writes. The three-finger broadcast that
+     * used to reach ThreeFingerReceiver never produced a single line on this head unit, so 1885 is
+     * sent here and the receiver's answer is no longer waited for.
+     *
+     * True means the command got out. For 1885 that only means the binder accepted the write.
      */
-    private fun sendFlyCommand(command: FlyCommand) {
-        when (command) {
-            FlyCommand.NAV_FRONT, FlyCommand.NAV_BACK -> {
-                val front = command == FlyCommand.NAV_FRONT
-                val ok = ClusterFlyMcu.send(front)
-                DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.mcu(front, ok))
-                return
-            }
+    private fun sendFlyCommand(command: FlyCommand): Boolean = when (command) {
+        FlyCommand.NAV_FRONT, FlyCommand.NAV_BACK -> {
+            val front = command == FlyCommand.NAV_FRONT
+            val ok = ClusterFlyMcu.send(front)
+            DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.mcu(front, ok))
+            ok
+        }
 
-            FlyCommand.NAV_ON -> sendBroadcast(
+        FlyCommand.NAV_ON -> {
+            sendBroadcast(
                 Intent(ClusterFlySequencer.ACTION_NAV_STATE)
                     .setClassName(ClusterFlySequencer.PACKAGE_EXTRASERVICE, ClusterFlySequencer.RECEIVER_NAV_STATE)
                     .putExtra(ClusterFlySequencer.EXTRA_KEY_TYPE, ClusterFlySequencer.KEY_TYPE_NAV_STATE)
                     .putExtra(ClusterFlySequencer.EXTRA_STATE, ClusterFlySequencer.STATE_NAV_ON),
             )
+            true
+        }
 
-            FlyCommand.NAV_OFF -> sendBroadcast(
+        FlyCommand.NAV_OFF -> {
+            sendBroadcast(
                 Intent(ClusterFlySequencer.ACTION_NAV_STATE)
                     .setClassName(ClusterFlySequencer.PACKAGE_EXTRASERVICE, ClusterFlySequencer.RECEIVER_NAV_STATE)
                     .putExtra(ClusterFlySequencer.EXTRA_KEY_TYPE, ClusterFlySequencer.KEY_TYPE_NAV_STATE)
                     .putExtra(ClusterFlySequencer.EXTRA_STATE, ClusterFlySequencer.STATE_NAV_OFF),
             )
-
-            FlyCommand.FLY_LEFT -> sendBroadcast(
-                Intent(ClusterFlySequencer.ACTION_THREE_FINGER)
-                    .setClassName(ClusterFlySequencer.PACKAGE_EXTRASERVICE, ClusterFlySequencer.RECEIVER_THREE_FINGER)
-                    .putExtra(ClusterFlySequencer.EXTRA_DIRECTION, ClusterFlySequencer.DIRECTION_LEFT),
-            )
-
-            FlyCommand.FLY_RIGHT -> sendBroadcast(
-                Intent(ClusterFlySequencer.ACTION_THREE_FINGER)
-                    .setClassName(ClusterFlySequencer.PACKAGE_EXTRASERVICE, ClusterFlySequencer.RECEIVER_THREE_FINGER)
-                    .putExtra(ClusterFlySequencer.EXTRA_DIRECTION, ClusterFlySequencer.DIRECTION_RIGHT),
-            )
+            true
         }
-        // 1885 is logged by Extraservice, not by this process. Pull that line into the report
-        // once the finger broadcast has been handed off. The nav broadcast is already 400 ms old.
-        if (command == FlyCommand.FLY_LEFT || command == FlyCommand.FLY_RIGHT) {
-            FlyTrace.captureAfterGesture()
+
+        FlyCommand.FLY_LEFT, FlyCommand.FLY_RIGHT -> {
+            val open = command == FlyCommand.FLY_LEFT
+            val ok = ClusterFlyMcu.send1885(open)
+            DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.mcu1885(open, ok))
+            ok
         }
     }
 

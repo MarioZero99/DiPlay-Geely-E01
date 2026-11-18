@@ -17,4 +17,7 @@ object ClusterFlyWarning {
         FlyBlock.TOO_SOON -> "刚才那次还没完成，请稍等"
         FlyBlock.NONE -> null
     }
+
+    /** The cluster never changed page: the write was refused, or it stayed silent for three seconds. */
+    fun pageUnchanged(): String = "仪表没有换页，请再滑一次"
 }

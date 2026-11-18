@@ -254,6 +254,85 @@ class ClusterFlyControllerTest {
         assertEquals(FlyCommand.NAV_BACK, sent.last())
     }
 
+    private fun failedLeft(): ClusterFlyController = ClusterFlyController(
+        commands = { command ->
+            sent.add(command)
+            command != FlyCommand.FLY_LEFT
+        },
+        showWarning = { warnings.add(it) },
+        setMainVideoSubscribed = {},
+        log = { lines.add(it) },
+        clock = { now },
+        postDelayed = { delay, action -> scheduled.add(delay to action) },
+    )
+
+    private fun openToLeft(controller: ClusterFlyController) {
+        controller.onGesture(Decision.FLY_LEFT)
+        now = 1_400L
+        scheduled.removeAt(0).second()
+        now = 2_400L
+        scheduled.removeAt(0).second()
+    }
+
+    @Test
+    fun `failed 1885 aborts without waiting or fly right`() {
+        val controller = failedLeft()
+        openToLeft(controller)
+
+        assertEquals(
+            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT, FlyCommand.NAV_OFF),
+            sent,
+        )
+        assertEquals(listOf(400L), scheduled.map { it.first })
+        assertFalse(lines.contains("fly.phase WAITING_FOR_VIDEO"))
+        assertTrue(lines.contains("fly.abort 1885 left false"))
+        assertEquals(listOf(ClusterFlyWarning.pageUnchanged()), warnings)
+
+        now = 2_400L
+        controller.onGesture(Decision.FLY_LEFT)
+        assertEquals(listOf("刚才那次还没完成，请稍等"), warnings.drop(1))
+        assertFalse(sent.drop(4).contains(FlyCommand.NAV_ON))
+
+        now = 3_400L
+        controller.onGesture(Decision.FLY_LEFT)
+        assertEquals(FlyCommand.NAV_ON, sent.last())
+        scheduled.removeAt(0).second()
+        assertFalse(sent.contains(FlyCommand.NAV_BACK))
+    }
+
+    @Test
+    fun `no video ask within 3000ms aborts once`() {
+        val controller = controller()
+        openToLeft(controller)
+        assertTrue(lines.contains("fly.phase WAITING_FOR_VIDEO"))
+        assertEquals(listOf(3_000L), scheduled.map { it.first })
+
+        now = 5_400L
+        scheduled.removeAt(0).second()
+
+        assertEquals(
+            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT, FlyCommand.NAV_OFF),
+            sent,
+        )
+        assertFalse(sent.contains(FlyCommand.FLY_RIGHT))
+        assertEquals(listOf(ClusterFlyWarning.pageUnchanged()), warnings)
+        assertTrue(lines.contains("fly.abort cluster silent"))
+    }
+
+    @Test
+    fun `an open ask cancels the silent timeout`() {
+        val controller = controller()
+        openToLeft(controller)
+        now = 2_500L
+        controller.onPacket(openAsk())
+        runScheduled()
+
+        assertFalse(sent.contains(FlyCommand.NAV_OFF))
+        assertFalse(sent.contains(FlyCommand.NAV_BACK))
+        assertFalse(warnings.contains(ClusterFlyWarning.pageUnchanged()))
+        assertTrue(lines.contains("fly.push start forward") || lines.contains("fly.phase PUSHING"))
+    }
+
     /** Runs the fly-thread tasks by hand, so the test can see what was deferred. */
     private class ManualExecutor : java.util.concurrent.AbstractExecutorService() {
         private val tasks = mutableListOf<Runnable>()
