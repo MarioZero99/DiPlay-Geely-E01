@@ -1093,8 +1093,9 @@ class CarPlayHostActivity : ComponentActivity() {
                 )
             },
         ).also { root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
-        // The refusal line sits where the quick bar does and disappears on its own: a dialog would
-        // cover the map at the moment the driver is trying to look at it.
+        // The refusal line disappears on its own: a dialog would cover the map at the moment the
+        // driver is trying to look at it. Last child, so it draws over the CarPlay surface; the
+        // surface is not z-ordered on top, and the connection page is gone once a picture exists.
         val flyWarning = TextView(this).apply {
             setTextColor(Color.WHITE)
             setBackgroundColor(FLY_WARNING_BACKGROUND)
@@ -1105,8 +1106,8 @@ class CarPlayHostActivity : ComponentActivity() {
         }
         root.addView(
             flyWarning,
-            FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                bottomMargin = dp(96)
+            FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = dp(24)
             },
         )
         flyWarningView = flyWarning
