@@ -51,6 +51,41 @@ class ClusterFlyMcuTest {
         assertEquals("fly.mcu 1887 back false", ClusterFlyLog.mcu(front = false, ok = false))
     }
 
+    @Test
+    fun `open 1885 payload is 25 bytes with 74 then 1`() {
+        val bytes = ClusterFlyMcu.payload1885(open = true)
+        assertEquals(25, bytes.size)
+        assertEquals(74.toByte(), bytes[0])
+        assertEquals(1.toByte(), bytes[1])
+        assertEquals(0, bytes.drop(2).count { it != 0.toByte() })
+    }
+
+    @Test
+    fun `close 1885 payload is 25 bytes with 74 then 2`() {
+        val bytes = ClusterFlyMcu.payload1885(open = false)
+        assertEquals(25, bytes.size)
+        assertEquals(74.toByte(), bytes[0])
+        assertEquals(2.toByte(), bytes[1])
+        assertEquals(0, bytes.drop(2).count { it != 0.toByte() })
+    }
+
+    @Test
+    fun `send1885 writes opcode 1885 with control 0 on transaction 5`() {
+        val binder = RecordingBinder(succeeds = true)
+        val ok = ClusterFlyMcu.send1885(open = true, binder = binder)
+        assertEquals(true, ok)
+        assertEquals(5, binder.code)
+        assertEquals(0.toByte(), binder.control)
+        assertEquals(1885, binder.opcode)
+        assertEquals(ClusterFlyMcu.payload1885(open = true).toList(), binder.payload.toList())
+    }
+
+    @Test
+    fun `1885 log line names direction and binder result`() {
+        assertEquals("fly.mcu 1885 left true", ClusterFlyLog.mcu1885(open = true, ok = true))
+        assertEquals("fly.mcu 1885 right false", ClusterFlyLog.mcu1885(open = false, ok = false))
+    }
+
     private class RecordingBinder(private val succeeds: Boolean) : Binder() {
         var code: Int = -1
         var control: Byte = -1

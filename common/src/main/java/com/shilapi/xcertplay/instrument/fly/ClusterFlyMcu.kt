@@ -16,8 +16,10 @@ object ClusterFlyMcu {
     const val TRANSACTION_SEND = 5
     const val CONTROL: Byte = 0
     const val OPCODE = 1887
+    const val OPCODE_1885 = 1885
     const val PAYLOAD_LENGTH = 25
     private const val MARKER: Byte = 67
+    private const val MARKER_1885: Byte = 74
 
     fun payload(front: Boolean): ByteArray {
         val bytes = ByteArray(PAYLOAD_LENGTH)
@@ -26,15 +28,29 @@ object ClusterFlyMcu {
         return bytes
     }
 
-    fun send(front: Boolean, binder: IBinder? = lookup()): Boolean {
+    /** 74 in the first byte; 1 opens the map layer, 2 covers it. */
+    fun payload1885(open: Boolean): ByteArray {
+        val bytes = ByteArray(PAYLOAD_LENGTH)
+        bytes[0] = MARKER_1885
+        bytes[1] = if (open) 1 else 2
+        return bytes
+    }
+
+    fun send(front: Boolean, binder: IBinder? = lookup()): Boolean =
+        send(OPCODE, payload(front), binder)
+
+    fun send1885(open: Boolean, binder: IBinder? = lookup()): Boolean =
+        send(OPCODE_1885, payload1885(open), binder)
+
+    private fun send(opcode: Int, payload: ByteArray, binder: IBinder?): Boolean {
         if (binder == null) return false
         val data = Parcel.obtain()
         val reply = Parcel.obtain()
         return try {
             data.writeInterfaceToken(DESCRIPTOR)
             data.writeByte(CONTROL)
-            data.writeInt(OPCODE)
-            data.writeByteArray(payload(front))
+            data.writeInt(opcode)
+            data.writeByteArray(payload)
             if (!binder.transact(TRANSACTION_SEND, data, reply, 0)) return false
             reply.readException()
             reply.readInt() != 0
