@@ -219,4 +219,31 @@ class ClusterFlySessionTest {
         assertTrue(effect.steps.isEmpty())
         assertTrue(effect.push)
     }
+
+    @Test fun aDisplayWhileWaitingStartsThePicture() {
+        val session = ClusterFlySession()
+        val now = 10_000L
+        session.onLeft(now, openConditions())
+        val due = now + ClusterFlySequencer.STEP_DELAY_MILLIS + ClusterFlySequencer.MCU_GAP_MILLIS
+        assertEquals(FlyPhase.ARMING, session.onWaitTimeout(due - 1).phase)
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, session.onWaitTimeout(due).phase)
+        val effect = session.onDisplayReady(due + 1)
+        assertEquals(FlyPhase.PUSHING, effect.phase)
+        assertTrue(effect.push)
+    }
+
+    @Test fun aDisplayWhileArmingDoesNothing() {
+        val session = ClusterFlySession()
+        val effect = session.onLeft(10_000L, openConditions()).let {
+            session.onDisplayReady(10_000L)
+        }
+        assertEquals(FlyPhase.ARMING, effect.phase)
+        assertFalse(effect.push)
+    }
+
+    @Test fun aDisplayWhileIdleDoesNothing() {
+        val effect = ClusterFlySession().onDisplayReady(0L)
+        assertEquals(FlyPhase.IDLE, effect.phase)
+        assertFalse(effect.push)
+    }
 }

@@ -118,6 +118,21 @@ class ClusterFlySession(
     }
 
     /**
+     * The cluster's display is up and the first picture has arrived: the wait is over.
+     *
+     * Only the wait can turn into a picture. While arming the left step has not gone out, and in
+     * every other phase the layer is either already on or already going down.
+     */
+    fun onDisplayReady(nowMillis: Long): FlyEffect {
+        advance(nowMillis)
+        if (phase != FlyPhase.WAITING_FOR_VIDEO) return effect()
+        val safety = lastConditions?.let { safetyBlock(it) }
+        if (safety != null) return effect(warning = safety)
+        phase = FlyPhase.PUSHING
+        return effect()
+    }
+
+    /**
      * A tick. It exists for two things that must happen even when nothing else arrives: moving from
      * [FlyPhase.ARMING] to the wait once the left step has gone out, and finishing a close. Three
      * seconds without an `OPEN` changes nothing on purpose — the session simply stays waiting, with

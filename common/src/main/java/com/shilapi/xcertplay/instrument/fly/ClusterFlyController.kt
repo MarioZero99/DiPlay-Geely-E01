@@ -140,6 +140,26 @@ class ClusterFlyController(
         }
     }
 
+    /**
+     * The cluster's surface is up and the decoder has started: the picture is live.
+     *
+     * Idempotent with the subscription: the first caller turns it on, and the three-second abort of
+     * this round is cancelled. Called on the main thread from the decoder path, never from
+     * [sendFlyCommand] — when the left step returns the session is still arming.
+     */
+    fun onClusterDisplayReady() {
+        synchronized(lock) {
+            val effect = session.onDisplayReady(clock())
+            if (effect.phase != FlyPhase.PUSHING) return
+            videoTimeoutGeneration++
+            if (!subscribed) {
+                subscribed = true
+                setMainVideoSubscribed(true)
+            }
+            handle(effect)
+        }
+    }
+
     fun onRadar(active: Boolean) {
         synchronized(lock) {
             if (radar == active) return
