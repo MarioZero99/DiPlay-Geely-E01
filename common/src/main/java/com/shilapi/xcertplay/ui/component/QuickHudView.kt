@@ -19,9 +19,10 @@ import com.shilapi.xcertplay.host.R
 /**
  * The bar the three-finger swipe opens over a live CarPlay picture.
  *
- * Four controls and nothing else — end the session, pick the navigation stream, flip day/night,
- * leave the app — because everything a driver needs mid-projection has to be reachable without
- * leaving the picture. It replaces a jump to [com.shilapi.xcertplay.DiPlayActivity] and its 520dp
+ * Five controls and nothing else — end the session, pick the navigation stream, flip day/night,
+ * record the fly probe, leave the app — because everything a driver needs mid-projection has to
+ * be reachable without leaving the picture. The probe is the one that writes the cluster-link
+ * snapshot into the diagnostic log. It replaces a jump to [com.shilapi.xcertplay.DiPlayActivity] and its 520dp
  * settings drawer: that route unmounted the video surface for a settings tree the driver was not
  * asking for, and on this head unit the drawer plus a running decoder is the memory profile the
  * cockpit rework exists to avoid.
@@ -44,6 +45,7 @@ class QuickHudView(
     private val onToggleNight: () -> Unit,
     private val onExit: () -> Unit,
     private val onDismiss: () -> Unit,
+    private val onCollectFly: () -> Unit = {},
     private val onSampleTelemetry: (((PerformanceSnapshot) -> Unit) -> Unit)? = null,
 ) : FrameLayout(context) {
 
@@ -136,6 +138,12 @@ class QuickHudView(
             onToggleNight()
         }
         bar.addView(nightButton, barParams())
+
+        val probeButton = action(context.getString(R.string.hud_fly_probe)) {
+            scheduleAutoHide()
+            onCollectFly()
+        }
+        bar.addView(probeButton, barParams())
 
         exitButton = action(context.getString(R.string.close_app)) {
             if (exitArmed) {

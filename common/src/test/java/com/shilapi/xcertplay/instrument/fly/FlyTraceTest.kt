@@ -17,6 +17,7 @@ class FlyTraceTest {
     @Test fun selectKeepsTheGateAndDropsTheRest() {
         val body = """
             11-10 13:30:06.400  1000  1234 D Extra:  @neunavi@  导航状态
+            11-10 13:30:06.405  1000  1234 D Extra:  @neunavi@  setMMI_NavigationMod_indicator:[1, 1, 0]
             11-10 13:30:06.410  1000  1234 D Extra:  @neunavi@  road name chatter
             11-10 13:30:06.690  1000  1234 D Extra:  @ThreeFingerReceiver@  ThreeFingerReceiver isNavigation = true
             11-10 13:30:06.691  1000  1234 D Extra:  @ThreeFingerReceiver@  Settings.Global.getIn 恢复出厂设置值 = 1,isRadar = false, isEcall = false, isReversing = false
@@ -27,6 +28,7 @@ class FlyTraceTest {
         assertEquals(
             listOf(
                 "11-10 13:30:06.400  1000  1234 D Extra:  @neunavi@  导航状态",
+                "11-10 13:30:06.405  1000  1234 D Extra:  @neunavi@  setMMI_NavigationMod_indicator:[1, 1, 0]",
                 "11-10 13:30:06.690  1000  1234 D Extra:  @ThreeFingerReceiver@  ThreeFingerReceiver isNavigation = true",
                 "11-10 13:30:06.691  1000  1234 D Extra:  @ThreeFingerReceiver@  Settings.Global.getIn 恢复出厂设置值 = 1,isRadar = false, isEcall = false, isReversing = false",
                 "11-10 13:30:06.692  1000  1234 D Extra:  @ThreeFingerReceiver@  ThreeFingerReceiver left",

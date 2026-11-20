@@ -118,6 +118,8 @@ import com.shilapi.xcertplay.instrument.fly.ClusterFlyLog
 import com.shilapi.xcertplay.instrument.fly.ClusterFlyMcu
 import com.shilapi.xcertplay.instrument.fly.ClusterFlySequencer
 import com.shilapi.xcertplay.instrument.fly.FlyCommand
+import com.shilapi.xcertplay.instrument.fly.FlyProbeCapture
+import com.shilapi.xcertplay.instrument.fly.FlyTrace
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector
 import com.shilapi.xcertplay.ui.component.QuickHudView
 import java.io.File
@@ -1073,6 +1075,7 @@ class CarPlayHostActivity : ComponentActivity() {
             onToggleNight = { toggleQuickHudNight() },
             onExit = { exitFromQuickHud() },
             onDismiss = { hideQuickHud() },
+            onCollectFly = { collectFlyProbe() },
             onSampleTelemetry = { callback ->
                 val isWired = !wirelessEnabled
                 val appContext = applicationContext
@@ -2747,6 +2750,9 @@ class CarPlayHostActivity : ComponentActivity() {
             val open = command == FlyCommand.FLY_LEFT
             val ok = ClusterFlyMcu.send1885(open)
             DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.mcu1885(open, ok))
+            // The main log is wiped in about ten seconds, and the uploaded report only keeps this
+            // process. Pull the navigation-indicator lines now, while they are still in logcat.
+            if (open) FlyTrace.captureAfterGesture()
             ok
         }
     }
@@ -2830,6 +2836,16 @@ class CarPlayHostActivity : ComponentActivity() {
      * head unit reports and sends that instead, which is the right order — the manual flip is for
      * the drive in progress, not a setting the next drive inherits.
      */
+    /**
+     * Writes the cluster-link snapshot into the session log. The driver uploads that log afterwards.
+     * The walk uses the root service, so it stays off this thread.
+     */
+    private fun collectFlyProbe() {
+        appendLog("Quick bar: fly probe")
+        Toast.makeText(this, getString(R.string.hud_fly_probe_started), Toast.LENGTH_LONG).show()
+        Thread({ FlyProbeCapture.collectOnCar() }, "fly-probe").apply { isDaemon = true }.start()
+    }
+
     private fun toggleQuickHudNight() {
         darkMode = !darkMode
         quickHud?.setNight(darkMode)

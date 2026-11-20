@@ -22,6 +22,10 @@ internal object FlyTrace {
     private val keep = listOf(
         "ThreeFingerReceiver",
         "导航状态",
+        "setMMI_NavigationMod_indicator",
+        "setMMI_Nav_status",
+        "Navi front",
+        "Navi back",
     )
 
     fun captureAfterGesture() {
