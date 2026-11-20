@@ -145,6 +145,9 @@ class AndroidMediaSink(    surface: Surface? = null,
         }
     }
 
+    /** The last main-screen avcC record, copied: the cluster decoder keeps it past the subscription. */
+    fun mainVideoConfig(): ByteArray? = synchronized(observerLock) { lastMainConfig?.copyOf() }
+
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
         val codec = pendingVideoCodec[type] ?: VideoCodec.H264
         // The phone's choice of codec and profile is only visible here. One line per session, for

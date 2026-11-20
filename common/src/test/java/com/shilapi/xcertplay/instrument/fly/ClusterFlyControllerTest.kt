@@ -65,23 +65,6 @@ class ClusterFlyControllerTest {
         return controller
     }
 
-    /**
-     * The CarPlay media thread must not pay for the cluster: a frame is only queued there. The
-     * policy, the encoder boundary and the socket send all run on the fly thread.
-     */
-    @Test
-    fun `a frame is packetized on the fly thread, not the caller's`() {
-        val executor = ManualExecutor()
-        val controller = pushing(executor)
-
-        controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x67, 66, 0, 0))
-
-        assertFalse(lines.contains("fly.push start forward"))
-
-        executor.runAll()
-        assertTrue(lines.contains("fly.push start forward"))
-    }
-
     @Test
     fun `left sends navigation, then front, then the fly`() {
         controller().onGesture(Decision.FLY_LEFT)
@@ -100,6 +83,31 @@ class ClusterFlyControllerTest {
         now = 2_400L
         scheduled[1].second()
         assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT), sent)
+    }
+
+    @Test fun theLeftStepOpensTheLayerAndStillWaitsForTheSurface() {
+        val order = mutableListOf<String>()
+        val controller = ClusterFlyController(
+            commands = { sent.add(it) },
+            showWarning = { warnings.add(it) },
+            setMainVideoSubscribed = {},
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action ->
+                order.add("schedule $delay")
+                scheduled.add(delay to action)
+            },
+            onLayerOpened = { order.add("opened") },
+        )
+        controller.onGesture(Decision.FLY_LEFT)
+        now = 2_400L
+        runScheduled()
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, controller.phase)
+        assertTrue(order.indexOf("opened") < order.indexOf("schedule 3000"))
+        controller.onClusterDisplayReady()
+        assertEquals(FlyPhase.PUSHING, controller.phase)
+        scheduled.filter { it.first == 3_000L }.forEach { it.second() }
+        assertFalse(lines.any { it.contains("fly.abort") })
     }
 
     @Test
@@ -156,50 +164,6 @@ class ClusterFlyControllerTest {
         assertEquals(2, replies.size)
         assertEquals(2, replies[0].last().toInt())
         assertEquals(0, replies[1].last().toInt())
-    }
-
-    @Test
-    fun `high profile is reencoded and the original slice is not forwarded`() {
-        val executor = ManualExecutor()
-        val controller = pushing(executor)
-        val submitted = mutableListOf<ByteArray>()
-        ClusterFlyPush.reset()
-        ClusterFlyPush.log = { lines.add(it) }
-        ClusterFlyPush.reencoderFactory = {
-            object : ClusterFlyReencoder {
-                override fun submit(nalu: ByteArray, nowMillis: Long): Boolean {
-                    submitted.add(nalu)
-                    return true
-                }
-
-                override fun dropUntilIdr() = Unit
-
-                override fun close() = Unit
-            }
-        }
-        try {
-            controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x67, 100, 0, 0))
-            controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x41, 0x9A.toByte()))
-            executor.runAll()
-
-            assertTrue(lines.contains("fly.push start reencode"))
-            assertFalse(lines.contains("fly.push start forward"))
-            assertEquals(1, submitted.size)
-        } finally {
-            ClusterFlyPush.reencoderFactory = null
-            ClusterFlyPush.reset()
-        }
-    }
-
-    @Test
-    fun `the picture being forwarded is logged`() {
-        val executor = ManualExecutor()
-        val controller = pushing(executor)
-
-        controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x67, 66, 0, 0))
-        executor.runAll()
-
-        assertTrue(lines.contains("fly.push start forward"))
     }
 
     /**

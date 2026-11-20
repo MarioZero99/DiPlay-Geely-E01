@@ -11,9 +11,11 @@ import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Point
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.display.DisplayManager
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.hardware.usb.UsbDevice
@@ -29,6 +31,7 @@ import android.text.InputType
 import android.text.TextUtils
 import android.text.TextWatcher
 import android.util.Log
+import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.Surface
@@ -117,9 +120,13 @@ import com.shilapi.xcertplay.instrument.fly.ClusterFlyLink
 import com.shilapi.xcertplay.instrument.fly.ClusterFlyLog
 import com.shilapi.xcertplay.instrument.fly.ClusterFlyMcu
 import com.shilapi.xcertplay.instrument.fly.ClusterFlySequencer
+import com.shilapi.xcertplay.instrument.fly.FlyClusterPresentation
 import com.shilapi.xcertplay.instrument.fly.FlyCommand
+import com.shilapi.xcertplay.instrument.fly.FlyDisplayInfo
 import com.shilapi.xcertplay.instrument.fly.FlyProbeCapture
 import com.shilapi.xcertplay.instrument.fly.FlyTrace
+import com.shilapi.xcertplay.instrument.fly.chooseClusterDisplay
+import com.shilapi.xcertplay.instrument.fly.displayLines
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector
 import com.shilapi.xcertplay.ui.component.QuickHudView
 import java.io.File
@@ -172,6 +179,8 @@ class CarPlayHostActivity : ComponentActivity() {
      * never fly, and until one does there is no socket and no encoder to speak of.
      */
     private var clusterFly: ClusterFlyController? = null
+    private var flyClusterPresentation: FlyClusterPresentation? = null
+    private var clusterDisplayListener: DisplayManager.DisplayListener? = null
 
     /** The one line under a picture when a fly was refused; built with the page, hidden by default. */
     private var flyWarningView: TextView? = null
@@ -1003,6 +1012,8 @@ class CarPlayHostActivity : ComponentActivity() {
         adapterPage = null
         runCatching { unregisterReceiver(flySafetyReceiver) }
         mainHandler.removeCallbacks(hideFlyWarning)
+        // The window goes down while the fly thread is still alive; the controller is closed next.
+        dismissClusterFly()
         clusterFly?.close()
         clusterFly = null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) clusterMonitor?.stop()
@@ -2704,8 +2715,75 @@ class CarPlayHostActivity : ComponentActivity() {
             showWarning = { line -> showFlyWarning(line) },
             setMainVideoSubscribed = { subscribed -> setFlyVideoSubscribed(subscribed) },
             log = { line -> DiagLog.i(ClusterFlyLog.TAG, line) },
-            linkFactory = { ClusterFlyLink(log = { line -> DiagLog.i(ClusterFlyLog.TAG, line) }) },
+            onLayerOpened = { attachClusterPresentation() },
+            mainVideoConfig = { sink?.mainVideoConfig() },
+            onMain = { action -> runOnUiThread(action) },
+            onGiveUp = { dismissClusterFly() },
         ).also { clusterFly = it }
+
+    /**
+     * Puts the fly picture on the cluster's own display.
+     *
+     * The cluster is the first display that is not the centre screen. Nothing is broadcast and no
+     * factory call is made: the pixels go through SurfaceFlinger to the HDMI layer, the same path
+     * the factory navigator uses. A failure here is a log line, not a fallback to the old socket.
+     */
+    private fun attachClusterPresentation() {
+        if (flyClusterPresentation != null) return
+        val manager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val infos = manager.displays.map { display ->
+            val size = Point()
+            display.getRealSize(size)
+            FlyDisplayInfo(
+                display.displayId,
+                display.name,
+                size.x,
+                size.y,
+                display.displayId == Display.DEFAULT_DISPLAY,
+            )
+        }
+        val chosen = chooseClusterDisplay(infos)
+        displayLines(infos, chosen).forEach { DiagLog.i(ClusterFlyLog.TAG, it) }
+        if (chosen == null) {
+            listenForClusterDisplay(manager)
+            return
+        }
+        val display = manager.displays.first { it.displayId == chosen.id }
+        val presentation = FlyClusterPresentation(this, display) { surface ->
+            clusterFly?.onFlySurface(surface)
+        }
+        try {
+            presentation.show()
+        } catch (error: RuntimeException) {
+            DiagLog.i(ClusterFlyLog.TAG, "fly.display show failed ${error.javaClass.simpleName}")
+            return
+        }
+        flyClusterPresentation = presentation
+    }
+
+    /** The cluster was not in the display list yet; wait for it to be added. */
+    private fun listenForClusterDisplay(manager: DisplayManager) {
+        if (clusterDisplayListener != null) return
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = attachClusterPresentation()
+            override fun onDisplayRemoved(displayId: Int) = Unit
+            override fun onDisplayChanged(displayId: Int) = Unit
+        }
+        clusterDisplayListener = listener
+        manager.registerDisplayListener(listener, mainHandler)
+    }
+
+    /** Takes the cluster window down. Called on the main thread, after a right swipe or a failure. */
+    private fun dismissClusterFly() {
+        clusterDisplayListener?.let { listener ->
+            (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(listener)
+        }
+        clusterDisplayListener = null
+        val presentation = flyClusterPresentation
+        flyClusterPresentation = null
+        presentation?.dismiss()
+        clusterFly?.onFlySurface(null)
+    }
 
     /**
      * The factory commands, in the order the sequencer asks for them.
@@ -2991,6 +3069,7 @@ class CarPlayHostActivity : ComponentActivity() {
             }
             ThreeFingerSwipeDetector.Decision.FLY_RIGHT -> {
                 flyController().onGesture(ThreeFingerSwipeDetector.Decision.FLY_RIGHT)
+                dismissClusterFly()
                 return true
             }
         }
