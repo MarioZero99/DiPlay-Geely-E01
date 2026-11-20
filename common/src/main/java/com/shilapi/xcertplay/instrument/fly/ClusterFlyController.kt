@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Surface
+import com.shilapi.xcertplay.airplay.VideoCodec
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector.Decision
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ExecutorService
@@ -12,7 +13,6 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 
 /** Where the factory commands really go. The Activity sends them; tests record them. */
 fun interface FlyCommandSink {
@@ -43,6 +43,8 @@ class ClusterFlyController(
     private val onLayerOpened: () -> Unit = {},
     /** The centre screen's last avcC record, for the decoder's first surface. */
     private val mainVideoConfig: () -> ByteArray? = { null },
+    /** The centre screen's codec. The cluster decoder only decodes H.264; an HEVC session has none. */
+    private val mainVideoCodec: () -> VideoCodec? = { null },
     /** Posts to the main thread. The decoder runs on the fly thread, the presentation does not. */
     private val onMain: (() -> Unit) -> Unit = { action -> action() },
     /** The Activity takes its cluster window down. Called once per failed picture. */
@@ -91,7 +93,6 @@ class ClusterFlyController(
     private var carPlayActive = true
 
     private var subscribed = false
-    private var statScheduled = false
 
     /** A step scheduled before a session ended belongs to the old session and is dropped. */
     private var generation = 0
@@ -110,12 +111,6 @@ class ClusterFlyController(
 
     /** A dropped frame leaves the GOP torn: the decoder must restart on the next IDR. */
     private val dropUntilIdr = AtomicBoolean(false)
-
-    private val statPackets = AtomicLong()
-    private val statBytes = AtomicLong()
-    private val statDrops = AtomicLong()
-    private val statFrames = AtomicInteger()
-    private val lastKeyframeAt = AtomicLong(NO_TIME)
 
     fun onGesture(decision: Decision) {
         synchronized(lock) {
@@ -219,6 +214,8 @@ class ClusterFlyController(
                 flyDecoder?.release()
                 flyDecoder = null
                 waitingSurface = null
+                pendingConfig = null
+                configWarned = false
             }
         } catch (_: RejectedExecutionException) {
         }
@@ -237,7 +234,6 @@ class ClusterFlyController(
             // One frame waiting, one decoding. A third is dropped: a backlog here is a software
             // decode running ahead of the picture the driver is looking at.
             framesWaiting.decrementAndGet()
-            statDrops.incrementAndGet()
             dropUntilIdr.set(true)
             return
         }
@@ -250,7 +246,6 @@ class ClusterFlyController(
             // The layer is closed: one countable drop, never a wait. The GOP is now missing a
             // frame, so the fly thread waits for the next IDR.
             framesWaiting.decrementAndGet()
-            statDrops.incrementAndGet()
             dropUntilIdr.set(true)
         }
     }
@@ -269,6 +264,10 @@ class ClusterFlyController(
                     flyDecoder?.release()
                     flyDecoder = null
                     waitingSurface = null
+                    // The next session may have a different resolution or profile; never start it
+                    // on the previous one's record.
+                    pendingConfig = null
+                    configWarned = false
                     return@execute
                 }
                 waitingSurface = surface
@@ -298,6 +297,12 @@ class ClusterFlyController(
 
     private fun tryStartDecoder() {
         if (flyDecoder != null || waitingSurface == null) return
+        val codec = mainVideoCodec()
+        if (codec != null && codec != VideoCodec.H264) {
+            log("fly.display codec unsupported ${codec.name}")
+            onPictureFailed()
+            return
+        }
         val config = pendingConfig ?: mainVideoConfig() ?: run {
             if (!configWarned) {
                 configWarned = true
@@ -338,7 +343,8 @@ class ClusterFlyController(
         if (FlyAnnex.isConfig(bytes)) pendingConfig = bytes.copyOf()
         tryStartDecoder()
         val decoder = flyDecoder ?: return
-        if (session.currentPhase != FlyPhase.PUSHING) return
+        val phase = synchronized(lock) { session.currentPhase }
+        if (phase != FlyPhase.PUSHING) return
         if (FlyAnnex.isConfig(bytes)) return
         if (dropUntilIdr.compareAndSet(true, false)) decoder.dropUntilIdr()
         try {
@@ -369,14 +375,6 @@ class ClusterFlyController(
         if (effect.push != subscribed) {
             subscribed = effect.push
             setMainVideoSubscribed(effect.push)
-            if (effect.push) {
-                if (!statScheduled) {
-                    statScheduled = true
-                    scheduleStat()
-                }
-            } else {
-                statScheduled = false
-            }
         }
 
         if (effect.steps.isNotEmpty()) {
@@ -462,45 +460,16 @@ class ClusterFlyController(
     }
 
     private fun stopEverything() {
-        statScheduled = false
         if (subscribed) {
             subscribed = false
             setMainVideoSubscribed(false)
         }
     }
 
-    private fun scheduleStat() {
-        postDelayed(STAT_INTERVAL_MILLIS) {
-            synchronized(lock) { emitStat() }
-        }
-    }
-
-    private fun emitStat() {
-        if (!statScheduled || !subscribed) {
-            statScheduled = false
-            return
-        }
-        val frames = statFrames.getAndSet(0)
-        val fps = frames / (STAT_INTERVAL_MILLIS / 1_000L).toInt()
-        val keyframeAt = lastKeyframeAt.get()
-        val keyframeAge = if (keyframeAt == NO_TIME) -1L else clock() - keyframeAt
-        log(
-            ClusterFlyLog.stat(
-                packets = statPackets.getAndSet(0),
-                bytes = statBytes.getAndSet(0),
-                drops = statDrops.getAndSet(0),
-                fps = fps,
-                keyframeAgeMs = keyframeAge,
-            ),
-        )
-        scheduleStat()
-    }
-
     private companion object {
         const val NO_TIME = Long.MIN_VALUE
-        const val STAT_INTERVAL_MILLIS = 5_000L
 
-        /** How long the cluster has to dial 1028 after a successful 1885 before this is a failure. */
+        /** How long the cluster has to bring its display up after a successful 1885. */
         const val VIDEO_ASK_TIMEOUT_MILLIS = 3_000L
 
         /**

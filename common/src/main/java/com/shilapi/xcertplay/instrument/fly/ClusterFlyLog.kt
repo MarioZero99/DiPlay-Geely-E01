@@ -21,9 +21,6 @@ object ClusterFlyLog {
 
     fun phase(phase: FlyPhase): String = "fly.phase ${phase.name}"
 
-    fun stat(packets: Long, bytes: Long, drops: Long, fps: Int, keyframeAgeMs: Long): String =
-        "fly.stat packets=$packets bytes=$bytes drops=$drops fps=$fps keyframeAgeMs=$keyframeAgeMs"
-
     fun safetyOn(block: FlyBlock): String = "fly.safety on ${block.name}"
 
     fun safetyOff(): String = "fly.safety off"

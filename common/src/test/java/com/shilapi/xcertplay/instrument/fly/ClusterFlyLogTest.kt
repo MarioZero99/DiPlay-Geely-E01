@@ -33,13 +33,6 @@ class ClusterFlyLogTest {
     }
 
     @Test
-    fun `the statistics line carries numbers and no payload`() {
-        val line = ClusterFlyLog.stat(packets = 12, bytes = 34_567, drops = 2, fps = 10, keyframeAgeMs = 250)
-        assertTrue(line.startsWith("fly.stat packets=12 bytes=34567 drops=2 fps=10 keyframeAgeMs=250"))
-        assertFalse(line.contains("[B@"))
-    }
-
-    @Test
     fun `a session reports its phase changes through the sink`() {
         val lines = mutableListOf<String>()
         val session = ClusterFlySession { lines.add(it) }

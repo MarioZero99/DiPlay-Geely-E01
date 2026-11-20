@@ -8,8 +8,8 @@ import org.junit.Test
 /**
  * The layer's state machine, driven by numbers.
  *
- * The thing it must never do is push before the cluster has asked: a cluster that keeps its map page
- * and never opens 1028 gets nothing, and nothing is copied from the centre screen to make up for it.
+ * The thing it must never do is push before the cluster's display is up: a cluster that keeps its
+ * map page gets nothing, and nothing is copied from the centre screen to make up for it.
  */
 class ClusterFlySessionTest {
 

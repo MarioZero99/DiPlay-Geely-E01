@@ -2564,6 +2564,7 @@ class CarPlayHostActivity : ComponentActivity() {
             log = { line -> DiagLog.i(ClusterFlyLog.TAG, line) },
             onLayerOpened = { attachClusterPresentation() },
             mainVideoConfig = { sink?.mainVideoConfig() },
+            mainVideoCodec = { sink?.mainVideoCodec() },
             onMain = { action -> runOnUiThread(action) },
             onGiveUp = { dismissClusterFly() },
             requestKeyFrame = { requestKeyFrame("cluster fly") },

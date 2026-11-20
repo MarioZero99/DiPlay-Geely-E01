@@ -128,8 +128,11 @@ class AndroidMediaSink(    surface: Surface? = null,
     @Volatile
     private var mainVideoObserver: ((Int, ByteArray) -> Unit)? = null
 
-    /** The last main-screen configuration. Subscription starts later, and the re-encoder needs it. */
+    /** The last main-screen configuration. Subscription starts later, and the cluster decoder needs it. */
     private var lastMainConfig: ByteArray? = null
+
+    /** The last main-screen codec. The cluster decoder is H.264 only and has to say so. */
+    private var lastMainCodec: VideoCodec? = null
 
     private val observerLock = Any()
 
@@ -138,8 +141,8 @@ class AndroidMediaSink(    surface: Surface? = null,
             mainVideoObserver = observer
             if (observer != null) {
                 val config = lastMainConfig
-                // Hand the configuration over before any later frame, or the re-encoder starts
-                // on a slice and never sees the parameter sets.
+                // Hand the configuration over before any later frame, or the cluster decoder
+                // starts on a slice and never sees the parameter sets.
                 if (config != null) invokeObserver(observer, SCREEN_TYPE_MAIN, config)
             }
         }
@@ -148,13 +151,19 @@ class AndroidMediaSink(    surface: Surface? = null,
     /** The last main-screen avcC record, copied: the cluster decoder keeps it past the subscription. */
     fun mainVideoConfig(): ByteArray? = synchronized(observerLock) { lastMainConfig?.copyOf() }
 
+    /** The codec the main screen's last configuration named, for the cluster decoder's check. */
+    fun mainVideoCodec(): VideoCodec? = synchronized(observerLock) { lastMainCodec }
+
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
         val codec = pendingVideoCodec[type] ?: VideoCodec.H264
         // The phone's choice of codec and profile is only visible here. One line per session, for
         // every session: it is the answer to whether the cluster can take the picture untouched.
         if (type == SCREEN_TYPE_MAIN) {
             DiagLog.i("xcertplay-fly", VideoCodecConfigLog.line(codec, codecData))
-            synchronized(observerLock) { lastMainConfig = codecData.copyOf() }
+            synchronized(observerLock) {
+                lastMainConfig = codecData.copyOf()
+                lastMainCodec = codec
+            }
         }
         deliverToObserver(type, codecData)
         videoDecoder(type).configure(codec, codecData)
@@ -190,7 +199,10 @@ class AndroidMediaSink(    surface: Surface? = null,
     override fun onScreenStreamActive(type: Int, active: Boolean) {
         if (!active) {
             if (type == SCREEN_TYPE_MAIN) {
-                synchronized(observerLock) { lastMainConfig = null }
+                synchronized(observerLock) {
+                    lastMainConfig = null
+                    lastMainCodec = null
+                }
             }
             videoRecoveryHandlers.remove(type)
             videoDiagnosticHandlers.remove(type)
