@@ -302,6 +302,39 @@ class ClusterFlyControllerTest {
         assertEquals(1, requests.size)
     }
 
+    @Test
+    fun `a lost cluster display ends the picture`() {
+        val giveUps = mutableListOf<Int>()
+        val controller = ClusterFlyController(
+            commands = { sent.add(it) },
+            showWarning = { warnings.add(it) },
+            setMainVideoSubscribed = {},
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            onGiveUp = { giveUps.add(1) },
+        )
+        controller.onGesture(Decision.FLY_LEFT)
+        now = 2_400L
+        runScheduled()
+        now = 2_500L
+        controller.onClusterDisplayReady()
+
+        controller.onClusterDisplayLost()
+
+        assertEquals(1, giveUps.size)
+    }
+
+    @Test
+    fun `a lost display while waiting aborts with its own reason`() {
+        val controller = controller()
+        openToLeft(controller)
+
+        controller.onClusterDisplayLost()
+
+        assertTrue(lines.contains("fly.abort display gone"))
+    }
+
     /** Runs nothing: the test only needs to see what the controller queued. */
     private class RecordingExecutor(private val tasks: MutableList<Runnable>) :
         java.util.concurrent.AbstractExecutorService() {

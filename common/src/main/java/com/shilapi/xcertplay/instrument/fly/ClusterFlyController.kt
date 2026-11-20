@@ -280,16 +280,29 @@ class ClusterFlyController(
 
     /** The cluster window is up but the picture cannot start. Tear the window down again. */
     fun onPictureFailed() {
+        endPicture("decoder failed")
+    }
+
+    /**
+     * The system took the presentation's display away. The session must not stay in PUSHING: the
+     * next left swipe would be swallowed as if the layer were still up.
+     */
+    fun onClusterDisplayLost() {
+        endPicture("display gone")
+    }
+
+    private fun endPicture(reason: String) {
         onMain {
             synchronized(lock) {
                 if (session.currentPhase == FlyPhase.PUSHING) {
+                    // 1885 already lifted the layer, so it has to be covered again.
                     val effect = session.onRight(clock(), conditions(clock()))
                     subscribed = false
                     setMainVideoSubscribed(false)
                     handle(effect)
                     onGiveUp()
                 } else {
-                    abortSession("decoder failed")
+                    abortSession(reason)
                 }
             }
         }

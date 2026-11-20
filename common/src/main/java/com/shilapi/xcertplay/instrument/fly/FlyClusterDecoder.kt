@@ -14,8 +14,8 @@ import android.view.Surface
  */
 internal class FlyClusterDecoder(
     surface: Surface,
-    sps: ByteArray,
-    pps: ByteArray,
+    private val sps: ByteArray,
+    private val pps: ByteArray,
     private val log: (String) -> Unit,
 ) {
     private val codec: MediaCodec? = create(surface, sps, pps)
@@ -41,6 +41,10 @@ internal class FlyClusterDecoder(
         if (spentMs > SLOW_MS) {
             codec.flush()
             codec.start()
+            // A restart begins at the parameter sets, like the old re-encoder did: a CarPlay IDR
+            // often arrives without SPS/PPS of its own.
+            queue(codec, START_CODE + sps)
+            queue(codec, START_CODE + pps)
             awaitingIdr = true
             log("fly.display slow $spentMs")
         }
@@ -72,6 +76,8 @@ internal class FlyClusterDecoder(
         buffer.clear()
         if (buffer.remaining() < nalu.size) {
             // The codec sized its input buffer; an IDR that does not fit is dropped, not truncated.
+            // The slot itself is handed back empty — keeping it would starve every later unit.
+            codec.queueInputBuffer(index, 0, 0, ptsUs, 0)
             awaitingIdr = true
             if (!inputWarned) {
                 inputWarned = true
@@ -121,6 +127,7 @@ internal class FlyClusterDecoder(
         }
         return try {
             val format = MediaFormat.createVideoFormat(MIME, 1920, 720)
+            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_INPUT_BYTES)
             // Android decoders read the parameter sets as Annex-B NAL units. The sink's working
             // main decoder hands them over the same way; the avcC record itself has no start codes.
             format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(START_CODE + sps))
@@ -142,6 +149,9 @@ internal class FlyClusterDecoder(
         const val SOFTWARE = "OMX.google.h264.decoder"
         const val FRAME_US = 50_000L
         const val SLOW_MS = 150L
+
+        /** The same input-buffer budget the main decoder asks for; an IDR must fit whole. */
+        const val MAX_INPUT_BYTES = 8 * 1024 * 1024
         val START_CODE = byteArrayOf(0, 0, 0, 1)
     }
 }

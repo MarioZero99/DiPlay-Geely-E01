@@ -2604,7 +2604,10 @@ class CarPlayHostActivity : ComponentActivity() {
         // The system dismisses a presentation when its display goes away. Clear the field so the
         // next left swipe attaches a fresh window instead of finding this dead one.
         presentation.setOnDismissListener {
-            if (flyClusterPresentation === presentation) flyClusterPresentation = null
+            if (flyClusterPresentation === presentation) {
+                flyClusterPresentation = null
+                clusterFly?.onClusterDisplayLost()
+            }
         }
         try {
             presentation.show()
