@@ -21,12 +21,12 @@ fun interface FlyCommandSink {
 }
 
 /**
- * Joins the gesture, the state machine, the cluster's socket and the centre screen's picture.
+ * Joins the gesture, the state machine, the cluster's display and the centre screen's picture.
  *
- * The session and everything that steers it sit behind one lock: the link's reader thread answers
- * the cluster on one side, the main thread takes gestures and safety broadcasts on the other, and
- * both move the same state machine. The picture itself is subscribed only while the session says it
- * is pushing, so a session with no cluster watching costs the decoder nothing.
+ * The session and everything that steers it sit behind one lock: the fly thread starts the decoder
+ * on one side, the main thread takes gestures and safety broadcasts on the other, and both move the
+ * same state machine. The picture itself is subscribed only while the session says it is pushing,
+ * so a session with no cluster watching costs the decoder nothing.
  */
 class ClusterFlyController(
     private val commands: FlyCommandSink,
@@ -47,7 +47,6 @@ class ClusterFlyController(
     private val onMain: (() -> Unit) -> Unit = { action -> action() },
     /** The Activity takes its cluster window down. Called once per failed picture. */
     private val onGiveUp: () -> Unit = {},
-    linkFactory: (() -> ClusterFlyLink)? = null,
     frameExecutor: ExecutorService? = null,
 ) {
 
@@ -57,13 +56,9 @@ class ClusterFlyController(
     val phase: FlyPhase
         get() = session.currentPhase
 
-    private val link: ClusterFlyLink? = linkFactory?.invoke()?.apply {
-        onPacket = { bytes -> onPacket(bytes) }
-    }
-
     /**
      * The fly thread. CarPlay's media thread hands over a frame and returns; everything that could
-     * block — the policy, the encoder boundary, the UDP send — happens here.
+     * block — the decode, the surface, a slow unit — happens here.
      *
      * The queue is bounded and its rejection is a counter, never a wait: a head unit with 26 MB free
      * cannot afford the cluster layer to slow the picture the driver is actually looking at.
@@ -77,11 +72,8 @@ class ClusterFlyController(
         { runnable -> Thread(runnable, "cluster-fly-frames").apply { isDaemon = true } },
     )
 
-    /** The one lock. Taken by gestures, safety broadcasts, the reader thread and posted steps. */
+    /** The one lock. Taken by gestures, safety broadcasts, the fly thread and posted steps. */
     private val lock = Any()
-
-    /** Guards the push policy's own state, which the fly thread and a teardown both touch. */
-    private val pushLock = Any()
 
     /** Before any command has been sent. Not `0`: uptime can legitimately start there. */
     private var lastCommandAt = NO_TIME
@@ -95,13 +87,10 @@ class ClusterFlyController(
     private var subscribed = false
     private var statScheduled = false
 
-    /** The profile warning is said once per layer, not per frame. */
-    private var profileWarned = false
-
     /** A step scheduled before a session ended belongs to the old session and is dropped. */
     private var generation = 0
 
-    /** The three-second wait for the cluster's ask; a newer wait or an answered ask cancels it. */
+    /** The three-second wait for the cluster's display; a newer wait or a started decoder cancels it. */
     private var videoTimeoutGeneration = 0
 
     /** Set on the fly thread, once. The media thread never pays for the priority change. */
@@ -121,27 +110,6 @@ class ClusterFlyController(
     private val statDrops = AtomicLong()
     private val statFrames = AtomicInteger()
     private val lastKeyframeAt = AtomicLong(NO_TIME)
-
-    init {
-        // The push policy logs through this controller, so its lines land in the same session log.
-        ClusterFlyPush.reset()
-        ClusterFlyPush.log = log
-        // Only a controller with a real link builds a codec. Tests leave the factory alone.
-        // The decoder inside is the software one, so this does not take the centre screen's decoder.
-        if (linkFactory != null) {
-            ClusterFlyPush.reencoderFactory = { config ->
-                if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.LOLLIPOP) {
-                    null
-                } else {
-                    val created = ClusterFlyReencoderMediaCodec(config) { unit -> sendEncoded(unit) }
-                    if (created.ready) created else {
-                        created.close()
-                        null
-                    }
-                }
-            }
-        }
-    }
 
     fun onGesture(decision: Decision) {
         synchronized(lock) {
@@ -349,25 +317,6 @@ class ClusterFlyController(
         }
     }
 
-    /** Said once per layer, on the main thread: the phone's picture is not the profile the cluster takes. */
-    private fun warnUnsupportedPicture() {
-        if (profileWarned) return
-        profileWarned = true
-        postDelayed(0L) {
-            synchronized(lock) { showWarning(ProfileWarning) }
-        }
-    }
-
-    private fun sendEncoded(unit: ByteArray) {
-        if (link?.send(unit) == true) {
-            statPackets.incrementAndGet()
-            statBytes.addAndGet(unit.size.toLong())
-            statFrames.incrementAndGet()
-        } else {
-            statDrops.incrementAndGet()
-        }
-    }
-
     private fun conditions(now: Long): FlyConditions = FlyConditions(
         navigationArmed = carPlayActive,
         deviceProvisioned = provisioned(),
@@ -393,14 +342,7 @@ class ClusterFlyController(
                 }
             } else {
                 statScheduled = false
-                synchronized(pushLock) { ClusterFlyPush.release() }
             }
-        }
-
-        if (effect.phase == FlyPhase.ARMING || effect.phase == FlyPhase.WAITING_FOR_VIDEO) {
-            // Listening starts with the opening steps: the cluster may ask after 1887, before the
-            // left swipe, and that ask is remembered rather than refused.
-            link?.start()
         }
 
         if (effect.steps.isNotEmpty()) {
@@ -436,16 +378,9 @@ class ClusterFlyController(
             abortSession("1885 left false")
             return
         }
-        // The left step has gone out; from here the cluster may ask for the picture. An ask that
-        // arrived while arming is answered now, before the subscription makes frames flow.
+        // The left step has gone out; from here the cluster's display may come up and start the
+        // picture. The three-second clock is armed after the window has been put up.
         val effect = session.onWaitTimeout(clock())
-        if (effect.push && session.takePendingOpen()) {
-            val replies = listOf(
-                reply(FlyReply.READY, ClusterFlyProtocol.videoReady()),
-                reply(FlyReply.START, ClusterFlyProtocol.videoStart()),
-            )
-            link?.reply(replies)
-        }
         handle(effect)
         // The cluster window goes up before the three-second clock is armed: the surface arrives
         // later, and the clock is what takes the layer down if it never does.
@@ -486,86 +421,6 @@ class ClusterFlyController(
         stopEverything()
     }
 
-    /**
-     * Answers one 24-byte ask. Runs on the link's reader thread.
-     *
-     * For an open, the replies are returned to the link first and the subscription is posted: the
-     * cluster must know a picture is coming before the first packet does. For a close it is the
-     * other way round — the picture is stopped here, and only then is STOP written back.
-     */
-    fun onPacket(bytes: ByteArray): List<ByteArray> {
-        val ask = ClusterFlyProtocol.parse(bytes)
-        log(ClusterFlyLog.ask(ask))
-        if (ask == VideoAsk.IGNORE) return emptyList()
-
-        synchronized(lock) {
-            val now = clock()
-            val conditions = conditions(now)
-            return when (ask) {
-                VideoAsk.IGNORE -> emptyList()
-
-                // The cluster's own heartbeat: the factory reads it and writes nothing back. Ours is
-                // sent on the link's three-second timer, not as an answer.
-                VideoAsk.HEARTBEAT -> emptyList()
-
-                VideoAsk.PARTIAL_OPEN, VideoAsk.PARTIAL_CLOSE ->
-                    listOf(reply(FlyReply.REFUSED, ClusterFlyProtocol.partialRefused()))
-
-                VideoAsk.OPEN -> {
-                    val effect = session.onVideoAsk(VideoAsk.OPEN, now, conditions)
-                    val replies = when {
-                        effect.push -> listOf(
-                            reply(FlyReply.READY, ClusterFlyProtocol.videoReady()),
-                            reply(FlyReply.START, ClusterFlyProtocol.videoStart()),
-                        )
-                        // An open asked before the left step goes out is remembered; the ready
-                        // and start go out with that step.
-                        effect.holdOpen -> emptyList()
-                        else -> listOf(reply(FlyReply.REFUSED, ClusterFlyProtocol.videoRefused()))
-                    }
-                    // A real ask is the page change: the three-second wait has done its job. A
-                    // refused ask leaves the clock running, so the abort still happens.
-                    if (effect.push) videoTimeoutGeneration++
-                    // The held ask is answered from the left step. Handling this effect later
-                    // would run after the picture had started and turn the subscription back off.
-                    if (!effect.holdOpen) {
-                        postDelayed(0L) {
-                            synchronized(lock) { handle(effect) }
-                        }
-                    }
-                    replies
-                }
-
-                VideoAsk.CLOSE -> {
-                    val wasPushing = session.currentPhase == FlyPhase.PUSHING
-                    val effect = session.onVideoAsk(VideoAsk.CLOSE, now, conditions)
-                    if (wasPushing) {
-                        // The driver sees the picture stop before the cluster is told it stopped.
-                        if (subscribed) {
-                            subscribed = false
-                            setMainVideoSubscribed(false)
-                        }
-                        synchronized(pushLock) { ClusterFlyPush.release() }
-                    }
-                    postDelayed(0L) {
-                        synchronized(lock) { handle(effect) }
-                    }
-                    // The factory acknowledges the close whether or not it was streaming, then
-                    // sends the stream stop.
-                    listOf(
-                        reply(FlyReply.READY, ClusterFlyProtocol.videoReady()),
-                        reply(FlyReply.STOP, ClusterFlyProtocol.videoStop()),
-                    )
-                }
-            }
-        }
-    }
-
-    private fun reply(kind: FlyReply, bytes: ByteArray): ByteArray {
-        log(ClusterFlyLog.reply(kind))
-        return bytes
-    }
-
     private fun safetyChanged(block: FlyBlock?) {
         if (block != null) log(ClusterFlyLog.safetyOn(block)) else log(ClusterFlyLog.safetyOff())
         val now = clock()
@@ -574,13 +429,10 @@ class ClusterFlyController(
 
     private fun stopEverything() {
         statScheduled = false
-        profileWarned = false
         if (subscribed) {
             subscribed = false
             setMainVideoSubscribed(false)
         }
-        synchronized(pushLock) { ClusterFlyPush.release() }
-        link?.close()
     }
 
     private fun scheduleStat() {
@@ -622,7 +474,5 @@ class ClusterFlyController(
          * software decode running ahead of the picture the driver is looking at.
          */
         const val FRAME_QUEUE_CAPACITY = 1
-
-        const val ProfileWarning = "手机画面格式暂不支持飞屏"
     }
 }

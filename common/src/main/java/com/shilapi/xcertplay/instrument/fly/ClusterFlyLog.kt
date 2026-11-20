@@ -1,11 +1,5 @@
 package com.shilapi.xcertplay.instrument.fly
 
-/** The four things that can happen to the cluster's 1028 socket, as log words. */
-enum class TcpEvent { LISTEN, ACCEPT, CLOSED, BUSY }
-
-/** The six answers we can send. */
-enum class FlyReply { HEARTBEAT, READY, START, STOP, REFUSED }
-
 /**
  * The fly feature's lines in the session log.
  *
@@ -26,25 +20,6 @@ object ClusterFlyLog {
     fun command(command: FlyCommand): String = "fly.command ${command.name}"
 
     fun phase(phase: FlyPhase): String = "fly.phase ${phase.name}"
-
-    fun tcp(event: TcpEvent): String = "fly.tcp ${event.name.lowercase()}"
-
-    /** Why the listen failed, without a stack trace. The holder, when there is one, is a separate line. */
-    fun tcpBusy(error: Exception): String {
-        val message = error.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(120).orEmpty()
-        return "fly.tcp busy ${error.javaClass.simpleName} $message".trim()
-    }
-
-    fun ask(ask: VideoAsk): String = "fly.ask ${ask.name}"
-
-    fun reply(reply: FlyReply): String = "fly.reply ${reply.name.lowercase()}"
-
-    fun pushStart(mode: PushMode): String = "fly.push start ${mode.name.lowercase()}"
-
-    /** The phone's H.264 profile, once per value: 66 is Baseline, anything else has to be re-encoded. */
-    fun profile(profileIdc: Int): String = "fly.profile $profileIdc"
-
-    fun pushStop(): String = "fly.push stop"
 
     fun stat(packets: Long, bytes: Long, drops: Long, fps: Int, keyframeAgeMs: Long): String =
         "fly.stat packets=$packets bytes=$bytes drops=$drops fps=$fps keyframeAgeMs=$keyframeAgeMs"

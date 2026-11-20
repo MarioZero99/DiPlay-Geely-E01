@@ -1,13 +1,5 @@
 package com.shilapi.xcertplay.instrument.fly
 
-/**
- * What the cluster asked for on its 1028 connection.
- *
- * `OPEN`/`CLOSE` are function 301, the background map the CarPlay picture goes into. The partial
- * pair is function 302, the junction map, which this app can only decline.
- */
-enum class VideoAsk { OPEN, CLOSE, PARTIAL_OPEN, PARTIAL_CLOSE, HEARTBEAT, IGNORE }
-
 /** The five states of the layer. Only [PUSHING] has a picture going to the cluster. */
 enum class FlyPhase { IDLE, ARMING, WAITING_FOR_VIDEO, PUSHING, CLOSING }
 
@@ -17,8 +9,6 @@ data class FlyEffect(
     val push: Boolean,
     val warning: FlyBlock?,
     val steps: List<FlyStep>,
-    /** The cluster already asked, and the answer waits until the left step has gone out. */
-    val holdOpen: Boolean = false,
 )
 
 /**
@@ -26,7 +16,7 @@ data class FlyEffect(
  *
  * Two rules the factory forces:
  *
- *  - the picture is not pushed until the cluster itself opens 1028 and says so;
+ *  - the picture is not pushed until the cluster's display is up and the decoder has started;
  *  - once the layer is up it must come down even if the first attempt was too early or a radar
  *    warning interrupted it. A close that cannot go out now is owed and sent when it can, because
  *    the cluster otherwise stays on a frozen map with the navigation card still lit.
@@ -44,9 +34,6 @@ class ClusterFlySession(
 
     /** When the last close command is due, after which the layer is back to idle. */
     private var closeNavOffAt = NO_TIME
-
-    /** The cluster asked for the picture before the wait began; answer it once the wait is open. */
-    private var openPending = false
 
     /** A close was refused by the car's state and still has to be sent when that state clears. */
     private var closeOwed = false
@@ -80,44 +67,6 @@ class ClusterFlySession(
     }
 
     /**
-     * The cluster's ask. [conditions] is the car as it is *now*: a picture must not start under a
-     * radar warning, and a close is a command like any other, so the one-second interval applies to
-     * it too. Passing null falls back to the picture last stored by a gesture.
-     *
-     * An open that arrives before the left step is due is remembered rather than refused: the
-     * cluster usually asks once, and a refusal there costs the picture for the whole session.
-     */
-    fun onVideoAsk(ask: VideoAsk, nowMillis: Long, conditions: FlyConditions? = null): FlyEffect {
-        advance(nowMillis)
-        when (ask) {
-            VideoAsk.OPEN -> when (phase) {
-                FlyPhase.ARMING -> {
-                    openPending = true
-                    return effect(holdOpen = true)
-                }
-
-                FlyPhase.WAITING_FOR_VIDEO -> {
-                    val current = conditions ?: lastConditions
-                    val safety = current?.let { safetyBlock(it) }
-                    if (safety != null) return effect(warning = safety)
-                    phase = FlyPhase.PUSHING
-                }
-
-                else -> Unit
-            }
-
-            VideoAsk.CLOSE -> if (phase == FlyPhase.PUSHING) {
-                val current = conditions ?: lastConditions
-                return if (current != null) requestClose(nowMillis, current) else effect()
-            }
-
-            VideoAsk.PARTIAL_OPEN, VideoAsk.PARTIAL_CLOSE,
-            VideoAsk.HEARTBEAT, VideoAsk.IGNORE -> Unit
-        }
-        return effect()
-    }
-
-    /**
      * The cluster's display is up and the first picture has arrived: the wait is over.
      *
      * Only the wait can turn into a picture. While arming the left step has not gone out, and in
@@ -135,22 +84,12 @@ class ClusterFlySession(
     /**
      * A tick. It exists for two things that must happen even when nothing else arrives: moving from
      * [FlyPhase.ARMING] to the wait once the left step has gone out, and finishing a close. Three
-     * seconds without an `OPEN` changes nothing on purpose — the session simply stays waiting, with
-     * no encoder created and nothing copied from the centre screen.
+     * seconds without a display changes nothing on purpose — the session simply stays waiting, with
+     * no decoder created and nothing copied from the centre screen.
      */
     fun onWaitTimeout(nowMillis: Long): FlyEffect {
         advance(nowMillis)
         return effect()
-    }
-
-    /**
-     * The cluster's picture starts as soon as the wait opens, and the ask that came early is handed
-     * to the controller once so it can answer it.
-     */
-    fun takePendingOpen(): Boolean {
-        val pending = openPending
-        openPending = false
-        return pending
     }
 
     fun onSafety(conditions: FlyConditions, nowMillis: Long): FlyEffect {
@@ -161,7 +100,6 @@ class ClusterFlySession(
         if (phase == FlyPhase.PUSHING && safety != null) {
             // Stop the picture now; the factory would drop a close sent during the warning, so the
             // close is owed until the warning clears.
-            openPending = false
             closeOwed = true
             phase = FlyPhase.CLOSING
             closeNavOffAt = nowMillis
@@ -207,7 +145,6 @@ class ClusterFlySession(
 
             // The left step may not have gone out yet; nothing on the cluster needs taking down.
             FlyPhase.ARMING -> {
-                openPending = false
                 phase = FlyPhase.IDLE
                 effect()
             }
@@ -235,7 +172,6 @@ class ClusterFlySession(
         phase = FlyPhase.IDLE
         flyStepAt = NO_TIME
         closeNavOffAt = NO_TIME
-        openPending = false
         closeOwed = false
         return effect(
             steps = listOf(
@@ -261,7 +197,6 @@ class ClusterFlySession(
             FlyBlock.NONE -> close(nowMillis, conditions)
             FlyBlock.TOO_SOON -> scheduleClose(nowMillis, conditions)
             else -> {
-                openPending = false
                 closeOwed = true
                 phase = FlyPhase.CLOSING
                 closeNavOffAt = nowMillis
@@ -280,7 +215,6 @@ class ClusterFlySession(
         )
         phase = FlyPhase.CLOSING
         closeOwed = false
-        openPending = false
         closeNavOffAt = steps.last().sendAtMillis
         return effect(steps = steps)
     }
@@ -289,14 +223,13 @@ class ClusterFlySession(
         val steps = ClusterFlySequencer.close(nowMillis, conditions)
         phase = FlyPhase.CLOSING
         closeOwed = false
-        openPending = false
         closeNavOffAt = steps.lastOrNull()?.sendAtMillis ?: nowMillis
         return effect(steps = steps)
     }
 
     private fun advance(nowMillis: Long) {
         if (phase == FlyPhase.ARMING && nowMillis >= flyStepAt) {
-            phase = if (openPending) FlyPhase.PUSHING else FlyPhase.WAITING_FOR_VIDEO
+            phase = FlyPhase.WAITING_FOR_VIDEO
         }
         // A close that is still owed must not fall back to idle: nobody has sent it yet.
         if (phase == FlyPhase.CLOSING && !closeOwed && nowMillis >= closeNavOffAt) {
@@ -308,14 +241,12 @@ class ClusterFlySession(
     private fun effect(
         steps: List<FlyStep> = emptyList(),
         warning: FlyBlock? = null,
-        holdOpen: Boolean = false,
     ): FlyEffect {
         val effect = FlyEffect(
             phase = phase,
             push = phase == FlyPhase.PUSHING,
             warning = warning,
             steps = steps,
-            holdOpen = holdOpen,
         )
         if (effect.phase != loggedPhase) {
             loggedPhase = effect.phase

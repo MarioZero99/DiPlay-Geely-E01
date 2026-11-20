@@ -559,8 +559,6 @@
     <string name="hud_day">Day</string>
     <string name="hud_night">Night</string>
     <string name="hud_audio_saved">Audio %1$d · applies on the next connection</string>
-    <string name="hud_fly_probe">Collect fly</string>
-    <string name="hud_fly_probe_started">Writing the fly probe into the diagnostic log. Upload the log after this drive.</string>
     <string name="day_night_switching">Day and night</string>
     <string name="day_night_follow_car">Follow the car</string>
     <string name="day_night_follow_time">Follow the time</string>

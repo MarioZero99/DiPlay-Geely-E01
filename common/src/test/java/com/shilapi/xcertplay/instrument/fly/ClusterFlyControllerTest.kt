@@ -37,31 +37,14 @@ class ClusterFlyControllerTest {
         pending.forEach { it.second() }
     }
 
-    /** A 24-byte ask of function 301 with the switch off. */
-    private fun openAsk(): ByteArray {
-        val packet = ByteArray(24)
-        packet[4] = (301 shr 8).toByte()
-        packet[5] = 301.toByte()
-        return packet
-    }
-
-    private fun ask(function: Int, order: Int): ByteArray {
-        val packet = ByteArray(24)
-        packet[4] = (function shr 8).toByte()
-        packet[5] = function.toByte()
-        packet[23] = order.toByte()
-        return packet
-    }
-
-    /** Gesture at 1000, front at 1400, left at 2400, the cluster's ask at 2500. */
-    private fun pushing(frameExecutor: java.util.concurrent.ExecutorService? = null): ClusterFlyController {
-        val controller = controller(frameExecutor)
+    /** Gesture at 1000, front at 1400, left at 2400, the display ready at 2500. */
+    private fun pushing(): ClusterFlyController {
+        val controller = controller()
         controller.onGesture(Decision.FLY_LEFT)
         now = 2_400L
         runScheduled()
         now = 2_500L
-        controller.onPacket(openAsk())
-        runScheduled()
+        controller.onClusterDisplayReady()
         return controller
     }
 
@@ -126,77 +109,6 @@ class ClusterFlyControllerTest {
 
         assertEquals(emptyList<FlyCommand>(), sent)
         assertEquals(emptyList<String>(), warnings)
-    }
-
-    /**
-     * The cluster can ask in the 400 ms before the left step. That ask is not refused: the first
-     * answer would be the one it keeps. Ready and start are logged when the left step goes out.
-     */
-    @Test
-    fun `an open before the fly step is answered when the step goes out`() {
-        val controller = controller()
-        controller.onGesture(Decision.FLY_LEFT)
-        now = 1_200L
-
-        val replies = controller.onPacket(openAsk())
-
-        assertEquals(emptyList<ByteArray>(), replies)
-        assertFalse(lines.contains("fly.reply refused"))
-
-        now = 2_400L
-        runScheduled()
-
-        assertTrue(lines.contains("fly.reply ready"))
-        assertTrue(lines.contains("fly.reply start"))
-        assertFalse(lines.contains("fly.reply refused"))
-    }
-
-    @Test
-    fun `open is answered ready then start`() {
-        val controller = controller()
-        controller.onGesture(Decision.FLY_LEFT)
-        now = 2_400L
-        runScheduled()
-        now = 2_500L
-
-        val replies = controller.onPacket(openAsk())
-
-        assertEquals(2, replies.size)
-        assertEquals(2, replies[0].last().toInt())
-        assertEquals(0, replies[1].last().toInt())
-    }
-
-    /**
-     * The factory answers a close with the map acknowledgement first and the stop second, and it
-     * does not care whether it believed it was streaming.
-     */
-    @Test
-    fun `a close is answered success then stop`() {
-        val controller = pushing(ManualExecutor())
-        now = 5_000L
-
-        val replies = controller.onPacket(ask(301, 1))
-
-        assertEquals(2, replies.size)
-        assertEquals(2, replies[0].last().toInt())
-        assertEquals(1, replies[1].last().toInt())
-    }
-
-    /** Function 303 is the cluster's own heartbeat; the factory reads it and writes nothing back. */
-    @Test
-    fun `the cluster heartbeat gets no reply`() {
-        assertEquals(emptyList<ByteArray>(), controller().onPacket(ask(303, 0)))
-    }
-
-    /** The junction map is not ours to show, so it is declined rather than acknowledged. */
-    @Test
-    fun `the junction map is declined`() {
-        val replies = controller().onPacket(ask(302, 0))
-
-        assertEquals(1, replies.size)
-        assertEquals(0x01, replies[0][4].toInt())
-        assertEquals(0x2E, replies[0][5].toInt())
-        assertEquals(0, replies[0].last().toInt())
     }
 
     /**
@@ -269,9 +181,9 @@ class ClusterFlyControllerTest {
     }
 
     /**
-     * The cluster asked at the same millisecond the left step was due, so the session is already
-     * pushing by the time the failed 1885 is known. There is nothing to take back: the picture is
-     * live and the next swipe must not find a half-torn-down layer.
+     * The cluster's display came up at the same millisecond the left step was due, so the session
+     * is already pushing by the time the failed 1885 is known. There is nothing to take back: the
+     * picture is live and the next swipe must not find a half-torn-down layer.
      */
     @Test
     fun `a failed 1885 after the cluster already asked keeps the picture`() {
@@ -292,7 +204,7 @@ class ClusterFlyControllerTest {
         scheduled.removeAt(0).second()
 
         now = 2_400L
-        controller.onPacket(openAsk())
+        controller.onClusterDisplayReady()
         runScheduled()
 
         assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT), sent)
@@ -315,7 +227,7 @@ class ClusterFlyControllerTest {
     }
 
     @Test
-    fun `no video ask within 3000ms aborts once`() {
+    fun `no display within 3000ms aborts once`() {
         val controller = controller()
         openToLeft(controller)
         assertTrue(lines.contains("fly.phase WAITING_FOR_VIDEO"))
@@ -334,47 +246,17 @@ class ClusterFlyControllerTest {
     }
 
     @Test
-    fun `an open ask cancels the silent timeout`() {
+    fun `a cluster display cancels the silent timeout`() {
         val controller = controller()
         openToLeft(controller)
         now = 2_500L
-        controller.onPacket(openAsk())
+        controller.onClusterDisplayReady()
         runScheduled()
 
         assertFalse(sent.contains(FlyCommand.NAV_OFF))
         assertFalse(sent.contains(FlyCommand.NAV_BACK))
         assertFalse(warnings.contains(ClusterFlyWarning.pageUnchanged()))
-        assertTrue(lines.contains("fly.push start forward") || lines.contains("fly.phase PUSHING"))
+        assertTrue(lines.contains("fly.phase PUSHING"))
     }
 
-    /** Runs the fly-thread tasks by hand, so the test can see what was deferred. */
-    private class ManualExecutor : java.util.concurrent.AbstractExecutorService() {
-        private val tasks = mutableListOf<Runnable>()
-        private var stopped = false
-
-        override fun execute(command: Runnable) {
-            tasks.add(command)
-        }
-
-        override fun shutdown() {
-            stopped = true
-        }
-
-        override fun shutdownNow(): MutableList<Runnable> {
-            stopped = true
-            return tasks.toMutableList().also { tasks.clear() }
-        }
-
-        override fun isShutdown() = stopped
-
-        override fun isTerminated() = stopped
-
-        override fun awaitTermination(timeout: Long, unit: java.util.concurrent.TimeUnit) = true
-
-        fun runAll() {
-            val pending = tasks.toList()
-            tasks.clear()
-            pending.forEach { it.run() }
-        }
-    }
 }

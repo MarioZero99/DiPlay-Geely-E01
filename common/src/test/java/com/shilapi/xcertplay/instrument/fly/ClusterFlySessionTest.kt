@@ -31,40 +31,26 @@ class ClusterFlySessionTest {
         millisSinceLastClusterCommand = millisSinceLastClusterCommand,
     )
 
-    /** Left at 1000 ms: `FLY_LEFT` is due at 2400 ms. */
+    /** Left at 1000 ms: `FLY_LEFT` is due at 2400 ms, the display at 2500. */
     private fun pushing(): ClusterFlySession {
         session.onLeft(1_000L, openConditions())
         session.onWaitTimeout(2_400L)
-        session.onVideoAsk(VideoAsk.OPEN, 2_500L)
+        session.onDisplayReady(2_500L)
         return session
     }
 
     @Test
-    fun `no video before the left step is due`() {
+    fun `no picture before the left step is due`() {
         val left = session.onLeft(1_000L, openConditions())
         assertEquals(FlyPhase.ARMING, left.phase)
         assertFalse(left.push)
-
-        val early = session.onVideoAsk(VideoAsk.OPEN, 1_200L)
-        assertFalse(early.push)
-        assertEquals(FlyPhase.ARMING, early.phase)
 
         // The wait does not begin until the fly step itself is due at 2400.
         assertEquals(FlyPhase.ARMING, session.onWaitTimeout(2_000L).phase)
     }
 
     @Test
-    fun `video starts only after the cluster asks`() {
-        assertEquals(FlyPhase.ARMING, session.onLeft(1_000L, openConditions()).phase)
-        assertEquals(FlyPhase.WAITING_FOR_VIDEO, session.onWaitTimeout(2_400L).phase)
-
-        val open = session.onVideoAsk(VideoAsk.OPEN, 1_500L)
-        assertTrue(open.push)
-        assertEquals(FlyPhase.PUSHING, open.phase)
-    }
-
-    @Test
-    fun `a cluster that never asks gets no video`() {
+    fun `a wait with no display starts nothing`() {
         session.onLeft(1_000L, openConditions())
         val late = session.onWaitTimeout(4_500L)
         assertFalse(late.push)
@@ -98,34 +84,20 @@ class ClusterFlySessionTest {
     }
 
     /**
-     * The cluster can ask while a radar warning is already up. The answer is no, and the picture
-     * stays away until the warning clears — the one state the warning line describes as forbidden.
+     * The display can come up while a radar warning is already active. The picture stays away until
+     * the warning clears — the one state the warning line describes as forbidden.
      */
     @Test
-    fun `an open under radar is refused`() {
+    fun `a display under radar is refused`() {
         session.onLeft(1_000L, openConditions())
         session.onWaitTimeout(2_400L)
+        session.onSafety(openConditions(radar = true), 2_450L)
 
-        val open = session.onVideoAsk(VideoAsk.OPEN, 2_500L, openConditions(radar = true))
+        val display = session.onDisplayReady(2_500L)
 
-        assertFalse(open.push)
-        assertEquals(FlyPhase.WAITING_FOR_VIDEO, open.phase)
-        assertEquals(FlyBlock.RADAR, open.warning)
-    }
-
-    /** The close is a command like any other: two inside a second are dropped by the factory. */
-    @Test
-    fun `a close inside one second waits for the boundary`() {
-        pushing()
-
-        val close = session.onVideoAsk(VideoAsk.CLOSE, 2_000L, openConditions(millisSinceLastClusterCommand = 200))
-
-        assertFalse(close.push)
-        assertEquals(FlyPhase.CLOSING, close.phase)
-        assertEquals(FlyCommand.FLY_RIGHT, close.steps.first().command)
-        assertEquals(2_800L, close.steps.first().sendAtMillis)
-        assertEquals(FlyCommand.NAV_BACK, close.steps.last().command)
-        assertEquals(3_800L, close.steps.last().sendAtMillis)
+        assertFalse(display.push)
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, display.phase)
+        assertEquals(FlyBlock.RADAR, display.warning)
     }
 
     /** A right swipe made too quickly still has to close the layer; it just has to wait. */
@@ -156,26 +128,6 @@ class ClusterFlySessionTest {
         assertEquals(FlyPhase.CLOSING, cleared.phase)
         assertEquals(FlyCommand.FLY_RIGHT, cleared.steps.first().command)
         assertEquals(FlyCommand.NAV_BACK, cleared.steps.last().command)
-    }
-
-    /**
-     * The cluster can ask before the left step is due. Refusing then would cost the picture for the
-     * rest of the session, so the ask is remembered and answered when the wait begins.
-     */
-    @Test
-    fun `an open during arming starts pushing at the fly step`() {
-        session.onLeft(1_000L, openConditions())
-
-        val early = session.onVideoAsk(VideoAsk.OPEN, 1_200L, openConditions())
-        assertFalse(early.push)
-        assertTrue(early.holdOpen)
-        assertEquals(FlyPhase.ARMING, early.phase)
-
-        val waited = session.onWaitTimeout(2_400L)
-
-        assertTrue(waited.push)
-        assertEquals(FlyPhase.PUSHING, waited.phase)
-        assertTrue(session.takePendingOpen())
     }
 
     @Test

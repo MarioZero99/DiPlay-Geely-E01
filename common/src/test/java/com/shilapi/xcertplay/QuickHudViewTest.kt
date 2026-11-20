@@ -15,7 +15,7 @@ import org.robolectric.annotation.Config
 
 /**
  * The quick bar is the three-finger destination over a live picture, so its contract is small: it
- * opens, it offers the controls, and leaving the app is not a single-press accident.
+ * opens, it offers the four controls, and the two destructive ones are not single-press accidents.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "en")
@@ -25,7 +25,6 @@ class QuickHudViewTest {
     private var nightToggles = 0
     private var exits = 0
     private var dismissals = 0
-    private var probes = 0
     private val pickedStreams = mutableListOf<Int>()
 
     private fun hud(night: Boolean = false, stream: Int = 10): QuickHudView =
@@ -38,7 +37,6 @@ class QuickHudViewTest {
             onToggleNight = { nightToggles++ },
             onExit = { exits++ },
             onDismiss = { dismissals++ },
-            onCollectFly = { probes++ },
         )
 
     @Test
@@ -91,16 +89,6 @@ class QuickHudViewTest {
         assertTrue(clickText(view, "Day"))
         assertEquals(1, nightToggles)
         assertTrue(hasText(view, "Night"))
-    }
-
-    @Test
-    fun flyProbeIsOnePress() {
-        val view = hud()
-        view.open()
-
-        assertTrue(clickText(view, "Collect fly"))
-        assertEquals(1, probes)
-        assertEquals(0, dismissals)
     }
 
     @Test
