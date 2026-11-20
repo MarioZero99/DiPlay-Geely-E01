@@ -45,14 +45,6 @@
     <string name="hotspot_hint_manual">Built-in car hotspot · Keep the car hotspot, Bluetooth and your iPhone’s Wi-Fi on.</string>
     <string name="hotspot_hint_local">Open Connection setup to save your built-in car hotspot details.</string>
     <string name="hotspot_hint_existing">Same Wi-Fi network · Connect the car and the iPhone to one Wi-Fi network in the car’s settings, and keep Bluetooth on.</string>
-    <string name="cluster_size_standard">Standard · sharpest</string>
-    <string name="cluster_size_larger">Larger · default</string>
-    <string name="cluster_size_largest">Largest</string>
-    <string name="marker_left">Left</string>
-    <string name="marker_right">Right</string>
-    <string name="marker_up">Up</string>
-    <string name="marker_down">Down</string>
-    <string name="marker_centre_default">Centre · default</string>
     <string name="hotspot_mode_manual_desc">Use the car’s own hotspot. Select 5 GHz in car settings if available.</string>
     <string name="same_wifi_network">Same Wi-Fi network</string>
     <string name="hotspot_mode_existing_wifi_desc">Join a Wi-Fi network that already exists — a phone hotspot or a router. The iPhone joins the same one. The car’s own hotspot is switched off and not used.</string>
@@ -79,9 +71,6 @@
     <string name="network_error_password_length">The Wi-Fi password must be 8–63 characters</string>
     <string name="hotspot_details_off">Hotspot is off · Turn it on in car settings.</string>
     <string name="hotspot_details_saved">Details saved · Check that the car hotspot is on before connecting.</string>
-    <string name="permission_enabled_ready">Permission enabled · ready to use</string>
-    <string name="permission_not_enabled">Permission not enabled yet</string>
-    <string name="clipboard_usage_access">DiPlay Usage Access</string>
     <string name="report_clip_label">Diagnostic report</string>
     <string name="share_diagnostic_report">Share diagnostic report</string>
     <string name="setup_error_auth">CarPlay authentication could not be loaded. Install the complete DiPlay build over this app. No uninstall or hotspot change is needed.</string>
@@ -129,7 +118,6 @@
     <string name="audio_saved_value">Saved: %1$d</string>
     <string name="about_public_preview_prefix">Public preview ·\u0020</string>
     <string name="edit_saved_hotspot_prefix">Edit saved hotspot ·\u0020</string>
-    <string name="cluster_adb_multi_device">If ADB lists several devices, use adb -s &lt;car-device-ID&gt; shell appops set %1$s GET_USAGE_STATS allow. Find the ID with adb devices.</string>
     <string name="status_ready_for_prefix">Ready for\u0020</string>
     <string name="audio_stream_unavailable">Stream type %1$d is unavailable here (state=%2$s)</string>
     <string name="resolution_handshake_prefix">Handshake resolution:\u0020</string>
@@ -167,10 +155,7 @@
     <string name="auto_open_car_hotspot">Turn on the car hotspot at start</string>
     <string name="auto_open_car_hotspot_help">DiPlay switches the car’s own hotspot on as it opens, so you do not have to. The car cannot stay on another Wi-Fi network while the hotspot is up.</string>
     <string name="auto_start_on_boot">Auto-start on boot</string>
-    <string name="automatic_cluster_map_setup">Automatic cluster map setup</string>
     <string name="automatic_connection">Automatic connection</string>
-    <string name="automatic_map_enabled_open_the_cluster_map_card_or_select">Automatic map enabled. Open the cluster map card or select Map theme.</string>
-    <string name="automatic_map_setup_adb">Automatic map setup · ADB</string>
     <string name="availability_depends_on_your_head_unit_s_startup_settings">Availability depends on your head unit’s startup settings.</string>
     <string name="back">Back</string>
     <string name="back_to_diplay">Back to DiPlay</string>
@@ -180,15 +165,12 @@
     <!-- Spoken by a screen reader for the dock's first control, which has no visible text. -->
     <string name="home_page">Home</string>
     <string name="car_hotspot_details">Car hotspot details</string>
-    <string name="car_marker_horizontal">Car marker · horizontal</string>
-    <string name="car_marker_vertical">Car marker · vertical</string>
     <string name="carplay" tools:ignore="MissingTranslation">CarPlay</string>
     <string name="carplay_at_home_in_your_car">CarPlay, at home in your car.</string>
     <string name="carplay_connected">CarPlay connected</string>
     <string name="carplay_control_running">CarPlay control running</string>
     <string name="carplay_control_window_ended">CarPlay control window ended</string>
     <string name="carplay_icon">CarPlay icon</string>
-    <string name="carplay_map_on_instrument_cluster_experimental">CarPlay map on dashboard · experimental</string>
     <string name="carplay_service_already_running">CarPlay service already running</string>
     <string name="carplay_session_already_running">CarPlay session already running</string>
     <string name="carplay_session_ended_reconnecting">CarPlay session ended; reconnecting</string>
@@ -198,7 +180,6 @@
     <string name="channel_0_auto">Channel (0 = auto)</string>
     <string name="channel_is_not_valid_for_the_selected_band">Channel is not valid for the selected band</string>
     <string name="channel_must_be_0_or_1_196">Channel must be 0 or 1-196</string>
-    <string name="check_and_enable">Check and enable</string>
     <string name="choose_iphone">Choose iPhone</string>
     <string name="choose_your_iphone">Choose your iPhone</string>
     <string name="carplay_title">CARPLAY</string>
@@ -210,7 +191,6 @@
     <string name="usb_host_not_supported">This head unit has no USB host mode, so a cable cannot carry CarPlay here. Use wireless.</string>
     <string name="wired_carplay">USB CARPLAY</string>
     <string name="close">Close</string>
-    <string name="cluster_map_size">Dashboard map size</string>
     <string name="connect_phone">Connect phone</string>
     <string name="connect_when_diplay_opens">Connect when DiPlay opens</string>
     <string name="connect_with_usb">Connect with USB</string>
@@ -224,8 +204,6 @@
     <string name="usb_devices">USB devices</string>
     <string name="usb_list_empty">No USB devices on the bus</string>
     <string name="retry_connection">Retry connection</string>
-    <string name="copied_to_the_car_clipboard_run_the_command_on_your_comput">Copied to the car clipboard. Run the command on your computer.</string>
-    <string name="copy_command">Copy command</string>
     <string name="copy_these_from_the_car_s_hotspot_settings_use_5_ghz_if_av">Copy these from the car’s hotspot settings. Use 5 GHz if available. Saving here does not change the car’s hotspot.</string>
     <string name="could_not_decode_image">Could not decode image</string>
     <string name="could_not_encode_image">Could not encode image</string>
@@ -273,7 +251,6 @@
     <string name="exit_application">EXIT APPLICATION</string>
     <string name="close_app">Close DiPlay</string>
     <string name="finish_setup_save_your_hotspot_details_to_use_this_mode">Finish setup · Save your hotspot details to use this mode.</string>
-    <string name="follow_instrument_theme_and_map_card">Follow instrument theme and map card</string>
     <string name="frame_rate">Frame rate</string>
     <string name="full_screen">Full screen</string>
     <string name="fullscreen">Fullscreen</string>
@@ -301,9 +278,6 @@
     <string name="i2c_device_path_is_required">I2C device path is required</string>
     <string name="image_is_not_ready">Image is not ready</string>
     <string name="in_carplay_swipe_down_with_three_fingers_to_open_diplay_se">In CarPlay, swipe down with three fingers to open DiPlay settings.</string>
-    <string name="instrument_cluster_map">Instrument cluster map</string>
-    <string name="instrument_contrast">Instrument contrast</string>
-    <string name="instrument_theme">Instrument theme</string>
     <string name="keep_bluetooth_and_wi_fi_on_your_iphone_pair_with_the_car">Keep Bluetooth and Wi-Fi on your iPhone. Pair with the car’s Bluetooth, then select your iPhone here. Allow Nearby devices when asked.</string>
     <string name="keep_your_iphone_nearby_with_bluetooth_and_wi_fi_on_allow">Keep your iPhone nearby with Bluetooth and Wi-Fi on.\nAllow CarPlay if your iPhone asks.</string>
     <string name="later">Later</string>
@@ -327,7 +301,6 @@
     <string name="firmware_interrupted_hint">Restarting the head unit is the only way to be sure it has stopped. What state it is in is on the card behind this page.</string>
     <string name="make_diplay_feel_right_for_your_car">Make DiPlay feel right for your car.</string>
     <string name="manual_hotspot">Manual hotspot</string>
-    <string name="manual_mode_match_the_cluster_theme_here_the_map_cannot_fo">Manual mode: match the cluster theme here. The map cannot follow card visibility without Usage Access.</string>
     <string name="mfi_authentication_ready">MFi authentication ready</string>
     <string name="music_buffer">Music buffer</string>
     <string name="resolution_native">Native</string>
@@ -336,7 +309,6 @@
     <string name="nearby_devices_connects_your_iphone_microphone_enables_sir">Nearby devices connects your iPhone. Microphone enables Siri and calls. Older Android versions also require Location for wireless setup. USB mode may ask for a local VPN connection.</string>
     <string name="nothing_is_sent_automatically_protocol_payloads_and_creden">Nothing is sent automatically. Protocol payloads and credentials are excluded.</string>
     <string name="on_your_iphone_open_settings_bluetooth_and_pair_with_the_c">On your iPhone, open Settings → Bluetooth and pair with the car. Then return to DiPlay and choose Connect phone.</string>
-    <string name="one_time_setup_on_this_car">One-time setup on this car</string>
     <string name="open">Open</string>
     <string name="open_after_the_car_starts">Open after the car starts</string>
     <string name="open_bluetooth">Open Bluetooth</string>
@@ -375,7 +347,6 @@
     <string name="requesting_iphone_usb_permission">Requesting iPhone USB permission</string>
     <string name="requesting_mfi_usb_permission">Requesting MFi USB permission</string>
     <string name="reset">Reset</string>
-    <string name="reset_car_marker_to_centre">Reset car marker to centre</string>
     <string name="resolution">Resolution</string>
     <string name="return_from_car_settings_to_diplay_then_connect_accept_the">Return from car settings to DiPlay, then connect. Accept the CarPlay prompt on your iPhone. A car internet plan is not required; mobile data availability depends on your phone’s network settings.</string>
     <string name="right_hand_drive">Right-hand drive</string>
@@ -384,14 +355,12 @@
     <string name="s_1000_ms_most_stable">1000 ms · most stable</string>
     <string name="s_1_0x" tools:ignore="MissingTranslation">1.0x</string>
     <string name="s_1_car_hotspot">1 · Car hotspot (Wi-Fi)</string>
-    <string name="s_1_connect_a_computer_with_adb_installed_to_the_car_using">1. Connect a computer with ADB installed to the car using your existing USB or wireless debugging connection. Approve debugging on the car if asked.\n\n2. Run this command in the computer’s terminal:</string>
     <string name="s_1_open_car_hotspot_settings_turn_the_hotspot_on_and_sele">1. Open car hotspot settings, turn the hotspot on and select 5 GHz if available.\n2. Copy its name and password below exactly.\n3. Leave the car hotspot on when connecting. DiPlay sends the details over Bluetooth; your iPhone joins automatically.</string>
     <string name="s_2_4_ghz" tools:ignore="MissingTranslation">2.4 GHz</string>
     <string name="s_2_bluetooth_and_phone">2 · Bluetooth and phone</string>
     <string name="s_300_ms">300 ms</string>
     <string name="s_30_fps_lighter_load">30 fps · lighter load</string>
     <string name="s_3_connect">3 · Connect</string>
-    <string name="s_3_tap_check_and_enable_below_this_enables_the_cluster_ma">3. Tap Check and enable below. This enables the cluster map and automatic theme following. An active CarPlay session reconnects once. You can then disconnect the computer.</string>
     <string name="s_500_ms_default">500 ms · default</string>
     <string name="s_5_ghz" tools:ignore="MissingTranslation">5 GHz</string>
     <string name="s_60_fps_smoother_motion">60 fps · smoother motion</string>
@@ -429,14 +398,11 @@
     <string name="share">Share</string>
     <string name="show_on_screen_debug_logs">Show on-screen debug logs</string>
     <string name="show_password">Show password</string>
-    <string name="show_the_side_map_only_when_its_card_is_open_and_switch_to">Show the side map only when its card is open, and switch to the full map in Map theme. Theme and card changes keep CarPlay connected.</string>
-    <string name="shows_the_iphone_s_cluster_map_on_the_instrument_cluster_c">Shows the iPhone\'s map on the dashboard. Choose Small or Full screen navi in the dashboard\'s steering-wheel menu.</string>
     <string name="start_carplay_automatically_after_device_boot">Start CarPlay automatically after device boot</string>
     <string name="starting">Starting</string>
     <string name="starting_airplay_service">Starting AirPlay service</string>
     <string name="starting_wireless_hotspot">Starting wireless hotspot</string>
     <string name="startup">Startup</string>
-    <string name="still_waiting_for_usage_access_check_that_the_command_ran">Still waiting for Usage Access. Check that the command ran successfully for this car, then try again.</string>
     <string name="tap_a_number_to_test_14_driver_speaker_on_byd">Tap a number to test. 14 = driver speaker on BYD.</string>
     <string name="the_head_unit_couldn_t_start_carplay_wi_fi_check_wi_fi_and">The head unit couldn’t start CarPlay Wi-Fi. Check Wi-Fi and close other projection apps. Retrying…</string>
     <string name="this_head_unit_cannot_use_the_smaller_size_at_this_resolut">This head unit cannot use the smaller size at this resolution. Using Default.</string>
@@ -447,9 +413,6 @@
     <string name="turn_on_bluetooth">Turn on Bluetooth</string>
     <string name="turn_on_wi_fi_in_the_head_unit_s_settings_to_connect">Turn on Wi-Fi in the head unit’s settings to connect.</string>
     <string name="turn_the_car_s_wi_fi_switch_on_allow_location_nearby_devic">Turn the car’s Wi-Fi switch on. Allow Location / Nearby devices if requested and enable Location when Android asks. If playback stutters, try the built-in car hotspot at 5 GHz.</string>
-    <string name="usage_access_enabled">Usage Access: enabled</string>
-    <string name="usage_access_lets_diplay_follow_the_instrument_theme_and_m">Usage Access lets DiPlay follow the instrument theme and map card. Only BYD cluster activity events are processed locally. This car does not provide a working permission settings page.</string>
-    <string name="usage_access_setup_needed_for_automatic_mode">Usage Access: setup needed for automatic mode</string>
     <string name="usb_ch341">USB/CH341</string>
     <string name="use_a_usb_data_cable_and_the_car_s_usb_data_port_unlock_yo">Use a USB data cable and the car’s USB data port. Unlock your iPhone and allow CarPlay. No hotspot setup is needed.</string>
     <string name="use_a_usb_data_cable_and_unlock_your_iphone_allow_trust_an">Use a USB data cable and unlock your iPhone.\nAllow Trust and CarPlay if your iPhone asks.</string>
@@ -486,24 +449,10 @@
     <string name="option_size_large">Large</string>
     <string name="option_size_medium">Medium</string>
     <string name="option_size_small">Small</string>
-    <string name="option_theme_scenario">Scenario · side map</string>
-    <string name="option_theme_map">Map · full map</string>
-    <string name="option_theme_simple">Simple · side map</string>
-    <string name="option_contrast_default">Theme default</string>
-    <string name="option_contrast_light">Light background · dark instruments</string>
-    <string name="option_contrast_dark">Dark background · light instruments</string>
     <string name="hotspot_error_empty_name">Enter the car hotspot name</string>
     <string name="hotspot_error_long_name">The hotspot name must be at most 32 bytes</string>
     <string name="hotspot_error_invalid_character">The name or password contains an invalid character</string>
     <string name="hotspot_error_password_length">The hotspot password must be 8–63 characters</string>
-    <string name="dashboard_shows">Dashboard shows</string>
-    <string name="dashboard_content_map">Map · default</string>
-    <string name="dashboard_content_turn_card">Turn card</string>
-    <string name="dashboard_content_map_with_turn_card">Map with turn card</string>
-    <string name="turn_card_size">Turn card size</string>
-    <string name="turn_card_horizontal">Turn card · horizontal</string>
-    <string name="turn_card_vertical">Turn card · vertical</string>
-    <string name="reset_turn_card_to_centre">Reset turn card to centre</string>
     <string name="usb_auto_confirm_desc">Automatically ticks Always allow and confirms the Android USB accessory prompt for CarPlay</string>
     <string name="diagnostic_report_saved_to_usb">Report was saved to USB drive:\n%1$s\n\nYou can also share or view it here. Nothing is sent automatically.</string>
     <string name="diagnostic_report_saved_to_device_no_usb">No writable USB drive detected (or no write permission). Report was saved to head unit:\n%1$s\n\nYou can also share or view it here. Nothing is sent automatically.</string>
@@ -564,7 +513,6 @@
     <string name="day_night_follow_time">Follow the time</string>
     <string name="day_night_manual">Manual</string>
     <string name="exit_confirm_body">The CarPlay session ends with it. To use DiPlay again, open it from the car\'s launcher.</string>
-    <string name="cluster_display_not_detected">No dashboard display is attached right now. The dashboard controls appear on their own once the car exposes one.</string>
     <!-- The update link: a card in System settings that asks GitHub, on a press, whether a newer
          official package exists. Nothing here is fetched until the driver presses the button. -->
     <string name="software_update">Software update</string>
