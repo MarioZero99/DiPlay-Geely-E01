@@ -22,6 +22,8 @@ internal class FlyClusterDecoder(
     val ready: Boolean = codec != null
     private var awaitingIdr = true
     private var ptsUs = 0L
+    private var inputWarned = false
+    private var firstFrameLogged = false
 
     fun dropUntilIdr() {
         awaitingIdr = true
@@ -68,6 +70,15 @@ internal class FlyClusterDecoder(
             return
         }
         buffer.clear()
+        if (buffer.remaining() < nalu.size) {
+            // The codec sized its input buffer; an IDR that does not fit is dropped, not truncated.
+            awaitingIdr = true
+            if (!inputWarned) {
+                inputWarned = true
+                log("fly.display input short ${nalu.size}")
+            }
+            return
+        }
         buffer.put(nalu)
         codec.queueInputBuffer(index, 0, nalu.size, ptsUs, 0)
         ptsUs += FRAME_US
@@ -78,7 +89,13 @@ internal class FlyClusterDecoder(
         while (true) {
             val index = codec.dequeueOutputBuffer(info, 0)
             when {
-                index >= 0 -> codec.releaseOutputBuffer(index, true)
+                index >= 0 -> {
+                    codec.releaseOutputBuffer(index, true)
+                    if (!firstFrameLogged) {
+                        firstFrameLogged = true
+                        log("fly.display frame")
+                    }
+                }
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
                 index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
                 else -> return
@@ -96,15 +113,25 @@ internal class FlyClusterDecoder(
             log("fly.display decoder failed")
             return null
         }
+        val codec = try {
+            MediaCodec.createByCodecName(name)
+        } catch (error: RuntimeException) {
+            log("fly.display decoder failed ${error.javaClass.simpleName}")
+            return null
+        }
         return try {
-            val codec = MediaCodec.createByCodecName(name)
             val format = MediaFormat.createVideoFormat(MIME, 1920, 720)
-            format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(sps))
-            format.setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(pps))
+            // Android decoders read the parameter sets as Annex-B NAL units. The sink's working
+            // main decoder hands them over the same way; the avcC record itself has no start codes.
+            format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(START_CODE + sps))
+            format.setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(START_CODE + pps))
             codec.configure(format, surface, null, 0)
             codec.start()
             codec
         } catch (error: RuntimeException) {
+            // A half-built codec is still an OMX instance; on this head unit, leaking one per
+            // attempt is not affordable.
+            runCatching { codec.release() }
             log("fly.display decoder failed ${error.javaClass.simpleName}")
             null
         }
@@ -115,5 +142,6 @@ internal class FlyClusterDecoder(
         const val SOFTWARE = "OMX.google.h264.decoder"
         const val FRAME_US = 50_000L
         const val SLOW_MS = 150L
+        val START_CODE = byteArrayOf(0, 0, 0, 1)
     }
 }

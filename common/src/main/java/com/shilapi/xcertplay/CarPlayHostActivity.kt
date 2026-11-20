@@ -2566,6 +2566,7 @@ class CarPlayHostActivity : ComponentActivity() {
             mainVideoConfig = { sink?.mainVideoConfig() },
             onMain = { action -> runOnUiThread(action) },
             onGiveUp = { dismissClusterFly() },
+            requestKeyFrame = { requestKeyFrame("cluster fly") },
         ).also { clusterFly = it }
 
     /**
@@ -2598,6 +2599,11 @@ class CarPlayHostActivity : ComponentActivity() {
         val display = manager.displays.first { it.displayId == chosen.id }
         val presentation = FlyClusterPresentation(this, display) { surface ->
             clusterFly?.onFlySurface(surface)
+        }
+        // The system dismisses a presentation when its display goes away. Clear the field so the
+        // next left swipe attaches a fresh window instead of finding this dead one.
+        presentation.setOnDismissListener {
+            if (flyClusterPresentation === presentation) flyClusterPresentation = null
         }
         try {
             presentation.show()

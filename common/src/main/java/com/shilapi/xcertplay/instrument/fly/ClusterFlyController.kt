@@ -5,7 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.Surface
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector.Decision
-import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
@@ -47,6 +47,8 @@ class ClusterFlyController(
     private val onMain: (() -> Unit) -> Unit = { action -> action() },
     /** The Activity takes its cluster window down. Called once per failed picture. */
     private val onGiveUp: () -> Unit = {},
+    /** Asks the phone for one IDR. A still picture offers none, and the decoder starts on one. */
+    private val requestKeyFrame: () -> Unit = {},
     frameExecutor: ExecutorService? = null,
 ) {
 
@@ -60,17 +62,21 @@ class ClusterFlyController(
      * The fly thread. CarPlay's media thread hands over a frame and returns; everything that could
      * block — the decode, the surface, a slow unit — happens here.
      *
-     * The queue is bounded and its rejection is a counter, never a wait: a head unit with 26 MB free
-     * cannot afford the cluster layer to slow the picture the driver is actually looking at.
+     * The work queue is unbounded on purpose: it carries control as well as frames, and losing a
+     * "the surface is gone" task would leak the decoder. Frames are admitted by [framesInFlight]
+     * instead, so the picture is still dropped, never buffered, and never waits.
      */
     private val frameExecutor: ExecutorService = frameExecutor ?: ThreadPoolExecutor(
         1,
         1,
         0L,
         TimeUnit.MILLISECONDS,
-        ArrayBlockingQueue(FRAME_QUEUE_CAPACITY),
+        LinkedBlockingQueue(),
         { runnable -> Thread(runnable, "cluster-fly-frames").apply { isDaemon = true } },
     )
+
+    /** Frames waiting for the fly thread. The one decoding is not counted; control never is. */
+    private val framesWaiting = AtomicInteger(0)
 
     /** The one lock. Taken by gestures, safety broadcasts, the fly thread and posted steps. */
     private val lock = Any()
@@ -134,12 +140,15 @@ class ClusterFlyController(
     /**
      * The cluster's surface is up and the decoder has started: the picture is live.
      *
-     * Idempotent with the subscription: the first caller turns it on, and the three-second abort of
-     * this round is cancelled. Called on the main thread from the decoder path, never from
-     * [sendFlyCommand] — when the left step returns the session is still arming.
+     * Idempotent: once the picture is pushing, a second call does nothing. The first caller turns
+     * the subscription on, cancels the three-second abort of this round, and asks the phone for one
+     * IDR — a still CarPlay picture offers none, and the software decoder starts only on one.
+     * Runs on the fly thread, from the decoder path; never from [sendFlyCommand] — when the left
+     * step returns the session is still arming.
      */
     fun onClusterDisplayReady() {
         synchronized(lock) {
+            if (session.currentPhase == FlyPhase.PUSHING) return
             val effect = session.onDisplayReady(clock())
             if (effect.phase != FlyPhase.PUSHING) return
             videoTimeoutGeneration++
@@ -148,6 +157,7 @@ class ClusterFlyController(
                 setMainVideoSubscribed(true)
             }
             handle(effect)
+            requestKeyFrame()
         }
     }
 
@@ -189,6 +199,9 @@ class ClusterFlyController(
             handle(effect)
             stopEverything()
         }
+        // The window is still open on the cluster. Take it down; a new session at the same display
+        // must be able to attach again.
+        onGiveUp()
     }
 
     /** The Activity is going away: no warning, no commands, no sockets. */
@@ -199,8 +212,17 @@ class ClusterFlyController(
             videoTimeoutGeneration++
             stopEverything()
         }
-        // The queue may still hold frames; they belong to a dead layer and are not worth sending.
-        frameExecutor.shutdownNow()
+        // Release the decoder on its own thread, then let the queue drain. A shutdown that discards
+        // the task leaks a MediaCodec, and this head unit has no spare memory for that.
+        try {
+            frameExecutor.execute {
+                flyDecoder?.release()
+                flyDecoder = null
+                waitingSurface = null
+            }
+        } catch (_: RejectedExecutionException) {
+        }
+        frameExecutor.shutdown()
     }
 
     /**
@@ -211,11 +233,23 @@ class ClusterFlyController(
      * offer too), so the reference stays valid; the fly thread does the rest.
      */
     fun onMainVideo(type: Int, bytes: ByteArray) {
+        if (framesWaiting.incrementAndGet() > FRAME_QUEUE_CAPACITY) {
+            // One frame waiting, one decoding. A third is dropped: a backlog here is a software
+            // decode running ahead of the picture the driver is looking at.
+            framesWaiting.decrementAndGet()
+            statDrops.incrementAndGet()
+            dropUntilIdr.set(true)
+            return
+        }
         try {
-            frameExecutor.execute { processFrame(type, bytes) }
+            frameExecutor.execute {
+                framesWaiting.decrementAndGet()
+                processFrame(type, bytes)
+            }
         } catch (_: RejectedExecutionException) {
-            // The queue is full or the layer is closed: one countable drop, never a wait.
-            // The GOP is now missing a frame, so the fly thread waits for the next IDR.
+            // The layer is closed: one countable drop, never a wait. The GOP is now missing a
+            // frame, so the fly thread waits for the next IDR.
+            framesWaiting.decrementAndGet()
             statDrops.incrementAndGet()
             dropUntilIdr.set(true)
         }

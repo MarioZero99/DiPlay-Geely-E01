@@ -246,6 +246,80 @@ class ClusterFlyControllerTest {
     }
 
     @Test
+    fun `a surface change is queued even while a frame is waiting`() {
+        val tasks = mutableListOf<Runnable>()
+        val controller = controller(RecordingExecutor(tasks))
+
+        controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x65, 0))
+        controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x41, 0))
+        controller.onFlySurface(null)
+
+        assertEquals(2, tasks.size)
+    }
+
+    @Test
+    fun `car play ending puts the cluster window away`() {
+        val giveUps = mutableListOf<Int>()
+        val controller = ClusterFlyController(
+            commands = { sent.add(it) },
+            showWarning = { warnings.add(it) },
+            setMainVideoSubscribed = {},
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            onGiveUp = { giveUps.add(1) },
+        )
+        controller.onGesture(Decision.FLY_LEFT)
+        now = 2_400L
+        runScheduled()
+        now = 2_500L
+        controller.onClusterDisplayReady()
+
+        controller.onCarPlayEnded()
+
+        assertEquals(1, giveUps.size)
+    }
+
+    @Test
+    fun `a started picture asks for one keyframe`() {
+        val requests = mutableListOf<Int>()
+        val controller = ClusterFlyController(
+            commands = { sent.add(it) },
+            showWarning = { warnings.add(it) },
+            setMainVideoSubscribed = {},
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            requestKeyFrame = { requests.add(1) },
+        )
+        controller.onGesture(Decision.FLY_LEFT)
+        now = 2_400L
+        runScheduled()
+        now = 2_500L
+        controller.onClusterDisplayReady()
+        controller.onClusterDisplayReady()
+
+        assertEquals(1, requests.size)
+    }
+
+    /** Runs nothing: the test only needs to see what the controller queued. */
+    private class RecordingExecutor(private val tasks: MutableList<Runnable>) :
+        java.util.concurrent.AbstractExecutorService() {
+        override fun execute(command: Runnable) {
+            tasks.add(command)
+        }
+
+        override fun shutdown() = Unit
+
+        override fun shutdownNow(): MutableList<Runnable> =
+            tasks.toMutableList().also { tasks.clear() }
+
+        override fun isShutdown() = false
+        override fun isTerminated() = false
+        override fun awaitTermination(timeout: Long, unit: java.util.concurrent.TimeUnit) = true
+    }
+
+    @Test
     fun `a cluster display cancels the silent timeout`() {
         val controller = controller()
         openToLeft(controller)
