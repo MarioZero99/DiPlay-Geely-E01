@@ -363,7 +363,7 @@ class ClusterFlyController(
         try {
             decoder.submit(bytes)
         } catch (error: RuntimeException) {
-            log("fly.display decoder failed ${error.javaClass.simpleName}")
+            log(flyDecoderFailure(error))
             decoder.release()
             flyDecoder = null
             onPictureFailed()
