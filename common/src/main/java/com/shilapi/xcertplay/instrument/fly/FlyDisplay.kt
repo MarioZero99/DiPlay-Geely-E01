@@ -21,7 +21,7 @@ fun displayLines(displays: List<FlyDisplayInfo>, chosen: FlyDisplayInfo?): List<
     val choice = if (chosen == null) {
         "fly.display none"
     } else {
-        "fly.display use id=${chosen.id} name=${chosen.name} ${chosen.width}x${chosen.height}"
+        "fly.display use id=${chosen.id} ${chosen.name} ${chosen.width}x${chosen.height}"
     }
     return listOf("fly.display list $list", choice)
 }

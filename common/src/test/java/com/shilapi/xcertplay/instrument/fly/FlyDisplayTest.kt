@@ -1,6 +1,8 @@
 package com.shilapi.xcertplay.instrument.fly
 
+import com.shilapi.xcertplay.DiagnosticRedactor
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -24,7 +26,10 @@ class FlyDisplayTest {
     @Test fun linesNameTheChoiceAndDoNotContainADottedAddress() {
         val lines = displayLines(listOf(center, cluster), cluster)
         assertEquals("fly.display list 0:Built-in Screen:1920x720:default 2:HDMI Screen:1920x720", lines[0])
-        assertEquals("fly.display use id=2 name=HDMI Screen 1920x720", lines[1])
+        assertEquals("fly.display use id=2 HDMI Screen 1920x720", lines[1])
         assertEquals("fly.display none", displayLines(listOf(center), null).last())
+        assertFalse(lines[1].contains("name="))
+        assertEquals(lines[0], DiagnosticRedactor.redact(lines[0]))
+        assertEquals(lines[1], DiagnosticRedactor.redact(lines[1]))
     }
 }
