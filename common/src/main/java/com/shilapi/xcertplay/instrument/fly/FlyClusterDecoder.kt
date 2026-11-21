@@ -28,7 +28,7 @@ internal class FlyClusterDecoder(
     @Volatile private var painting = false
     private var paintThread: Thread? = null
     private var meta: FlyFrameMeta? = null
-    private var colorLogged = false
+    private var formatLogged = false
     private var bufferLogged = false
     @Suppress("DEPRECATION")
     private var inputBuffers: Array<ByteBuffer> = emptyArray()
@@ -55,8 +55,11 @@ internal class FlyClusterDecoder(
         drain(codec)
         val spentMs = (System.nanoTime() - startedNs) / 1_000_000L
         if (spentMs > SLOW_MS) {
+            // API 22 has no Flushed state on a synchronous codec: flush() completes back into
+            // Started and resumes on the next dequeueInputBuffer. Calling start() here throws
+            // IllegalStateException (MediaCodec.cpp kWhatStart accepts Configured or Flushed only),
+            // which the controller would turn into a torn-down pin.
             codec.flush()
-            codec.start()
             // A restart begins at the parameter sets, like the old re-encoder did: a CarPlay IDR
             // often arrives without SPS/PPS of its own.
             queue(codec, START_CODE + sps)
@@ -98,7 +101,10 @@ internal class FlyClusterDecoder(
             while (painting) {
                 try {
                     if (!painter.paintOne()) Thread.sleep(16)
-                } catch (error: RuntimeException) {
+                } catch (error: Throwable) {
+                    // OutOfMemoryError from the one-time bitmap allocation is the plausible failure
+                    // here, and it is an Error: a RuntimeException-only catch would leave `buffer`
+                    // followed by silence, with no line saying the painter died.
                     log("fly.display paint failed ${error.javaClass.simpleName}")
                     painting = false
                 }
@@ -176,9 +182,9 @@ internal class FlyClusterDecoder(
         val slice = if (format.containsKey(MediaFormat.KEY_SLICE_HEIGHT)) format.getInteger(MediaFormat.KEY_SLICE_HEIGHT) else 0
         val color = if (format.containsKey(MediaFormat.KEY_COLOR_FORMAT)) format.getInteger(MediaFormat.KEY_COLOR_FORMAT) else 0
         val parsed = frameMeta(width, height, stride, slice, color)
-        if (parsed == null && !FlyYuv.supported(color) && !colorLogged) {
-            colorLogged = true
-            log("fly.display color $color")
+        if (parsed == null && !formatLogged) {
+            formatLogged = true
+            log(formatNotice(width, height, stride, slice, color))
         }
         meta = parsed
     }

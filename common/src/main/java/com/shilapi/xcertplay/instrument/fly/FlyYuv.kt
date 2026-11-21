@@ -17,6 +17,19 @@ internal fun frameMeta(width: Int, height: Int, stride: Int, slice: Int, color: 
     return FlyFrameMeta(width, height, safeStride, safeSlice, color)
 }
 
+/**
+ * The single line that says why the codec's output layout was refused.
+ *
+ * An unsupported colour and a supported colour with unusable dimensions both leave the cluster with
+ * nothing painting, so both have to say so once — otherwise a car run shows `buffer` and silence.
+ */
+internal fun formatNotice(width: Int, height: Int, stride: Int, slice: Int, color: Int): String =
+    if (!FlyYuv.supported(color)) {
+        "fly.display color $color"
+    } else {
+        "fly.display format ${width}x${height} stride=$stride slice=$slice color=$color"
+    }
+
 internal object FlyYuv {
     const val PLANAR = 19
     const val SEMIPLANAR = 21

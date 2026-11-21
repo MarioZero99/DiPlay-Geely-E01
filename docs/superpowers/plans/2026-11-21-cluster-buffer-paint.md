@@ -19,7 +19,7 @@
 - 不调用 `DimInteraction.create()`，不调用 `setPresentationToDimSwitch`，不发 `ecarx.intent.action.DIM_PRESENTATION_CTRL`。
 - 不向手机请求 `SCREEN_TYPE_ALT`（流 111）。不恢复 `1028`、`10.255.255.101`、RTP 或第二遍编码。
 - 飞屏解码器只创建 `OMX.google.h264.decoder`。失败时不退回 `OMX.MTK.VIDEO.DECODER.AVC`。
-- `csd-0` / `csd-1` 继续带 `00 00 00 01`。`flush()` 然后 `start()` 仍然合法。慢路径之后继续把 `START_CODE + sps` 和 `START_CODE + pps` 重新送入。
+- `csd-0` / `csd-1` 继续带 `00 00 00 01`。`flush()` 之后不要调 `start()`：API 22 同步模式 flush 完成即回到 STARTED，`start()` 只接受 CONFIGURED 或 FLUSHED，会抛 `IllegalStateException`（`MediaCodec.cpp` 的 `kWhatFlushCompleted` / `kWhatStart`）；下一次 `dequeueInputBuffer` 自动续跑。慢路径之后继续把 `START_CODE + sps` 和 `START_CODE + pps` 重新送入。
 - 一个访问单元超过 150 ms 时才 `flush`。这 150 ms 只计解码器的 `queue` 和 `drain`，不计 YUV 拷贝以外的颜色转换，也不计 `lockCanvas`。
 - 媒体线程仍然只入队。队列容量保持 1。满了就丢，并等到下一个 IDR。画图线程忙、或者还没到 166 ms，都不是丢访问单元，禁止因此设置 `dropUntilIdr`。
 - 颜色转换和 `lockCanvas` 只在 `cluster-fly-paint` 上做。这条线程优先级是 `THREAD_PRIORITY_LOWEST`。`cluster-fly-frames` 保持 `THREAD_PRIORITY_BACKGROUND`。不要把画图 `post` 回主线程。
@@ -477,7 +477,7 @@ internal fun drawClusterBitmap(surface: Surface, bitmap: Bitmap, rgb: ByteBuffer
 
 `drain` 里输出缓冲的顺序是：用 `BufferInfo.offset` 和 `size` 设好 position/limit，`slot.offer`，`finally` 里 `releaseOutputBuffer(index, false)`。第一次拿到 `index >= 0` 就记 `fly.display buffer`，即使这一帧没有拷进槽。`INFO_OUTPUT_FORMAT_CHANGED` 时读 `KEY_COLOR_FORMAT`、`KEY_STRIDE`、`KEY_SLICE_HEIGHT`，交给 `frameMeta`。颜色不支持时记一次 `fly.display color <n>`。`INFO_OUTPUT_BUFFERS_CHANGED` 时重新取 `outputBuffers`。
 
-150 ms 的计时仍然包住 `queue` 和 `drain`，不包住 `paintOne`。慢路径的 `flush`、`start`、重新送 SPS/PPS 保持现在的顺序。
+150 ms 的计时仍然包住 `queue` 和 `drain`，不包住 `paintOne`。慢路径是 `flush`、重新送 SPS/PPS；不要再 `start()`（见 Global Constraints）。
 
 `ClusterFlyController.processFrame` 的 catch 改为：
 

@@ -40,4 +40,12 @@ class FlyYuvTest {
         assertNull(frameMeta(1920, 720, 1920, 720, 0))
         assertFalse(FlyYuv.supported(0))
     }
+
+    @Test fun aRejectedOutputFormatIsNamed() {
+        assertEquals("fly.display color 7", formatNotice(1920, 720, 1920, 720, 7))
+        assertEquals(
+            "fly.display format 1920x1080 stride=1920 slice=1088 color=19",
+            formatNotice(1920, 1080, 1920, 1088, FlyYuv.PLANAR),
+        )
+    }
 }
