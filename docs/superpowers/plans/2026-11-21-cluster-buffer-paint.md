@@ -1,5 +1,7 @@
 # 星瑞 E01：仪表软解出画实施计划
 
+> **2026-11-23 起，出画以 `2026-11-23-cluster-texture-mirror.md` 为准。** 本文件的 `OMX.google.h264.decoder` 和 YUV 拷贝作废。1885、displayId 1、`Presentation` 仍然有效。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 飞屏链路保持不动，让 `OMX.google.h264.decoder` 把已经在中控上收到的 H.264 解成缓冲区，再以 6 fps 画到 displayId 1 的 Surface 上。中控硬解不增加耗时。
