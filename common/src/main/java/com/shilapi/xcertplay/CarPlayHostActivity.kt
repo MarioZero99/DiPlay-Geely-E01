@@ -121,6 +121,8 @@ import com.shilapi.xcertplay.instrument.fly.ClusterFlySequencer
 import com.shilapi.xcertplay.instrument.fly.FlyClusterPresentation
 import com.shilapi.xcertplay.instrument.fly.FlyCommand
 import com.shilapi.xcertplay.instrument.fly.FlyDisplayInfo
+import com.shilapi.xcertplay.instrument.fly.FlyOutputHandoff
+import com.shilapi.xcertplay.instrument.fly.FlyTextureMirror
 import com.shilapi.xcertplay.instrument.fly.FlyTrace
 import com.shilapi.xcertplay.instrument.fly.chooseClusterDisplay
 import com.shilapi.xcertplay.instrument.fly.displayLines
@@ -178,6 +180,11 @@ class CarPlayHostActivity : ComponentActivity() {
     private var clusterFly: ClusterFlyController? = null
     private var flyClusterPresentation: FlyClusterPresentation? = null
     private var clusterDisplayListener: DisplayManager.DisplayListener? = null
+    /** The window handoff and the texture mirror for the fly in progress, if any. */
+    private var flyHandoff: FlyOutputHandoff? = null
+    private var flyMirror: FlyTextureMirror? = null
+    /** True between the start of a teardown and the moment the cluster surface is gone. */
+    private var flyClosing = false
 
     /** The one line under a picture when a fly was refused; built with the page, hidden by default. */
     private var flyWarningView: TextView? = null
@@ -2560,11 +2567,9 @@ class CarPlayHostActivity : ComponentActivity() {
         clusterFly ?: ClusterFlyController(
             commands = { command -> sendFlyCommand(command) },
             showWarning = { line -> showFlyWarning(line) },
-            setMainVideoSubscribed = { subscribed -> setFlyVideoSubscribed(subscribed) },
+            setMainVideoSubscribed = {},
             log = { line -> DiagLog.i(ClusterFlyLog.TAG, line) },
             onLayerOpened = { attachClusterPresentation() },
-            mainVideoConfig = { sink?.mainVideoConfig() },
-            mainVideoCodec = { sink?.mainVideoCodec() },
             onMain = { action -> runOnUiThread(action) },
             onGiveUp = { dismissClusterFly() },
             requestKeyFrame = { requestKeyFrame("cluster fly") },
@@ -2598,8 +2603,48 @@ class CarPlayHostActivity : ComponentActivity() {
             return
         }
         val display = manager.displays.first { it.displayId == chosen.id }
-        val presentation = FlyClusterPresentation(this, display) { surface ->
-            clusterFly?.onFlySurface(surface)
+        val presentation = FlyClusterPresentation(this, display) { cluster ->
+            if (cluster == null) {
+                if (!flyClosing) clusterFly?.onMirrorFailed()
+                return@FlyClusterPresentation
+            }
+            val center = currentSurface
+            if (center == null || !center.isValid) {
+                clusterFly?.onMirrorFailed()
+                return@FlyClusterPresentation
+            }
+            clusterFly?.onMirrorStarted()
+            val mirror = FlyTextureMirror { line -> DiagLog.i(ClusterFlyLog.TAG, line) }
+            val handoff = FlyOutputHandoff(
+                replaceOutput = { surface, applied ->
+                    val media = sink
+                    if (media == null) {
+                        applied(false)
+                        return@FlyOutputHandoff
+                    }
+                    media.replaceOutputSurface(SCREEN_TYPE_MAIN, surface) { ok ->
+                        runOnUiThread { applied(ok) }
+                    }
+                },
+                openMirror = { centerSurface, clusterSurface, onTexture, onBroken ->
+                    mirror.open(
+                        centerSurface,
+                        clusterSurface,
+                        onTexture = { texture -> runOnUiThread { onTexture(texture) } },
+                        onFrame = { runOnUiThread { clusterFly?.onMirrorReady() } },
+                        onBroken = { runOnUiThread { onBroken() } },
+                    )
+                },
+                closeMirror = { mirror.close() },
+            )
+            flyHandoff = handoff
+            flyMirror = mirror
+            handoff.begin(
+                center,
+                cluster,
+                onReady = { requestKeyFrame("cluster fly") },
+                onFailed = { clusterFly?.onMirrorFailed() },
+            )
         }
         // The system dismisses a presentation when its display goes away. Clear the field so the
         // next left swipe attaches a fresh window instead of finding this dead one.
@@ -2632,14 +2677,32 @@ class CarPlayHostActivity : ComponentActivity() {
 
     /** Takes the cluster window down. Called on the main thread, after a right swipe or a failure. */
     private fun dismissClusterFly() {
+        if (flyClosing) return
+        flyClosing = true
         clusterDisplayListener?.let { listener ->
             (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(listener)
         }
         clusterDisplayListener = null
         val presentation = flyClusterPresentation
+        // Cleared first: dismissing the window must not come back as a lost display.
         flyClusterPresentation = null
-        presentation?.dismiss()
-        clusterFly?.onFlySurface(null)
+        val handoff = flyHandoff
+        if (handoff == null) {
+            presentation?.dismiss()
+            flyClosing = false
+            return
+        }
+        handoff.end {
+            runOnUiThread {
+                presentation?.dismiss()
+                flyHandoff = null
+                // A failure path leaves the handoff idle without ever closing the mirror; close is
+                // idempotent, so the thread and its Looper go even when `end` had nothing to do.
+                flyMirror?.close()
+                flyMirror = null
+                flyClosing = false
+            }
+        }
     }
 
     /**
@@ -2689,14 +2752,6 @@ class CarPlayHostActivity : ComponentActivity() {
             // process. Pull the navigation-indicator lines now, while they are still in logcat.
             if (open) FlyTrace.captureAfterGesture()
             ok
-        }
-    }
-
-    private fun setFlyVideoSubscribed(subscribed: Boolean) {
-        if (subscribed) {
-            sink?.setMainVideoObserver { type, bytes -> clusterFly?.onMainVideo(type, bytes) }
-        } else {
-            sink?.setMainVideoObserver(null)
         }
     }
 

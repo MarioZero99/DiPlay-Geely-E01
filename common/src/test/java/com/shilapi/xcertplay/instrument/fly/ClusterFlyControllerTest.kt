@@ -44,8 +44,61 @@ class ClusterFlyControllerTest {
         now = 2_400L
         runScheduled()
         now = 2_500L
-        controller.onClusterDisplayReady()
+        controller.onMirrorReady()
         return controller
+    }
+
+    /** Gesture at 1000, front at 1400, left at 2400: the session is waiting for a picture. */
+    private fun waiting(): ClusterFlyController {
+        val controller = controller()
+        controller.onGesture(Decision.FLY_LEFT)
+        now = 1_400L
+        scheduled.removeAt(0).second()
+        now = 2_400L
+        scheduled.removeAt(0).second()
+        return controller
+    }
+
+    @Test fun aMirrorFailureWhileWaitingCoversTheLayer() {
+        val controller = waiting()
+        controller.onMirrorStarted()
+        controller.onMirrorFailed()
+        // The close is one second after FLY_LEFT; the factory would refuse it sooner.
+        now = 3_400L
+        scheduled.last { it.first == 1_000L }.second()
+        assertTrue(sent.contains(FlyCommand.FLY_RIGHT))
+    }
+
+    @Test fun fiveSecondsWithoutAFrameCoversTheLayer() {
+        val controller = waiting()
+        controller.onMirrorStarted()
+        now = 7_400L
+        scheduled.last { it.first == 5_000L }.second()
+        assertTrue(sent.contains(FlyCommand.FLY_RIGHT))
+        assertEquals(FlyPhase.CLOSING, controller.phase)
+    }
+
+    @Test fun theFirstFrameEntersPushingAndTheWaitDoesNotCoverTheLayer() {
+        val subscribed = mutableListOf<Boolean>()
+        val controller = ClusterFlyController(
+            commands = { sent.add(it) },
+            showWarning = { warnings.add(it) },
+            setMainVideoSubscribed = { subscribed.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+        )
+        controller.onGesture(Decision.FLY_LEFT)
+        now = 1_400L
+        scheduled.removeAt(0).second()
+        now = 2_400L
+        scheduled.removeAt(0).second()
+        controller.onMirrorStarted()
+        controller.onMirrorReady()
+        assertEquals(FlyPhase.PUSHING, controller.phase)
+        scheduled.filter { it.first == 5_000L }.forEach { it.second() }
+        assertFalse(sent.contains(FlyCommand.FLY_RIGHT))
+        assertFalse(subscribed.contains(true))
     }
 
     @Test
@@ -87,7 +140,7 @@ class ClusterFlyControllerTest {
         runScheduled()
         assertEquals(FlyPhase.WAITING_FOR_VIDEO, controller.phase)
         assertTrue(order.indexOf("opened") < order.indexOf("schedule 3000"))
-        controller.onClusterDisplayReady()
+        controller.onMirrorReady()
         assertEquals(FlyPhase.PUSHING, controller.phase)
         scheduled.filter { it.first == 3_000L }.forEach { it.second() }
         assertFalse(lines.any { it.contains("fly.abort") })
@@ -204,11 +257,11 @@ class ClusterFlyControllerTest {
         scheduled.removeAt(0).second()
 
         now = 2_400L
-        controller.onClusterDisplayReady()
+        controller.onMirrorReady()
         runScheduled()
 
         assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT), sent)
-        assertEquals(listOf(true), subscriptions)
+        assertEquals(emptyList<Boolean>(), subscriptions)
         assertFalse(warnings.contains(ClusterFlyWarning.pageUnchanged()))
     }
 
@@ -246,18 +299,6 @@ class ClusterFlyControllerTest {
     }
 
     @Test
-    fun `a surface change is queued even while a frame is waiting`() {
-        val tasks = mutableListOf<Runnable>()
-        val controller = controller(RecordingExecutor(tasks))
-
-        controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x65, 0))
-        controller.onMainVideo(110, byteArrayOf(0, 0, 0, 1, 0x41, 0))
-        controller.onFlySurface(null)
-
-        assertEquals(2, tasks.size)
-    }
-
-    @Test
     fun `car play ending puts the cluster window away`() {
         val giveUps = mutableListOf<Int>()
         val controller = ClusterFlyController(
@@ -273,33 +314,11 @@ class ClusterFlyControllerTest {
         now = 2_400L
         runScheduled()
         now = 2_500L
-        controller.onClusterDisplayReady()
+        controller.onMirrorReady()
 
         controller.onCarPlayEnded()
 
         assertEquals(1, giveUps.size)
-    }
-
-    @Test
-    fun `a started picture asks for one keyframe`() {
-        val requests = mutableListOf<Int>()
-        val controller = ClusterFlyController(
-            commands = { sent.add(it) },
-            showWarning = { warnings.add(it) },
-            setMainVideoSubscribed = {},
-            log = { lines.add(it) },
-            clock = { now },
-            postDelayed = { delay, action -> scheduled.add(delay to action) },
-            requestKeyFrame = { requests.add(1) },
-        )
-        controller.onGesture(Decision.FLY_LEFT)
-        now = 2_400L
-        runScheduled()
-        now = 2_500L
-        controller.onClusterDisplayReady()
-        controller.onClusterDisplayReady()
-
-        assertEquals(1, requests.size)
     }
 
     @Test
@@ -318,7 +337,7 @@ class ClusterFlyControllerTest {
         now = 2_400L
         runScheduled()
         now = 2_500L
-        controller.onClusterDisplayReady()
+        controller.onMirrorReady()
 
         controller.onClusterDisplayLost()
 
@@ -335,29 +354,12 @@ class ClusterFlyControllerTest {
         assertTrue(lines.contains("fly.abort display gone"))
     }
 
-    /** Runs nothing: the test only needs to see what the controller queued. */
-    private class RecordingExecutor(private val tasks: MutableList<Runnable>) :
-        java.util.concurrent.AbstractExecutorService() {
-        override fun execute(command: Runnable) {
-            tasks.add(command)
-        }
-
-        override fun shutdown() = Unit
-
-        override fun shutdownNow(): MutableList<Runnable> =
-            tasks.toMutableList().also { tasks.clear() }
-
-        override fun isShutdown() = false
-        override fun isTerminated() = false
-        override fun awaitTermination(timeout: Long, unit: java.util.concurrent.TimeUnit) = true
-    }
-
     @Test
     fun `a cluster display cancels the silent timeout`() {
         val controller = controller()
         openToLeft(controller)
         now = 2_500L
-        controller.onClusterDisplayReady()
+        controller.onMirrorReady()
         runScheduled()
 
         assertFalse(sent.contains(FlyCommand.NAV_OFF))

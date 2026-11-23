@@ -3,16 +3,7 @@ package com.shilapi.xcertplay.instrument.fly
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.view.Surface
-import com.shilapi.xcertplay.airplay.VideoCodec
 import com.shilapi.xcertplay.ui.ThreeFingerSwipeDetector.Decision
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 /** Where the factory commands really go. The Activity sends them; tests record them. */
 fun interface FlyCommandSink {
@@ -23,10 +14,10 @@ fun interface FlyCommandSink {
 /**
  * Joins the gesture, the state machine, the cluster's display and the centre screen's picture.
  *
- * The session and everything that steers it sit behind one lock: the fly thread starts the decoder
- * on one side, the main thread takes gestures and safety broadcasts on the other, and both move the
- * same state machine. The picture itself is subscribed only while the session says it is pushing,
- * so a session with no cluster watching costs the decoder nothing.
+ * The session and everything that steers it sit behind one lock: the Activity moves the centre
+ * decoder onto the mirror and reports the first cluster frame on one side, gestures and safety
+ * broadcasts arrive on the other. The same decoder feeds both screens, so there is nothing to
+ * subscribe to and no second picture to start.
  */
 class ClusterFlyController(
     private val commands: FlyCommandSink,
@@ -41,17 +32,13 @@ class ClusterFlyController(
     },
     /** Runs once when the left step has gone out, so the Activity can put its picture on the cluster. */
     private val onLayerOpened: () -> Unit = {},
-    /** The centre screen's last avcC record, for the decoder's first surface. */
-    private val mainVideoConfig: () -> ByteArray? = { null },
-    /** The centre screen's codec. The cluster decoder only decodes H.264; an HEVC session has none. */
-    private val mainVideoCodec: () -> VideoCodec? = { null },
     /** Posts to the main thread. The decoder runs on the fly thread, the presentation does not. */
     private val onMain: (() -> Unit) -> Unit = { action -> action() },
     /** The Activity takes its cluster window down. Called once per failed picture. */
     private val onGiveUp: () -> Unit = {},
-    /** Asks the phone for one IDR. A still picture offers none, and the decoder starts on one. */
+    /** Asks the phone for one IDR. A still picture offers none, and the decoder needs one to start. */
     private val requestKeyFrame: () -> Unit = {},
-    frameExecutor: ExecutorService? = null,
+    frameExecutor: java.util.concurrent.ExecutorService? = null,
 ) {
 
     private val session = ClusterFlySession(log)
@@ -60,27 +47,7 @@ class ClusterFlyController(
     val phase: FlyPhase
         get() = session.currentPhase
 
-    /**
-     * The fly thread. CarPlay's media thread hands over a frame and returns; everything that could
-     * block — the decode, the surface, a slow unit — happens here.
-     *
-     * The work queue is unbounded on purpose: it carries control as well as frames, and losing a
-     * "the surface is gone" task would leak the decoder. Frames are admitted by [framesInFlight]
-     * instead, so the picture is still dropped, never buffered, and never waits.
-     */
-    private val frameExecutor: ExecutorService = frameExecutor ?: ThreadPoolExecutor(
-        1,
-        1,
-        0L,
-        TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(),
-        { runnable -> Thread(runnable, "cluster-fly-frames").apply { isDaemon = true } },
-    )
-
-    /** Frames waiting for the fly thread. The one decoding is not counted; control never is. */
-    private val framesWaiting = AtomicInteger(0)
-
-    /** The one lock. Taken by gestures, safety broadcasts, the fly thread and posted steps. */
+    /** The one lock. Taken by gestures, safety broadcasts and the mirror's callbacks. */
     private val lock = Any()
 
     /** Before any command has been sent. Not `0`: uptime can legitimately start there. */
@@ -92,25 +59,14 @@ class ClusterFlyController(
     /** CarPlay is the navigation picture the cluster's map page is being pointed at. */
     private var carPlayActive = true
 
-    private var subscribed = false
-
     /** A step scheduled before a session ended belongs to the old session and is dropped. */
     private var generation = 0
 
-    /** The three-second wait for the cluster's display; a newer wait or a started decoder cancels it. */
+    /**
+     * The wait for the cluster's picture. The three-second one runs from FLY_LEFT; the five-second
+     * one replaces it when the cluster's surface arrives, because the window change costs a keyframe.
+     */
     private var videoTimeoutGeneration = 0
-
-    /** Set on the fly thread, once. The media thread never pays for the priority change. */
-    private var background = false
-
-    /** The presentation's surface and the decoder drawing on it; both exist only while it is up. */
-    private var flyDecoder: FlyClusterDecoder? = null
-    private var waitingSurface: Surface? = null
-    private var pendingConfig: ByteArray? = null
-    private var configWarned = false
-
-    /** A dropped frame leaves the GOP torn: the decoder must restart on the next IDR. */
-    private val dropUntilIdr = AtomicBoolean(false)
 
     fun onGesture(decision: Decision) {
         synchronized(lock) {
@@ -133,26 +89,55 @@ class ClusterFlyController(
     }
 
     /**
-     * The cluster's surface is up and the decoder has started: the picture is live.
+     * The cluster's surface arrived and the window change is under way.
      *
-     * Idempotent: once the picture is pushing, a second call does nothing. The first caller turns
-     * the subscription on, cancels the three-second abort of this round, and asks the phone for one
-     * IDR — a still CarPlay picture offers none, and the software decoder starts only on one.
-     * Runs on the fly thread, from the decoder path; never from [sendFlyCommand] — when the left
-     * step returns the session is still arming.
+     * Replaces the three-second wait with five: the decoder must be detached, the texture attached,
+     * and a keyframe requested, which the phone delivers about two seconds later. Nothing has been
+     * drawn at this point, so it is not the moment to say the picture is live.
      */
-    fun onClusterDisplayReady() {
+    fun onMirrorStarted() {
         synchronized(lock) {
+            val expected = ++videoTimeoutGeneration
+            postDelayed(MIRROR_WAIT_TIMEOUT_MILLIS) {
+                synchronized(lock) {
+                    if (videoTimeoutGeneration != expected) return@synchronized
+                    if (session.currentPhase != FlyPhase.WAITING_FOR_VIDEO) return@synchronized
+                    onMirrorFailed()
+                }
+            }
+        }
+    }
+
+    /**
+     * The first frame really reached the cluster: the picture is live.
+     *
+     * Idempotent. The five-second wait is cancelled here and nowhere earlier — a successful
+     * `configure` only means the decoder found its new window.
+     */
+    fun onMirrorReady() {
+        synchronized(lock) {
+            videoTimeoutGeneration++
             if (session.currentPhase == FlyPhase.PUSHING) return
             val effect = session.onDisplayReady(clock())
             if (effect.phase != FlyPhase.PUSHING) return
-            videoTimeoutGeneration++
-            if (!subscribed) {
-                subscribed = true
-                setMainVideoSubscribed(true)
-            }
             handle(effect)
-            requestKeyFrame()
+        }
+    }
+
+    /**
+     * The mirror could not come up, or no cluster frame arrived in time.
+     *
+     * The layer is up (1885 already went out), so it has to be covered again. The close obeys the
+     * factory's one-second interval like any other; [ClusterFlySession.onRight] decides that.
+     */
+    fun onMirrorFailed() {
+        synchronized(lock) {
+            videoTimeoutGeneration++
+            val phase = session.currentPhase
+            if (phase != FlyPhase.WAITING_FOR_VIDEO && phase != FlyPhase.PUSHING) return
+            val effect = session.onRight(clock(), conditions(clock()))
+            handle(effect)
+            onGiveUp()
         }
     }
 
@@ -192,7 +177,6 @@ class ClusterFlyController(
             val effect = session.onCarPlayEnded(now, conditions(now))
             carPlayActive = false
             handle(effect)
-            stopEverything()
         }
         // The window is still open on the cluster. Take it down; a new session at the same display
         // must be able to attach again.
@@ -203,84 +187,9 @@ class ClusterFlyController(
     fun close() {
         synchronized(lock) {
             generation++
-            // The three-second abort belongs to this Activity; if it is gone, so is the timer.
+            // The waits belong to this Activity; if it is gone, so are the timers.
             videoTimeoutGeneration++
-            stopEverything()
         }
-        // Release the decoder on its own thread, then let the queue drain. A shutdown that discards
-        // the task leaks a MediaCodec, and this head unit has no spare memory for that.
-        try {
-            frameExecutor.execute {
-                flyDecoder?.release()
-                flyDecoder = null
-                waitingSurface = null
-                pendingConfig = null
-                configWarned = false
-            }
-        } catch (_: RejectedExecutionException) {
-        }
-        frameExecutor.shutdown()
-    }
-
-    /**
-     * Hands one unit of the centre screen's video to the fly thread and returns.
-     *
-     * This is the only thing the CarPlay media thread does for the cluster: one queue offer, no copy,
-     * no allocation of its own. The decoder keeps the same array in its own queue (`submit` is an
-     * offer too), so the reference stays valid; the fly thread does the rest.
-     */
-    fun onMainVideo(type: Int, bytes: ByteArray) {
-        if (framesWaiting.incrementAndGet() > FRAME_QUEUE_CAPACITY) {
-            // One frame waiting, one decoding. A third is dropped: a backlog here is a software
-            // decode running ahead of the picture the driver is looking at.
-            framesWaiting.decrementAndGet()
-            dropUntilIdr.set(true)
-            return
-        }
-        try {
-            frameExecutor.execute {
-                framesWaiting.decrementAndGet()
-                processFrame(type, bytes)
-            }
-        } catch (_: RejectedExecutionException) {
-            // The layer is closed: one countable drop, never a wait. The GOP is now missing a
-            // frame, so the fly thread waits for the next IDR.
-            framesWaiting.decrementAndGet()
-            dropUntilIdr.set(true)
-        }
-    }
-
-    /**
-     * The presentation's surface arrived (or went away). Runs on the fly thread.
-     *
-     * The decoder is created here and nowhere else: it lives exactly as long as there is a surface
-     * to draw on. A surface that arrives before the configuration leaves the picture waiting; the
-     * next configuration unit starts it.
-     */
-    fun onFlySurface(surface: Surface?) {
-        try {
-            frameExecutor.execute {
-                if (surface == null) {
-                    flyDecoder?.release()
-                    flyDecoder = null
-                    waitingSurface = null
-                    // The next session may have a different resolution or profile; never start it
-                    // on the previous one's record.
-                    pendingConfig = null
-                    configWarned = false
-                    return@execute
-                }
-                waitingSurface = surface
-                tryStartDecoder()
-            }
-        } catch (_: RejectedExecutionException) {
-            // The controller is closed; the decoder went with the fly thread.
-        }
-    }
-
-    /** The cluster window is up but the picture cannot start. Tear the window down again. */
-    fun onPictureFailed() {
-        endPicture("decoder failed")
     }
 
     /**
@@ -297,76 +206,12 @@ class ClusterFlyController(
                 if (session.currentPhase == FlyPhase.PUSHING) {
                     // 1885 already lifted the layer, so it has to be covered again.
                     val effect = session.onRight(clock(), conditions(clock()))
-                    subscribed = false
-                    setMainVideoSubscribed(false)
                     handle(effect)
                     onGiveUp()
                 } else {
                     abortSession(reason)
                 }
             }
-        }
-    }
-
-    private fun tryStartDecoder() {
-        if (flyDecoder != null || waitingSurface == null) return
-        val codec = mainVideoCodec()
-        if (codec != null && codec != VideoCodec.H264) {
-            log("fly.display codec unsupported ${codec.name}")
-            onPictureFailed()
-            return
-        }
-        val config = pendingConfig ?: mainVideoConfig() ?: run {
-            if (!configWarned) {
-                configWarned = true
-                log("fly.display no config")
-            }
-            return
-        }
-        val sets = FlyAnnex.parameterSets(config) ?: run {
-            log("fly.display decoder failed")
-            onPictureFailed()
-            return
-        }
-        val created = FlyClusterDecoder(waitingSurface!!, sets.sps, sets.pps, log)
-        if (!created.ready) {
-            created.release()
-            onPictureFailed()
-            return
-        }
-        flyDecoder = created
-        onClusterDisplayReady()
-    }
-
-    /**
-     * The fly thread's work for one unit.
-     *
-     * The configuration record (avcC) is kept for the decoder's first surface and never handed to
-     * the decoder as a picture. Every other unit goes straight to the software decoder while the
-     * session is pushing; a unit that arrives while it is not is dropped, not buffered.
-     */
-    private fun processFrame(type: Int, bytes: ByteArray) {
-        if (!background) {
-            background = true
-            // Below the UI and the media thread. The software decode uses whatever core is left.
-            runCatching {
-                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            }
-        }
-        if (FlyAnnex.isConfig(bytes)) pendingConfig = bytes.copyOf()
-        tryStartDecoder()
-        val decoder = flyDecoder ?: return
-        val phase = synchronized(lock) { session.currentPhase }
-        if (phase != FlyPhase.PUSHING) return
-        if (FlyAnnex.isConfig(bytes)) return
-        if (dropUntilIdr.compareAndSet(true, false)) decoder.dropUntilIdr()
-        try {
-            decoder.submit(bytes)
-        } catch (error: RuntimeException) {
-            log(flyDecoderFailure(error))
-            decoder.release()
-            flyDecoder = null
-            onPictureFailed()
         }
     }
 
@@ -384,11 +229,6 @@ class ClusterFlyController(
 
     private fun handle(effect: FlyEffect) {
         effect.warning?.let { block -> ClusterFlyWarning.text(block)?.let(showWarning) }
-
-        if (effect.push != subscribed) {
-            subscribed = effect.push
-            setMainVideoSubscribed(effect.push)
-        }
 
         if (effect.steps.isNotEmpty()) {
             // A new command pair supersedes anything still queued from the old one — a right swipe
@@ -463,7 +303,6 @@ class ClusterFlyController(
         log(ClusterFlyLog.abort(reason))
         showWarning(ClusterFlyWarning.pageUnchanged())
         handle(effect)
-        stopEverything()
     }
 
     private fun safetyChanged(block: FlyBlock?) {
@@ -472,23 +311,13 @@ class ClusterFlyController(
         handle(session.onSafety(conditions(now), now))
     }
 
-    private fun stopEverything() {
-        if (subscribed) {
-            subscribed = false
-            setMainVideoSubscribed(false)
-        }
-    }
-
     private companion object {
         const val NO_TIME = Long.MIN_VALUE
 
         /** How long the cluster has to bring its display up after a successful 1885. */
         const val VIDEO_ASK_TIMEOUT_MILLIS = 3_000L
 
-        /**
-         * One frame waiting, one frame being decoded. A third is dropped: a backlog here is a
-         * software decode running ahead of the picture the driver is looking at.
-         */
-        const val FRAME_QUEUE_CAPACITY = 1
+        /** How long the mirror has to put one frame on the cluster after the window changed. */
+        const val MIRROR_WAIT_TIMEOUT_MILLIS = 5_000L
     }
 }
