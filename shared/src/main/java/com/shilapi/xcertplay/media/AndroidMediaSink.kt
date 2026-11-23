@@ -92,6 +92,22 @@ class AndroidMediaSink(    surface: Surface? = null,
         videoDecoders[type]?.setSurface(surface)
     }
 
+    /**
+     * Moves one stream's decoder to a different output window, or off all windows with `null`.
+     *
+     * `applied` runs on the decoder thread. `true` means the window is the one just passed: a null
+     * detach has released the decoder, a non-null attach has configured and started it.
+     */
+    fun replaceOutputSurface(type: Int, surface: Surface?, applied: (Boolean) -> Unit) {
+        if (surface == null) surfaces.remove(type) else surfaces[type] = surface
+        val decoder = videoDecoders[type]
+        if (decoder == null) {
+            applied(true)
+            return
+        }
+        decoder.setSurface(surface, applied)
+    }
+
     fun clearSurface(type: Int, surface: Surface) {
         if (surfaces.remove(type, surface)) videoDecoders[type]?.setSurface(null)
     }
@@ -368,8 +384,8 @@ private class VideoDecoder(
         queue.offer(VideoJob.Frame(nalus))
     }
 
-    fun setSurface(surface: Surface?) {
-        queue.offer(VideoJob.SurfaceChanged(surface))
+    fun setSurface(surface: Surface?, applied: (Boolean) -> Unit = {}) {
+        queue.offer(VideoJob.SurfaceChanged(surface, applied))
     }
 
     fun currentTelemetry(): VideoTelemetrySnapshot = stats.readCurrentTelemetry()
@@ -392,7 +408,7 @@ private class VideoDecoder(
                                 recover("video backlog exceeded 250 ms")
                             } else feed(job.nalus)
                         }
-                        is VideoJob.SurfaceChanged -> changeSurface(job.surface)
+                        is VideoJob.SurfaceChanged -> changeSurface(job.surface, job.applied)
                         is VideoJob.Resync -> recover("video queue overflow")
                         null -> Unit
                     }
@@ -414,7 +430,7 @@ private class VideoDecoder(
         }
     }
 
-    private fun configureDecoder(config: VideoJob.Config) {
+    private fun configureDecoder(config: VideoJob.Config): Boolean {
         val mime = if (config.codec == VideoCodec.H265) MediaFormat.MIMETYPE_VIDEO_HEVC
         else MediaFormat.MIMETYPE_VIDEO_AVC
         val previous = lastConfig
@@ -431,7 +447,7 @@ private class VideoDecoder(
             // starved a caller that gates on it: it waited out its whole timeout for a decoder it
             // already had, and the only evidence was a log line it never reads.
             report("decoder=${decoder?.name} mime=$mime size=${width}x$height")
-            return
+            return true
         }
         lastConfig = config
         duplicateConfigLogged = false
@@ -439,7 +455,7 @@ private class VideoDecoder(
         referenceChain.reset()
         val surface = outputSurface ?: run {
             report("decoder unavailable mime=$mime size=${width}x$height: no output surface")
-            return
+            return false
         }
         val codec = config.codec
         val codecData = config.codecData
@@ -482,6 +498,7 @@ private class VideoDecoder(
                 "video decoder configured name=${next.name} mime=$mime size=${width}x$height",
             )
         }
+        return next != null
     }
 
     private fun createDecoder(mime: String): MediaCodec {
@@ -503,12 +520,16 @@ private class VideoDecoder(
         return MediaCodec.createDecoderByType(mime)
     }
 
-    private fun changeSurface(surface: Surface?) {
-        if (outputSurface === surface) return
+    private fun changeSurface(surface: Surface?, applied: (Boolean) -> Unit) {
+        if (outputSurface === surface) {
+            applied(true)
+            return
+        }
         outputSurface = surface
         if (surface == null) {
             releaseDecoder()
             DiagLog.i(TAG, "video decoder detached from surface")
+            applied(true)
             return
         }
         val codec = decoder
@@ -516,13 +537,15 @@ private class VideoDecoder(
             try {
                 codec.setOutputSurface(surface)
                 DiagLog.i(TAG, "video decoder output surface updated")
+                applied(true)
                 return
             } catch (error: Exception) {
                 DiagLog.w(TAG, "video decoder output surface update failed; reconfiguring", error)
             }
         }
         releaseDecoder()
-        lastConfig?.let(::configureDecoder)
+        val ok = lastConfig?.let(::configureDecoder) ?: false
+        applied(ok)
     }
 
     private fun feed(nalus: ByteArray) {

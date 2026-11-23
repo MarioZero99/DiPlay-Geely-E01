@@ -5,6 +5,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VideoDecodeQueueTest {
+    @Test fun aSurfaceChangeKeepsItsCallback() {
+        val queue = VideoDecodeQueue()
+        var applied = false
+        queue.offer(VideoJob.SurfaceChanged(null) { applied = true })
+        val job = queue.poll(0) as VideoJob.SurfaceChanged
+        job.applied(true)
+        assertTrue(applied)
+    }
+
     @Test fun lostReferenceChainWaitsForSuccessfullyQueuedKeyframe() {
         val chain = VideoReferenceChain()
         val predicted = byteArrayOf(0, 0, 0, 1, 0x41, 1)
