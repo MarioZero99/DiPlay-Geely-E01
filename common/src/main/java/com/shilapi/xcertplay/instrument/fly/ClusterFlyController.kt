@@ -22,7 +22,6 @@ fun interface FlyCommandSink {
 class ClusterFlyController(
     private val commands: FlyCommandSink,
     private val showWarning: (String) -> Unit,
-    private val setMainVideoSubscribed: (Boolean) -> Unit,
     /** Whether the head unit has finished the settings that make the layer usable. */
     private val provisioned: () -> Boolean = { true },
     private val log: (String) -> Unit = {},
@@ -36,9 +35,6 @@ class ClusterFlyController(
     private val onMain: (() -> Unit) -> Unit = { action -> action() },
     /** The Activity takes its cluster window down. Called once per failed picture. */
     private val onGiveUp: () -> Unit = {},
-    /** Asks the phone for one IDR. A still picture offers none, and the decoder needs one to start. */
-    private val requestKeyFrame: () -> Unit = {},
-    frameExecutor: java.util.concurrent.ExecutorService? = null,
 ) {
 
     private val session = ClusterFlySession(log)

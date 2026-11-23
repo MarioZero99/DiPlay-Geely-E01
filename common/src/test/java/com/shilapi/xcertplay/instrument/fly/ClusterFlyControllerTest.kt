@@ -20,14 +20,12 @@ class ClusterFlyControllerTest {
     private val warnings = mutableListOf<String>()
     private val lines = mutableListOf<String>()
 
-    private fun controller(frameExecutor: java.util.concurrent.ExecutorService? = null) = ClusterFlyController(
+    private fun controller() = ClusterFlyController(
         commands = { sent.add(it) },
         showWarning = { warnings.add(it) },
-        setMainVideoSubscribed = {},
         log = { lines.add(it) },
         clock = { now },
         postDelayed = { delay, action -> scheduled.add(delay to action) },
-        frameExecutor = frameExecutor,
     )
 
     /** Runs what the controller posted, in the order it posted it. */
@@ -79,11 +77,9 @@ class ClusterFlyControllerTest {
     }
 
     @Test fun theFirstFrameEntersPushingAndTheWaitDoesNotCoverTheLayer() {
-        val subscribed = mutableListOf<Boolean>()
         val controller = ClusterFlyController(
             commands = { sent.add(it) },
             showWarning = { warnings.add(it) },
-            setMainVideoSubscribed = { subscribed.add(it) },
             log = { lines.add(it) },
             clock = { now },
             postDelayed = { delay, action -> scheduled.add(delay to action) },
@@ -98,7 +94,6 @@ class ClusterFlyControllerTest {
         assertEquals(FlyPhase.PUSHING, controller.phase)
         scheduled.filter { it.first == 5_000L }.forEach { it.second() }
         assertFalse(sent.contains(FlyCommand.FLY_RIGHT))
-        assertFalse(subscribed.contains(true))
     }
 
     @Test
@@ -126,8 +121,7 @@ class ClusterFlyControllerTest {
         val controller = ClusterFlyController(
             commands = { sent.add(it) },
             showWarning = { warnings.add(it) },
-            setMainVideoSubscribed = {},
-            log = { lines.add(it) },
+                log = { lines.add(it) },
             clock = { now },
             postDelayed = { delay, action ->
                 order.add("schedule $delay")
@@ -189,7 +183,6 @@ class ClusterFlyControllerTest {
             command != FlyCommand.FLY_LEFT
         },
         showWarning = { warnings.add(it) },
-        setMainVideoSubscribed = {},
         log = { lines.add(it) },
         clock = { now },
         postDelayed = { delay, action -> scheduled.add(delay to action) },
@@ -240,14 +233,12 @@ class ClusterFlyControllerTest {
      */
     @Test
     fun `a failed 1885 after the cluster already asked keeps the picture`() {
-        val subscriptions = mutableListOf<Boolean>()
         val controller = ClusterFlyController(
             commands = { command ->
                 sent.add(command)
                 command != FlyCommand.FLY_LEFT
             },
             showWarning = { warnings.add(it) },
-            setMainVideoSubscribed = { subscriptions.add(it) },
             log = { lines.add(it) },
             clock = { now },
             postDelayed = { delay, action -> scheduled.add(delay to action) },
@@ -261,7 +252,6 @@ class ClusterFlyControllerTest {
         runScheduled()
 
         assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT), sent)
-        assertEquals(emptyList<Boolean>(), subscriptions)
         assertFalse(warnings.contains(ClusterFlyWarning.pageUnchanged()))
     }
 
@@ -304,8 +294,7 @@ class ClusterFlyControllerTest {
         val controller = ClusterFlyController(
             commands = { sent.add(it) },
             showWarning = { warnings.add(it) },
-            setMainVideoSubscribed = {},
-            log = { lines.add(it) },
+                log = { lines.add(it) },
             clock = { now },
             postDelayed = { delay, action -> scheduled.add(delay to action) },
             onGiveUp = { giveUps.add(1) },
@@ -327,8 +316,7 @@ class ClusterFlyControllerTest {
         val controller = ClusterFlyController(
             commands = { sent.add(it) },
             showWarning = { warnings.add(it) },
-            setMainVideoSubscribed = {},
-            log = { lines.add(it) },
+                log = { lines.add(it) },
             clock = { now },
             postDelayed = { delay, action -> scheduled.add(delay to action) },
             onGiveUp = { giveUps.add(1) },

@@ -2567,12 +2567,10 @@ class CarPlayHostActivity : ComponentActivity() {
         clusterFly ?: ClusterFlyController(
             commands = { command -> sendFlyCommand(command) },
             showWarning = { line -> showFlyWarning(line) },
-            setMainVideoSubscribed = {},
             log = { line -> DiagLog.i(ClusterFlyLog.TAG, line) },
             onLayerOpened = { attachClusterPresentation() },
             onMain = { action -> runOnUiThread(action) },
             onGiveUp = { dismissClusterFly() },
-            requestKeyFrame = { requestKeyFrame("cluster fly") },
         ).also { clusterFly = it }
 
     /**
