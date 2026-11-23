@@ -122,6 +122,7 @@ import com.shilapi.xcertplay.instrument.fly.FlyClusterPresentation
 import com.shilapi.xcertplay.instrument.fly.FlyCommand
 import com.shilapi.xcertplay.instrument.fly.FlyDisplayInfo
 import com.shilapi.xcertplay.instrument.fly.FlyOutputHandoff
+import com.shilapi.xcertplay.instrument.fly.FlyPhase
 import com.shilapi.xcertplay.instrument.fly.FlyTextureMirror
 import com.shilapi.xcertplay.instrument.fly.FlyTrace
 import com.shilapi.xcertplay.instrument.fly.chooseClusterDisplay
@@ -185,6 +186,8 @@ class CarPlayHostActivity : ComponentActivity() {
     private var flyMirror: FlyTextureMirror? = null
     /** True between the start of a teardown and the moment the cluster surface is gone. */
     private var flyClosing = false
+    /** A centre Surface that arrived while a fly was live; handed to the decoder after the teardown. */
+    private var flyPendingCenter: Surface? = null
 
     /** The one line under a picture when a fly was refused; built with the page, hidden by default. */
     private var flyWarningView: TextView? = null
@@ -2606,6 +2609,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 if (!flyClosing) clusterFly?.onMirrorFailed()
                 return@FlyClusterPresentation
             }
+            if (flyClosing) return@FlyClusterPresentation
             val center = currentSurface
             if (center == null || !center.isValid) {
                 clusterFly?.onMirrorFailed()
@@ -2690,8 +2694,10 @@ class CarPlayHostActivity : ComponentActivity() {
             flyClosing = false
             return
         }
-        handoff.end {
+        fun finish() {
             runOnUiThread {
+                // A newer round has taken the fields; its teardown owns them now.
+                if (flyHandoff !== handoff) return@runOnUiThread
                 presentation?.dismiss()
                 flyHandoff = null
                 // A failure path leaves the handoff idle without ever closing the mirror; close is
@@ -2699,8 +2705,18 @@ class CarPlayHostActivity : ComponentActivity() {
                 flyMirror?.close()
                 flyMirror = null
                 flyClosing = false
+                val pending = flyPendingCenter
+                flyPendingCenter = null
+                if (pending != null && pending.isValid) {
+                    sink?.setSurface(SCREEN_TYPE_MAIN, pending)
+                    if (activeScreenStreamTypes.isNotEmpty()) requestKeyFrame("surface reattached")
+                }
             }
         }
+        handoff.end { finish() }
+        // The restore is one job on the decoder thread. A dead or busy decoder would otherwise hold
+        // the window open forever: after one second the teardown is finished regardless.
+        mainHandler.postDelayed({ if (flyClosing) finish() }, FLY_TEARDOWN_FALLBACK_MILLIS)
     }
 
     /**
@@ -2882,6 +2898,18 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     private fun attachSurface(surface: Surface) {
+        val fly = clusterFly
+        val live = flyHandoff
+        if (live != null && !flyClosing && fly != null &&
+            (fly.phase == FlyPhase.WAITING_FOR_VIDEO || fly.phase == FlyPhase.PUSHING)
+        ) {
+            // The centre window changed under the mirror. Pointing the decoder here directly would
+            // move it off the texture: the mirror starves and the cluster freezes on its last frame.
+            // End the fly, and hand this Surface over once the mirror has released the decoder.
+            flyPendingCenter = surface
+            fly.onMirrorFailed()
+            return
+        }
         sink?.setSurface(SCREEN_TYPE_MAIN, surface)
         // A surface that arrives while the stream is already up is usually the picture coming back:
         // the driver left this activity — the three-finger swipe to the settings, the car's own home
@@ -3281,6 +3309,8 @@ class CarPlayHostActivity : ComponentActivity() {
         const val ECALL_INCOMING = "incoming call"
 
         const val FLY_WARNING_MILLIS = 2_000L
+        /** The window is torn down even if the decoder never acknowledges the restore. */
+        const val FLY_TEARDOWN_FALLBACK_MILLIS = 1_000L
         val FLY_WARNING_BACKGROUND = 0xCC000000.toInt()
         const val LOG_RETENTION_MILLIS = 5 * 60_000L
         const val DISPLAY_CHANGE_DEBOUNCE_MILLIS = 500L

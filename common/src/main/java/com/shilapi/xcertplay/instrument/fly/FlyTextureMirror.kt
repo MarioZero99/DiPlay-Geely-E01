@@ -53,6 +53,9 @@ internal class FlyTextureMirror(private val log: (String) -> Unit) {
     private var clusterWidth = 0
     private var clusterHeight = 0
     private var onFrame: (() -> Unit)? = null
+    private var onBroken: (() -> Unit)? = null
+    private var frameFailures = 0
+    private var brokenReported = false
     private var frameLogged = false
     private var lastSlowLogMs = 0L
     private var framePending = false
@@ -206,6 +209,7 @@ internal class FlyTextureMirror(private val log: (String) -> Unit) {
         texture.setOnFrameAvailableListener({ onFrameAvailable() }, handler)
         surfaceTexture = texture
         this.onFrame = onFrame
+        this.onBroken = onBroken
         val surface = Surface(texture)
         textureSurface = surface
         log(FlyMirrorLog.mirror())
@@ -230,14 +234,32 @@ internal class FlyTextureMirror(private val log: (String) -> Unit) {
         val clusterWindow = clusterEgl ?: return
         val texture = surfaceTexture ?: return
         val startedNs = System.nanoTime()
-        if (!EGL14.eglMakeCurrent(eglDisplay, centerWindow, centerWindow, eglContext)) return
+        val centerCurrent = EGL14.eglMakeCurrent(eglDisplay, centerWindow, centerWindow, eglContext)
+        if (!centerCurrent &&
+            !EGL14.eglMakeCurrent(eglDisplay, clusterWindow, clusterWindow, eglContext)
+        ) {
+            countFrameFailure()
+            return
+        }
+        // The frame is consumed even when only the cluster window is current: an unconsumed
+        // texture fills the decoder's output queue and stops the centre picture with it.
         texture.updateTexImage()
         texture.getTransformMatrix(texMatrix)
-        draw(centerWidth, centerHeight)
-        EGL14.eglSwapBuffers(eglDisplay, centerWindow)
-        EGL14.eglMakeCurrent(eglDisplay, clusterWindow, clusterWindow, eglContext)
+        if (centerCurrent) {
+            draw(centerWidth, centerHeight)
+            EGL14.eglSwapBuffers(eglDisplay, centerWindow)
+        }
+        if (!EGL14.eglMakeCurrent(eglDisplay, clusterWindow, clusterWindow, eglContext)) {
+            countFrameFailure()
+            return
+        }
         draw(clusterWidth, clusterHeight)
         val shown = EGL14.eglSwapBuffers(eglDisplay, clusterWindow)
+        if (shown) {
+            frameFailures = 0
+        } else {
+            countFrameFailure()
+        }
         if (!frameLogged && shown) {
             frameLogged = true
             log(FlyMirrorLog.frame())
@@ -251,6 +273,14 @@ internal class FlyTextureMirror(private val log: (String) -> Unit) {
                 log("fly.display paint slow $spentMs")
             }
         }
+    }
+
+    /** Three frames in a row with no usable window mean the mirror is gone, not that one frame was. */
+    private fun countFrameFailure() {
+        frameFailures++
+        if (frameFailures < MAX_FRAME_FAILURES || brokenReported) return
+        brokenReported = true
+        onBroken?.invoke()
     }
 
     private fun draw(width: Int, height: Int) {
@@ -377,6 +407,7 @@ internal class FlyTextureMirror(private val log: (String) -> Unit) {
         surfaceTexture?.release()
         surfaceTexture = null
         onFrame = null
+        onBroken = null
     }
 
     private companion object {
@@ -385,6 +416,7 @@ internal class FlyTextureMirror(private val log: (String) -> Unit) {
         const val SLOW_MS = 32L
         const val SLOW_LOG_GAP_MS = 5_000L
         const val CLOSE_JOIN_MS = 2_000L
+        const val MAX_FRAME_FAILURES = 3
 
         fun directFloats(values: FloatArray): FloatBuffer =
             ByteBuffer.allocateDirect(values.size * 4).order(ByteOrder.nativeOrder())
