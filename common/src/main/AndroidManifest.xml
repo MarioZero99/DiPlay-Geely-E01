@@ -83,8 +83,11 @@
             </intent-filter>
         </receiver>
 
+        <!-- Off until a CarPlay session claims it. Left enabled, priority 1000 stays the
+             head unit's media-button fallback after DiPlay exits, until the unit reboots. -->
         <receiver
             android:name="com.shilapi.xcertplay.CarPlayMediaButtonReceiver"
+            android:enabled="false"
             android:exported="true">
             <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.MEDIA_BUTTON" />

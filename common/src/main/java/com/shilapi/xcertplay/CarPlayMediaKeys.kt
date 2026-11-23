@@ -87,9 +87,30 @@ internal object CarPlayMediaKeys {
      * active after the picture is gone therefore keeps the wheel, and declining the event in the
      * callback is not a promise that it reaches the head unit's own player. Taking the session down
      * while nothing is being served is what actually hands the wheel back.
+     *
+     * setActive(false) is not enough on this 5.1 stack: the media-button receiver stays the
+     * fallback, and the car's player loses the wheel at the next Bluetooth track change. Going not
+     * live releases the session and disables that receiver.
      */
     fun onSessionLiveChanged(live: Boolean) = mainHandler.post {
         backend.onSessionLiveChanged(live)
+    }
+
+    /** The controller's answer, read at the moment a press arrives. A missing controller holds nothing. */
+    internal fun wheelHeld(): Boolean = backend.wheelHeld()
+
+    /**
+     * Give the wheel back when this process is not serving CarPlay.
+     *
+     * Safe to call from a press we declined. A live session is left alone: an unbound key must not
+     * tear down the claim the next bound key still needs.
+     */
+    internal fun releaseMediaButtonTarget(context: Context) {
+        if (backend.wheelHeld()) return
+        backend.dropWheelTarget()
+        // Cold start from a press: the backend has never been attached, so it has no context of
+        // its own with which to unregister. The registration still has to go.
+        HeadUnitMediaButtons.release(context)
     }
 
     /** Receives the same focus callbacks as the media-button session. Cleared by [detach]. */
@@ -354,6 +375,8 @@ internal object CarPlayMediaKeys {
         fun dispatch(event: KeyEvent): Boolean
         fun onClusterMetadataEnabledChanged(enabled: Boolean)
         fun onSessionLiveChanged(live: Boolean)
+        fun wheelHeld(): Boolean
+        fun dropWheelTarget()
         fun release()
     }
 
@@ -367,6 +390,12 @@ internal object CarPlayMediaKeys {
 
         override fun onSessionLiveChanged(live: Boolean) {
             sessionLive = live
+        }
+
+        override fun wheelHeld(): Boolean = controller?.hasLiveAirPlaySession() == true
+
+        override fun dropWheelTarget() {
+            context?.let { HeadUnitMediaButtons.release(it) }
         }
         private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
             Log.i(TAG, "audio focus change=$change")
@@ -442,6 +471,7 @@ internal object CarPlayMediaKeys {
         protected fun describe(event: KeyEvent) = "keyCode=${event.keyCode} name=${KeyEvent.keyCodeToString(event.keyCode)}"
 
         override fun release() {
+            dropWheelTarget()
             val audio = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             @Suppress("DEPRECATION")
             audio?.abandonAudioFocus(focusListener)
@@ -469,6 +499,10 @@ internal object CarPlayMediaKeys {
             super.onPlaybackChanged(playing)
             mainHandler.post {
                 val currentContext = context ?: return@post
+                if (!sessionLive) {
+                    dropWheelTarget()
+                    return@post
+                }
                 if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) return@post
                 val currentSession = session ?: return@post
                 val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
@@ -527,6 +561,9 @@ internal object CarPlayMediaKeys {
 
         private fun ensureSession(currentContext: Context): MediaSession {
             session?.let { return it }
+            // The component is manifest-disabled. Enable it before the session names it, or the
+            // head unit cannot deliver a wheel press here while CarPlay is up.
+            HeadUnitMediaButtons.claim(currentContext)
             val mediaButtonReceiver = PendingIntent.getBroadcast(
                 currentContext,
                 0,
@@ -558,6 +595,10 @@ internal object CarPlayMediaKeys {
         override fun update(active: Boolean) {
             val currentContext = context ?: return
             if (controller == null) return
+            if (!sessionLive) {
+                dropWheelTarget()
+                return
+            }
             val enabled = AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)
             if (!enabled) {
                 session?.let {
@@ -684,6 +725,8 @@ internal object CarPlayMediaKeys {
         override fun onClusterMetadataEnabledChanged(enabled: Boolean) {
             if (!enabled) {
                 clearClusterMetadata()
+            } else if (!sessionLive) {
+                dropWheelTarget()
             } else {
                 val currentContext = context ?: return
                 if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) return
@@ -698,8 +741,15 @@ internal object CarPlayMediaKeys {
 
         override fun onSessionLiveChanged(live: Boolean) {
             super.onSessionLiveChanged(live)
-            // The session may not exist yet (no media audio has played). ensureSession reads the field.
-            session?.isActive = live
+            if (!live) {
+                // Release, not setActive(false). An inactive session with a media-button receiver
+                // is what this head unit falls back to when Bluetooth music changes track.
+                dropWheelTarget()
+                return
+            }
+            val currentContext = context ?: return
+            HeadUnitMediaButtons.claim(currentContext)
+            ensureSession(currentContext).isActive = true
         }
 
         private fun clearClusterMetadata() {
@@ -729,12 +779,17 @@ internal object CarPlayMediaKeys {
             }
             resetBroadcastState()
             instrumentBridge?.clearMedia()
+            if (!sessionLive) dropWheelTarget()
         }
 
         private fun publishMetadata(nowPlaying: CarPlayNowPlaying?, artwork: Bitmap?) {
             val currentContext = context ?: return
             if (!AirPlayPersistence.loadClusterMediaMetadataEnabled(currentContext)) {
                 clearClusterMetadata()
+                return
+            }
+            if (!sessionLive) {
+                dropWheelTarget()
                 return
             }
             val currentSession = session ?: return
@@ -785,13 +840,24 @@ internal object CarPlayMediaKeys {
             updateArtwork(null)
             instrumentBridge?.release()
             instrumentBridge = null
-            session?.apply {
-                runCatching { setMetadata(null) }
-                isActive = false
-                release()
-            }
-            session = null
             super.release()
+        }
+
+        override fun dropWheelTarget() {
+            val current = session
+            session = null
+            if (current != null) {
+                runCatching {
+                    current.setPlaybackState(
+                        PlaybackState.Builder().setState(PlaybackState.STATE_STOPPED, 0L, 0f).build(),
+                    )
+                    current.setMetadata(null)
+                    current.setMediaButtonReceiver(null)
+                    current.isActive = false
+                    current.release()
+                }.onFailure { DiagLog.w(TAG, "failed to drop media session", it) }
+            }
+            super.dropWheelTarget()
         }
     }
 
@@ -800,10 +866,20 @@ internal object CarPlayMediaKeys {
         private var remote: RemoteControlClient? = null
         private var receiver: ComponentName? = null
 
+        override fun onSessionLiveChanged(live: Boolean) {
+            super.onSessionLiveChanged(live)
+            if (!live) dropWheelTarget()
+        }
+
         override fun update(active: Boolean) {
             val currentContext = context ?: return
+            if (!sessionLive) {
+                dropWheelTarget()
+                return
+            }
             val audio = currentContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             if (remote == null) {
+                HeadUnitMediaButtons.claim(currentContext)
                 receiver = ComponentName(currentContext, CarPlayMediaButtonReceiver::class.java)
                 val intent = Intent(Intent.ACTION_MEDIA_BUTTON).setComponent(receiver)
                 val pending = PendingIntent.getBroadcast(currentContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT)
@@ -823,7 +899,7 @@ internal object CarPlayMediaKeys {
             )
         }
 
-        override fun release() {
+        override fun dropWheelTarget() {
             val audio = context?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             if (audio != null) {
                 remote?.let { audio.unregisterRemoteControlClient(it) }
@@ -831,7 +907,7 @@ internal object CarPlayMediaKeys {
             }
             remote = null
             receiver = null
-            super.release()
+            super.dropWheelTarget()
         }
     }
 }
@@ -868,6 +944,14 @@ class CarPlayMediaButtonReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_MEDIA_BUTTON) return
         @Suppress("DEPRECATION")
         val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return
-        if (CarPlayMediaKeys.dispatch(event)) abortBroadcast()
+        val wheelHeld = CarPlayMediaKeys.wheelHeld()
+        val decision = WheelKeyDelivery.decide(
+            claimed = CarPlayMediaKeys.dispatch(event),
+            wheelHeld = wheelHeld,
+            ordered = isOrderedBroadcast,
+        )
+        if (decision.abort) abortBroadcast()
+        if (decision.releaseTarget) CarPlayMediaKeys.releaseMediaButtonTarget(context)
+        if (decision.redispatch) HeadUnitMediaButtons.returnDeclinedKey(context, event)
     }
 }
