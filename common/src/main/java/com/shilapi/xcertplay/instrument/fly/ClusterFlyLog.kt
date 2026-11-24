@@ -32,5 +32,17 @@ object ClusterFlyLog {
     fun mcu1885(open: Boolean, ok: Boolean): String =
         "fly.mcu 1885 ${if (open) "left" else "right"} $ok"
 
+    /** Binder accepted the 1900 write. That is not the factory taking the navigation mode. */
+    fun mcu1900(on: Boolean, ok: Boolean): String =
+        "fly.mcu 1900 ${if (on) "on" else "off"} $ok"
+
+    /** A broadcast went out. `sendBroadcast` has no reply, so this says only that it was sent. */
+    fun broadcast(on: Boolean): String =
+        "fly.broadcast nav ${if (on) "on" else "off"} sent"
+
+    /** How long since the previous MCU command; `null` before the first one. Not part of the gate. */
+    fun mcuGap(millis: Long?): String =
+        if (millis == null) "fly.mcu gap none" else "fly.mcu gap $millis"
+
     fun abort(reason: String): String = "fly.abort $reason"
 }

@@ -86,6 +86,58 @@ class ClusterFlyMcuTest {
         assertEquals("fly.mcu 1885 right false", ClusterFlyLog.mcu1885(open = false, ok = false))
     }
 
+    @Test
+    fun `navigation mode on payload is 25 bytes with 1 then 1`() {
+        val bytes = ClusterFlyMcu.payload1900(on = true)
+        assertEquals(25, bytes.size)
+        assertEquals(1.toByte(), bytes[0])
+        assertEquals(1.toByte(), bytes[1])
+        assertEquals(0, bytes.drop(2).count { it != 0.toByte() })
+    }
+
+    @Test
+    fun `navigation mode off payload is 25 bytes with 1 then 0`() {
+        val bytes = ClusterFlyMcu.payload1900(on = false)
+        assertEquals(25, bytes.size)
+        assertEquals(1.toByte(), bytes[0])
+        assertEquals(0.toByte(), bytes[1])
+        assertEquals(0, bytes.drop(2).count { it != 0.toByte() })
+    }
+
+    @Test
+    fun `send1900 writes control 0 opcode 1900 and the mode payload on transaction 5`() {
+        val binder = RecordingBinder(succeeds = true)
+        val ok = ClusterFlyMcu.send1900(on = true, binder = binder)
+        assertEquals(true, ok)
+        assertEquals(5, binder.code)
+        assertEquals(0.toByte(), binder.control)
+        assertEquals(1900, binder.opcode)
+        assertEquals(ClusterFlyMcu.payload1900(on = true).toList(), binder.payload.toList())
+    }
+
+    @Test
+    fun `a missing service is a failed 1900 send`() {
+        assertFalse(ClusterFlyMcu.send1900(on = true, binder = null))
+    }
+
+    @Test
+    fun `the 1900 log line names the mode and the result`() {
+        assertEquals("fly.mcu 1900 on true", ClusterFlyLog.mcu1900(on = true, ok = true))
+        assertEquals("fly.mcu 1900 off false", ClusterFlyLog.mcu1900(on = false, ok = false))
+    }
+
+    @Test
+    fun `the broadcast log line names the navigation state`() {
+        assertEquals("fly.broadcast nav on sent", ClusterFlyLog.broadcast(on = true))
+        assertEquals("fly.broadcast nav off sent", ClusterFlyLog.broadcast(on = false))
+    }
+
+    @Test
+    fun `the gap log line is none before any mcu and the millis after one`() {
+        assertEquals("fly.mcu gap none", ClusterFlyLog.mcuGap(null))
+        assertEquals("fly.mcu gap 1000", ClusterFlyLog.mcuGap(1_000L))
+    }
+
     private class RecordingBinder(private val succeeds: Boolean) : Binder() {
         var code: Int = -1
         var control: Byte = -1

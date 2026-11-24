@@ -17,9 +17,13 @@ object ClusterFlyMcu {
     const val CONTROL: Byte = 0
     const val OPCODE = 1887
     const val OPCODE_1885 = 1885
+
+    /** Navigation mode, from `AutoNaviRpc.setMMI_NavigationMod_indicator`. */
+    const val OPCODE_1900 = 1900
     const val PAYLOAD_LENGTH = 25
     private const val MARKER: Byte = 67
     private const val MARKER_1885: Byte = 74
+    private const val MARKER_1900: Byte = 1
 
     fun payload(front: Boolean): ByteArray {
         val bytes = ByteArray(PAYLOAD_LENGTH)
@@ -36,11 +40,22 @@ object ClusterFlyMcu {
         return bytes
     }
 
+    /** 1 in the first byte; 1 turns navigation mode on, 0 turns it off. */
+    fun payload1900(on: Boolean): ByteArray {
+        val bytes = ByteArray(PAYLOAD_LENGTH)
+        bytes[0] = MARKER_1900
+        bytes[1] = if (on) 1 else 0
+        return bytes
+    }
+
     fun send(front: Boolean, binder: IBinder? = lookup()): Boolean =
         send(OPCODE, payload(front), binder)
 
     fun send1885(open: Boolean, binder: IBinder? = lookup()): Boolean =
         send(OPCODE_1885, payload1885(open), binder)
+
+    fun send1900(on: Boolean, binder: IBinder? = lookup()): Boolean =
+        send(OPCODE_1900, payload1900(on), binder)
 
     private fun send(opcode: Int, payload: ByteArray, binder: IBinder?): Boolean {
         if (binder == null) return false
