@@ -13,6 +13,9 @@ object FlyChainLog {
     const val FAIL = "fail"
     const val FRAME = "frame"
 
+    /** The page broadcast went out but Extra's log could not prove it; the picture still attaches. */
+    const val UNCONFIRMED = "unconfirmed"
+
     const val TRUE = "true"
     const val FALSE = "false"
     const val SKIP = "skip"

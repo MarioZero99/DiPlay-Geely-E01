@@ -44,5 +44,18 @@ object ClusterFlyLog {
     fun mcuGap(millis: Long?): String =
         if (millis == null) "fly.mcu gap none" else "fly.mcu gap $millis"
 
+    /** What Extra's new log lines say about the page the swipe asked for. */
+    fun page(proof: PageProof): String = when (proof) {
+        PageProof.OPENED -> "fly.extra page open"
+        PageProof.CLOSED -> "fly.extra page close"
+        PageProof.DENIED -> "fly.extra page denied"
+        PageProof.DROPPED -> "fly.extra page dropped"
+        PageProof.MISSING -> "fly.extra page miss"
+        PageProof.UNCONFIRMED -> "fly.extra page unconfirmed"
+    }
+
+    /** A right swipe that Extra's log did not confirm. The close sequence still runs. */
+    fun pageCloseMiss(): String = "fly.extra page close miss"
+
     fun abort(reason: String): String = "fly.abort $reason"
 }

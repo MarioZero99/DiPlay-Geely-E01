@@ -41,6 +41,15 @@ class ClusterFlyController(
      * summary line; the callbacks it handles itself are not reported here.
      */
     private val onPictureFailed: (String) -> Unit = {},
+    /**
+     * Asks Extra to open or close the page and reports what its log proves. The default answers
+     * synchronously so the controller's own tests need no Extra; the Activity must supply the real
+     * one.
+     */
+    private val confirmPage: (FlyCommand, (PageWitness) -> Unit) -> Unit = { command, report ->
+        val proof = if (command == FlyCommand.FLY_LEFT) PageProof.OPENED else PageProof.CLOSED
+        report(PageWitness(proof))
+    },
 ) {
 
     private val session = ClusterFlySession(log)
@@ -283,28 +292,92 @@ class ClusterFlyController(
             abortSession("1900 on false")
             return
         }
-        if (step.command != FlyCommand.FLY_LEFT) return
-        if (!ok) {
-            // The write never reached RpcService. Waiting three seconds for a page change nobody
-            // asked the cluster to make would just keep the next swipe locked out.
-            abortSession("1885 left false")
+        if (step.command == FlyCommand.FLY_LEFT) {
+            if (!ok) {
+                // The broadcast never left. Waiting for a page nobody asked the factory to open
+                // would just keep the next swipe locked out.
+                abortSession("page send false")
+                return
+            }
+            // The broadcast is out; the page is still unproven. Do not attach the picture yet.
+            handle(session.onWaitTimeout(clock()))
+            val generationAtSend = generation
+            var settled = false
+            val settle: (PageWitness) -> Unit = { witness ->
+                synchronized(lock) {
+                    if (generation == generationAtSend && !settled) {
+                        settled = true
+                        applyOpenWitness(witness)
+                    }
+                }
+            }
+            confirmPage(step.command, settle)
+            // A slow or hung logcat must not leave an already-lifted page with no picture; after
+            // three seconds the broadcast counts as unconfirmed and the picture attaches.
+            postDelayed(WITNESS_ASK_TIMEOUT_MILLIS) {
+                synchronized(lock) {
+                    if (generation == generationAtSend && !settled) {
+                        settled = true
+                        applyOpenWitness(PageWitness(PageProof.UNCONFIRMED))
+                    }
+                }
+            }
             return
         }
-        // The left step has gone out; from here the cluster's display may come up and start the
-        // picture. The three-second clock is armed after the window has been put up.
-        val effect = session.onWaitTimeout(clock())
-        handle(effect)
-        // The cluster window goes up before the three-second clock is armed: the surface arrives
-        // later, and the clock is what takes the layer down if it never does.
-        if (ok && session.currentPhase == FlyPhase.WAITING_FOR_VIDEO) onLayerOpened()
-        if (session.currentPhase == FlyPhase.WAITING_FOR_VIDEO) scheduleVideoTimeout()
+        if (step.command == FlyCommand.FLY_RIGHT && ok) {
+            confirmPage(step.command) { witness ->
+                synchronized(lock) {
+                    log(
+                        if (witness.proof == PageProof.CLOSED) {
+                            ClusterFlyLog.page(PageProof.CLOSED)
+                        } else {
+                            ClusterFlyLog.pageCloseMiss()
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * The page is proven (or could not be proven): the picture may attach only on a page Extra
+     * opened. A denied, dropped or missing page is a factory refusal, never a reason to write 1885.
+     */
+    private fun applyOpenWitness(witness: PageWitness) {
+        log(ClusterFlyLog.page(witness.proof))
+        when (witness.proof) {
+            PageProof.OPENED -> {
+                chain1885 = FlyChainLog.TRUE
+                emitChain(FlyChainLog.OK, null)
+                attachIfWaiting()
+            }
+            PageProof.UNCONFIRMED -> {
+                // The page did happen as far as DiPlay can tell; the summary omits `at=`.
+                chain1885 = FlyChainLog.UNCONFIRMED
+                emitChain(FlyChainLog.UNCONFIRMED, null)
+                attachIfWaiting()
+            }
+            else -> {
+                chain1885 = FlyChainLog.FALSE
+                emitChain(FlyChainLog.FAIL, "1885")
+                abortSession("page ${witness.proof.name.lowercase()}")
+            }
+        }
+    }
+
+    /** Puts the window up and starts the three-second wait, only while the session is waiting. */
+    private fun attachIfWaiting() {
+        if (session.currentPhase != FlyPhase.WAITING_FOR_VIDEO) return
+        onLayerOpened()
+        scheduleVideoTimeout()
     }
 
     /**
      * One MCU result of the opening.
      *
-     * The summary can only be printed once the 1885 result is known: until then the later hops are
-     * still `skip`. A failed 1900 ends the chain on the spot — the front and page are never sent.
+     * Only the 1900 and 1887 hops are written here. The 1885 hop is Extra's, and the summary is
+     * printed once from [applyOpenWitness] when Extra's answer is known. A failed 1900 ends the
+     * chain on the spot — the front and page are never asked for.
      */
     private fun recordChain(command: FlyCommand, ok: Boolean) {
         val value = if (ok) FlyChainLog.TRUE else FlyChainLog.FALSE
@@ -313,36 +386,15 @@ class ClusterFlyController(
                 chain1900 = value
                 chain1887 = FlyChainLog.SKIP
                 chain1885 = FlyChainLog.SKIP
-                if (!ok) emitChain()
+                if (!ok) emitChain(FlyChainLog.FAIL, "1900")
             }
             FlyCommand.NAV_FRONT -> chain1887 = value
-            FlyCommand.FLY_LEFT -> {
-                chain1885 = value
-                emitChain()
-            }
             else -> Unit
         }
     }
 
-    private fun emitChain() {
-        val complete = chain1900 == FlyChainLog.TRUE &&
-            chain1887 == FlyChainLog.TRUE &&
-            chain1885 == FlyChainLog.TRUE
-        val at = when {
-            chain1900 != FlyChainLog.TRUE -> "1900"
-            chain1885 != FlyChainLog.TRUE -> "1885"
-            chain1887 != FlyChainLog.TRUE -> "1887"
-            else -> null
-        }
-        log(
-            FlyChainLog.commands(
-                if (complete) FlyChainLog.OK else FlyChainLog.FAIL,
-                at,
-                chain1900,
-                chain1887,
-                chain1885,
-            ),
-        )
+    private fun emitChain(result: String, at: String?) {
+        log(FlyChainLog.commands(result, at, chain1900, chain1887, chain1885))
         chain1900 = FlyChainLog.SKIP
         chain1887 = FlyChainLog.SKIP
         chain1885 = FlyChainLog.SKIP
@@ -381,9 +433,13 @@ class ClusterFlyController(
         handle(effect)
     }
 
-    /** The three MCU opcodes plus the close side; only the two broadcasts are not. */
+    /** DiPlay's own MCU writes. The two navigation broadcasts and the two page broadcasts are not. */
     private fun isMcu(command: FlyCommand): Boolean = when (command) {
-        FlyCommand.NAV_ON, FlyCommand.NAV_OFF -> false
+        FlyCommand.NAV_ON,
+        FlyCommand.NAV_OFF,
+        FlyCommand.FLY_LEFT,
+        FlyCommand.FLY_RIGHT,
+        -> false
         else -> true
     }
 
@@ -395,6 +451,9 @@ class ClusterFlyController(
 
     private companion object {
         const val NO_TIME = Long.MIN_VALUE
+
+        /** How long Extra's log has to answer before the page is treated as unconfirmed. */
+        const val WITNESS_ASK_TIMEOUT_MILLIS = 3_000L
 
         /** How long the cluster has to bring its display up after a successful 1885. */
         const val VIDEO_ASK_TIMEOUT_MILLIS = 3_000L

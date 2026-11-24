@@ -235,7 +235,7 @@ class ClusterFlyControllerTest {
         )
         assertEquals(listOf(1_000L), scheduled.map { it.first })
         assertFalse(lines.contains("fly.phase WAITING_FOR_VIDEO"))
-        assertTrue(lines.contains("fly.abort 1885 left false"))
+        assertTrue(lines.contains("fly.abort page send false"))
         assertEquals(listOf(ClusterFlyWarning.pageUnchanged()), warnings)
 
         now = 3_000L
@@ -244,7 +244,7 @@ class ClusterFlyControllerTest {
         assertFalse(sent.drop(6).contains(FlyCommand.NAV_ON))
 
         // The abort's own front message goes out at 4000. It is a withdrawal, not a new command,
-        // so the one-second interval still counts from the failed 1885 at 3000.
+        // so the one-second interval still counts from the failed page broadcast at 3000.
         now = 4_000L
         scheduled.removeAt(0).second()
         assertEquals(FlyCommand.NAV_BACK, sent.last())
@@ -319,6 +319,70 @@ class ClusterFlyControllerTest {
         assertTrue(
             lines.contains("fly.chain commands result=ok 1900=true 1887=true 1885=true"),
         )
+    }
+
+    @Test fun aDeniedPageDoesNotOpenTheLayerOrCoverIt() {
+        val controller = ClusterFlyController(
+            commands = { sent.add(it); true },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            onLayerOpened = { error("page was not opened") },
+            confirmPage = { _, report -> report(PageWitness(PageProof.DENIED)) },
+        )
+        openToLeft(controller)
+        assertEquals(FlyPhase.IDLE, controller.phase)
+        assertFalse(sent.contains(FlyCommand.FLY_RIGHT))
+        assertTrue(lines.contains("fly.extra page denied"))
+        assertTrue(lines.contains("fly.abort page denied"))
+        assertTrue(
+            lines.contains("fly.chain commands result=fail at=1885 1900=true 1887=true 1885=false"),
+        )
+    }
+
+    @Test fun anUnconfirmedPageStillOpensTheLayer() {
+        val opened = mutableListOf<String>()
+        val controller = ClusterFlyController(
+            commands = { sent.add(it); true },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            onLayerOpened = { opened.add("opened") },
+            confirmPage = { _, report -> report(PageWitness(PageProof.UNCONFIRMED)) },
+        )
+        openToLeft(controller)
+        assertEquals(listOf("opened"), opened)
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, controller.phase)
+        assertTrue(lines.contains("fly.extra page unconfirmed"))
+        assertTrue(
+            lines.contains(
+                "fly.chain commands result=unconfirmed 1900=true 1887=true 1885=unconfirmed",
+            ),
+        )
+    }
+
+    @Test fun aPageThatNeverAnswersOpensTheLayerAsUnconfirmed() {
+        val opened = mutableListOf<String>()
+        val controller = ClusterFlyController(
+            commands = { sent.add(it); true },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            onLayerOpened = { opened.add("opened") },
+            confirmPage = { _, _ -> },
+        )
+        openToLeft(controller)
+        assertEquals(emptyList<String>(), opened)
+
+        now = 6_000L
+        scheduled.last { it.first == 3_000L }.second()
+
+        assertEquals(listOf("opened"), opened)
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, controller.phase)
+        assertTrue(lines.contains("fly.extra page unconfirmed"))
     }
 
     @Test
@@ -441,10 +505,11 @@ class ClusterFlyControllerTest {
         val controller = controller()
         openToLeft(controller)
         assertTrue(lines.contains("fly.phase WAITING_FOR_VIDEO"))
-        assertEquals(listOf(3_000L), scheduled.map { it.first })
+        // The page proof watchdog and the surface wait are both three seconds.
+        assertEquals(listOf(3_000L, 3_000L), scheduled.map { it.first })
 
         now = 6_000L
-        scheduled.removeAt(0).second()
+        runScheduled()
 
         assertEquals(
             listOf(
