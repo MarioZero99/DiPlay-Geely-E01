@@ -19,19 +19,20 @@ internal object FlyTrace {
 
     internal var dumpOverrideForTest: (() -> Pair<Int?, String>)? = null
 
-    private val keep = listOf(
-        "ThreeFingerReceiver",
-        "导航状态",
-        "setMMI_NavigationMod_indicator",
-        "setMMI_Nav_status",
-        "Navi front",
-        "Navi back",
+    /** Each key: the word in the log and the substring that proves Extra processed it. */
+    private val keys = listOf(
+        "导航状态" to "导航状态",
+        "mmi" to "setMMI_NavigationMod_indicator",
+        "navi-front" to "Navi front",
+        "navi-back" to "Navi back",
+        "threefinger" to "ThreeFingerReceiver",
     )
 
-    fun captureAfterGesture() {
+    /** [which] says only which capture this was (`open` after the broadcast, `left` after 1885). */
+    fun capture(which: String) {
         val override = dumpOverrideForTest
         if (override != null) {
-            record(override())
+            record(which, override())
             return
         }
         Thread({
@@ -40,30 +41,34 @@ internal object FlyTrace {
             } catch (_: InterruptedException) {
                 return@Thread
             }
-            record(dumpFromDevice())
+            record(which, dumpFromDevice())
         }, "fly-trace").apply { isDaemon = true }.start()
     }
+
+    /** Captures under the old name until the Activity moves to [capture]. */
+    fun captureAfterGesture() = capture("gesture")
 
     internal fun select(body: String): List<String> {
         return body.lineSequence()
             .map { it.trim() }
-            .filter { line -> line.isNotEmpty() && keep.any { key -> line.contains(key) } }
+            .filter { line -> line.isNotEmpty() && keys.any { (_, key) -> line.contains(key) } }
             .toList()
             .takeLast(16)
     }
 
-    private fun record(dump: Pair<Int?, String>) {
+    private fun record(which: String, dump: Pair<Int?, String>) {
         val rc = dump.first
         val body = dump.second
         if (rc != null && rc != 0) {
             DiagLog.w(TAG, "fly.extra logcat rc=$rc body=${body.take(160)}")
         }
-        val lines = select(body)
-        if (lines.isEmpty()) {
-            DiagLog.i(TAG, "fly.extra empty. No ThreeFingerReceiver line in tag Extra.")
-            return
+        select(body).forEach { line -> DiagLog.i(TAG, "fly.extra $which $line") }
+        // All five are written every time: a miss is the evidence that the line was not there, and
+        // only a hit tells us Extra actually ran the receiver.
+        keys.forEach { (label, key) ->
+            val hit = body.contains(key)
+            DiagLog.i(TAG, "fly.extra $label ${if (hit) "hit" else "miss"}")
         }
-        lines.forEach { line -> DiagLog.i(TAG, "fly.extra $line") }
     }
 
     private fun dumpFromDevice(): Pair<Int?, String> {
