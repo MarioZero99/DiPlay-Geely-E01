@@ -13,6 +13,8 @@ internal class FlyOutputHandoff(
     private val replaceOutput: (Surface?, (Boolean) -> Unit) -> Unit,
     private val openMirror: (Surface, Surface, (Surface) -> Unit, () -> Unit) -> Unit,
     private val closeMirror: () -> Unit,
+    /** The detach and attach results, for the picture chain. Restores are not reported. */
+    private val onStep: (String, Boolean) -> Unit = { _, _ -> },
 ) {
     private enum class Phase { IDLE, DETACHING, OPENING, ATTACHING, SHOWING, RESTORING }
 
@@ -27,6 +29,7 @@ internal class FlyOutputHandoff(
         phase = Phase.DETACHING
         replaceOutput(null) { detached ->
             if (ticket != generation) return@replaceOutput
+            onStep("detach", detached)
             if (!detached) {
                 fail(ticket, onFailed)
                 return@replaceOutput
@@ -37,6 +40,7 @@ internal class FlyOutputHandoff(
                 phase = Phase.ATTACHING
                 replaceOutput(texture) { attached ->
                     if (ticket != generation) return@replaceOutput
+                    onStep("attach", attached)
                     if (!attached) {
                         closeMirror()
                         fail(ticket, onFailed)

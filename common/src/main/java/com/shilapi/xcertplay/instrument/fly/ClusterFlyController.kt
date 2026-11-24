@@ -52,6 +52,11 @@ class ClusterFlyController(
     /** When the last MCU write actually went out. The gap line measures these, not broadcasts. */
     private var lastMcuAt = NO_TIME
 
+    /** The open's three MCU results, `skip` until that hop is reached. Printed once, at 1885. */
+    private var chain1900 = FlyChainLog.SKIP
+    private var chain1887 = FlyChainLog.SKIP
+    private var chain1885 = FlyChainLog.SKIP
+
     private var radar = false
     private var ecall = false
 
@@ -262,6 +267,8 @@ class ClusterFlyController(
         // not one second from the message that takes the failure back.
         if (isMcu(step.command) && !step.retraction) lastMcuAt = now
         if (!step.retraction) lastCommandAt = now
+        // The three MCU results, printed once as one line when the last one is known.
+        if (!step.retraction) recordChain(step.command, ok)
         // The mode write never reached RpcService. The front and the page have no meaning without
         // it, so they are withdrawn instead of being sent to a factory that ignores them.
         if (step.command == FlyCommand.NAV_MODE_ON && !ok) {
@@ -283,6 +290,54 @@ class ClusterFlyController(
         // later, and the clock is what takes the layer down if it never does.
         if (ok && session.currentPhase == FlyPhase.WAITING_FOR_VIDEO) onLayerOpened()
         if (session.currentPhase == FlyPhase.WAITING_FOR_VIDEO) scheduleVideoTimeout()
+    }
+
+    /**
+     * One MCU result of the opening.
+     *
+     * The summary can only be printed once the 1885 result is known: until then the later hops are
+     * still `skip`. A failed 1900 ends the chain on the spot — the front and page are never sent.
+     */
+    private fun recordChain(command: FlyCommand, ok: Boolean) {
+        val value = if (ok) FlyChainLog.TRUE else FlyChainLog.FALSE
+        when (command) {
+            FlyCommand.NAV_MODE_ON -> {
+                chain1900 = value
+                chain1887 = FlyChainLog.SKIP
+                chain1885 = FlyChainLog.SKIP
+                if (!ok) emitChain()
+            }
+            FlyCommand.NAV_FRONT -> chain1887 = value
+            FlyCommand.FLY_LEFT -> {
+                chain1885 = value
+                emitChain()
+            }
+            else -> Unit
+        }
+    }
+
+    private fun emitChain() {
+        val complete = chain1900 == FlyChainLog.TRUE &&
+            chain1887 == FlyChainLog.TRUE &&
+            chain1885 == FlyChainLog.TRUE
+        val at = when {
+            chain1900 != FlyChainLog.TRUE -> "1900"
+            chain1885 != FlyChainLog.TRUE -> "1885"
+            chain1887 != FlyChainLog.TRUE -> "1887"
+            else -> null
+        }
+        log(
+            FlyChainLog.commands(
+                if (complete) FlyChainLog.OK else FlyChainLog.FAIL,
+                at,
+                chain1900,
+                chain1887,
+                chain1885,
+            ),
+        )
+        chain1900 = FlyChainLog.SKIP
+        chain1887 = FlyChainLog.SKIP
+        chain1885 = FlyChainLog.SKIP
     }
 
     /** Starts the three-second clock. Only a real ask from the cluster cancels it. */

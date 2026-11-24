@@ -31,6 +31,22 @@ class FlyOutputHandoffTest {
         assertEquals(listOf("detach", "open", "restore", "failed"), calls)
     }
 
+    @Test fun beginReportsTheDetachAndAttachResults() {
+        val steps = mutableListOf<Pair<String, Boolean>>()
+        val handoff = FlyOutputHandoff(
+            replaceOutput = { surface, applied ->
+                val kind = if (surface == null) "detach" else "attach"
+                applied(kind == "detach")
+            },
+            openMirror = { _, _, onTexture, _ -> onTexture(surface("texture")) },
+            closeMirror = {},
+            onStep = { step, ok -> steps.add(step to ok) },
+        )
+        handoff.begin(newCenter(), surface("cluster"), onReady = {}, onFailed = {})
+
+        assertEquals(listOf("detach" to true, "attach" to false), steps)
+    }
+
     @Test fun endWhileShowingRestoresThenCloses() {
         val handoff = handoff(detachOk = true, attachOk = true)
         handoff.begin(newCenter(), surface("cluster"), onReady = {}, onFailed = {})

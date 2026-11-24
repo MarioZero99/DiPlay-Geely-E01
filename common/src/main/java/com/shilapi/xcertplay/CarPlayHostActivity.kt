@@ -118,6 +118,8 @@ import com.shilapi.xcertplay.instrument.fly.ClusterFlyController
 import com.shilapi.xcertplay.instrument.fly.ClusterFlyLog
 import com.shilapi.xcertplay.instrument.fly.ClusterFlyMcu
 import com.shilapi.xcertplay.instrument.fly.ClusterFlySequencer
+import com.shilapi.xcertplay.instrument.fly.FlyChain
+import com.shilapi.xcertplay.instrument.fly.FlyChainLog
 import com.shilapi.xcertplay.instrument.fly.FlyClusterPresentation
 import com.shilapi.xcertplay.instrument.fly.FlyCommand
 import com.shilapi.xcertplay.instrument.fly.FlyDisplayInfo
@@ -180,7 +182,6 @@ class CarPlayHostActivity : ComponentActivity() {
      */
     private var clusterFly: ClusterFlyController? = null
     private var flyClusterPresentation: FlyClusterPresentation? = null
-    private var clusterDisplayListener: DisplayManager.DisplayListener? = null
     /** The window handoff and the texture mirror for the fly in progress, if any. */
     private var flyHandoff: FlyOutputHandoff? = null
     private var flyMirror: FlyTextureMirror? = null
@@ -2599,17 +2600,29 @@ class CarPlayHostActivity : ComponentActivity() {
         }
         val chosen = chooseClusterDisplay(infos)
         displayLines(infos, chosen).forEach { DiagLog.i(ClusterFlyLog.TAG, it) }
+        val chain = FlyChain()
         if (chosen == null) {
-            listenForClusterDisplay(manager)
+            // 1885 already lifted the layer, but there is no display to draw on: cover it again.
+            chain.display = FlyChainLog.NONE
+            emitPicture(chain, FlyChainLog.FAIL, "display")
+            clusterFly?.onMirrorFailed()
             return
         }
+        chain.display = chosen.id.toString()
         val display = manager.displays.first { it.displayId == chosen.id }
         val presentation = FlyClusterPresentation(this, display) { cluster ->
             if (cluster == null) {
-                if (!flyClosing) clusterFly?.onMirrorFailed()
+                if (!flyClosing) {
+                    chain.surface = FlyChainLog.FALSE
+                    DiagLog.i(ClusterFlyLog.TAG, "fly.display surface lost")
+                    emitPicture(chain, FlyChainLog.FAIL, "surface")
+                    clusterFly?.onMirrorFailed()
+                }
                 return@FlyClusterPresentation
             }
             if (flyClosing) return@FlyClusterPresentation
+            chain.surface = FlyChainLog.TRUE
+            DiagLog.i(ClusterFlyLog.TAG, "fly.display surface ready")
             val center = currentSurface
             if (center == null || !center.isValid) {
                 clusterFly?.onMirrorFailed()
@@ -2632,12 +2645,35 @@ class CarPlayHostActivity : ComponentActivity() {
                     mirror.open(
                         centerSurface,
                         clusterSurface,
-                        onTexture = { texture -> runOnUiThread { onTexture(texture) } },
-                        onFrame = { runOnUiThread { clusterFly?.onMirrorReady() } },
-                        onBroken = { runOnUiThread { onBroken() } },
+                        onTexture = { texture ->
+                            runOnUiThread {
+                                chain.mirror = FlyChainLog.TRUE
+                                onTexture(texture)
+                            }
+                        },
+                        onFrame = {
+                            runOnUiThread {
+                                chain.frame = FlyChainLog.TRUE
+                                emitPicture(chain, FlyChainLog.FRAME, null)
+                                clusterFly?.onMirrorReady()
+                            }
+                        },
+                        onBroken = {
+                            runOnUiThread {
+                                chain.mirror = FlyChainLog.FALSE
+                                emitPicture(chain, FlyChainLog.FAIL, "mirror")
+                                onBroken()
+                            }
+                        },
                     )
                 },
                 closeMirror = { mirror.close() },
+                onStep = { step, ok ->
+                    val value = if (ok) FlyChainLog.TRUE else FlyChainLog.FALSE
+                    if (step == "detach") chain.detach = value else chain.attach = value
+                    DiagLog.i(ClusterFlyLog.TAG, "fly.display $step $value")
+                    if (!ok) emitPicture(chain, FlyChainLog.FAIL, step)
+                },
             )
             flyHandoff = handoff
             flyMirror = mirror
@@ -2659,32 +2695,28 @@ class CarPlayHostActivity : ComponentActivity() {
         try {
             presentation.show()
         } catch (error: RuntimeException) {
+            chain.show = FlyChainLog.FALSE
             DiagLog.i(ClusterFlyLog.TAG, "fly.display show failed ${error.javaClass.simpleName}")
+            emitPicture(chain, FlyChainLog.FAIL, "show")
+            clusterFly?.onMirrorFailed()
             return
         }
+        chain.show = FlyChainLog.TRUE
+        DiagLog.i(ClusterFlyLog.TAG, "fly.display show ok")
         flyClusterPresentation = presentation
     }
 
-    /** The cluster was not in the display list yet; wait for it to be added. */
-    private fun listenForClusterDisplay(manager: DisplayManager) {
-        if (clusterDisplayListener != null) return
-        val listener = object : DisplayManager.DisplayListener {
-            override fun onDisplayAdded(displayId: Int) = attachClusterPresentation()
-            override fun onDisplayRemoved(displayId: Int) = Unit
-            override fun onDisplayChanged(displayId: Int) = Unit
-        }
-        clusterDisplayListener = listener
-        manager.registerDisplayListener(listener, mainHandler)
+    /** One summary line per attempt; the first failure (or the first frame) is the only one. */
+    private fun emitPicture(chain: FlyChain, result: String, at: String?) {
+        if (chain.reported) return
+        chain.reported = true
+        DiagLog.i(ClusterFlyLog.TAG, chain.line(result, at))
     }
 
     /** Takes the cluster window down. Called on the main thread, after a right swipe or a failure. */
     private fun dismissClusterFly() {
         if (flyClosing) return
         flyClosing = true
-        clusterDisplayListener?.let { listener ->
-            (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(listener)
-        }
-        clusterDisplayListener = null
         val presentation = flyClusterPresentation
         // Cleared first: dismissing the window must not come back as a lost display.
         flyClusterPresentation = null

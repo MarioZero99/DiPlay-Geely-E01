@@ -300,6 +300,35 @@ class ClusterFlyControllerTest {
     }
 
     @Test
+    fun `a completed open prints the command chain`() {
+        val controller = controller()
+        openToLeft(controller)
+
+        assertTrue(
+            lines.contains("fly.chain commands result=ok 1900=true 1887=true 1885=true"),
+        )
+    }
+
+    @Test
+    fun `a failed 1900 prints the command chain it stopped at`() {
+        val controller = ClusterFlyController(
+            commands = { command ->
+                sent.add(command)
+                command != FlyCommand.NAV_MODE_ON
+            },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+        )
+        controller.onGesture(Decision.FLY_LEFT)
+
+        assertTrue(
+            lines.contains("fly.chain commands result=fail at=1900 1900=false 1887=skip 1885=skip"),
+        )
+    }
+
+    @Test
     fun `the first mcu has no gap and the next one is one second`() {
         val controller = controller()
         controller.onGesture(Decision.FLY_LEFT)
