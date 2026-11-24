@@ -31,11 +31,11 @@ class ClusterFlySessionTest {
         millisSinceLastClusterCommand = millisSinceLastClusterCommand,
     )
 
-    /** Left at 1000 ms: `FLY_LEFT` is due at 2400 ms, the display at 2500. */
+    /** Left at 1000 ms: `FLY_LEFT` is due at 3000 ms, the display at 3100. */
     private fun pushing(): ClusterFlySession {
         session.onLeft(1_000L, openConditions())
-        session.onWaitTimeout(2_400L)
-        session.onDisplayReady(2_500L)
+        session.onWaitTimeout(3_000L)
+        session.onDisplayReady(3_100L)
         return session
     }
 
@@ -45,7 +45,7 @@ class ClusterFlySessionTest {
         assertEquals(FlyPhase.ARMING, left.phase)
         assertFalse(left.push)
 
-        // The wait does not begin until the fly step itself is due at 2400.
+        // The wait does not begin until the fly step itself is due at 3000.
         assertEquals(FlyPhase.ARMING, session.onWaitTimeout(2_000L).phase)
     }
 
@@ -90,10 +90,10 @@ class ClusterFlySessionTest {
     @Test
     fun `a display under radar is refused`() {
         session.onLeft(1_000L, openConditions())
-        session.onWaitTimeout(2_400L)
-        session.onSafety(openConditions(radar = true), 2_450L)
+        session.onWaitTimeout(3_000L)
+        session.onSafety(openConditions(radar = true), 3_050L)
 
-        val display = session.onDisplayReady(2_500L)
+        val display = session.onDisplayReady(3_100L)
 
         assertFalse(display.push)
         assertEquals(FlyPhase.WAITING_FOR_VIDEO, display.phase)
@@ -139,9 +139,14 @@ class ClusterFlySessionTest {
         assertEquals(FlyPhase.IDLE, effect.phase)
         assertEquals(FlyPhase.IDLE, session.currentPhase)
         assertFalse(effect.push)
-        assertEquals(listOf(FlyCommand.NAV_OFF, FlyCommand.NAV_BACK), effect.steps.map { it.command })
+        assertEquals(
+            listOf(FlyCommand.NAV_MODE_OFF, FlyCommand.NAV_OFF, FlyCommand.NAV_BACK),
+            effect.steps.map { it.command },
+        )
         assertEquals(1_500L, effect.steps[0].sendAtMillis)
-        assertEquals(1_900L, effect.steps[1].sendAtMillis)
+        assertEquals(1_500L, effect.steps[1].sendAtMillis)
+        assertEquals(2_500L, effect.steps[2].sendAtMillis)
+        assertTrue(effect.steps.all { it.retraction })
         assertFalse(effect.steps.any { it.command == FlyCommand.FLY_RIGHT })
 
         assertEquals(FlyPhase.IDLE, session.onWaitTimeout(3_000L).phase)
@@ -154,12 +159,16 @@ class ClusterFlySessionTest {
     @Test
     fun `abort from waiting returns to idle without fly right`() {
         session.onLeft(1_000L, openConditions())
-        session.onWaitTimeout(2_400L)
+        session.onWaitTimeout(3_000L)
         assertEquals(FlyPhase.WAITING_FOR_VIDEO, session.currentPhase)
 
         val effect = session.onAbort(5_400L)
         assertEquals(FlyPhase.IDLE, session.currentPhase)
-        assertEquals(listOf(FlyCommand.NAV_OFF, FlyCommand.NAV_BACK), effect.steps.map { it.command })
+        assertEquals(
+            listOf(FlyCommand.NAV_MODE_OFF, FlyCommand.NAV_OFF, FlyCommand.NAV_BACK),
+            effect.steps.map { it.command },
+        )
+        assertEquals(1_000L, effect.steps[2].sendAtMillis - effect.steps[0].sendAtMillis)
         assertFalse(effect.steps.any { it.command == FlyCommand.FLY_RIGHT })
     }
 
@@ -175,8 +184,8 @@ class ClusterFlySessionTest {
     @Test fun aDisplayWhileWaitingStartsThePicture() {
         val session = ClusterFlySession()
         val now = 10_000L
-        session.onLeft(now, openConditions())
-        val due = now + ClusterFlySequencer.STEP_DELAY_MILLIS + ClusterFlySequencer.MCU_GAP_MILLIS
+        val opened = session.onLeft(now, openConditions())
+        val due = opened.steps.first { it.command == FlyCommand.FLY_LEFT }.sendAtMillis
         assertEquals(FlyPhase.ARMING, session.onWaitTimeout(due - 1).phase)
         assertEquals(FlyPhase.WAITING_FOR_VIDEO, session.onWaitTimeout(due).phase)
         val effect = session.onDisplayReady(due + 1)

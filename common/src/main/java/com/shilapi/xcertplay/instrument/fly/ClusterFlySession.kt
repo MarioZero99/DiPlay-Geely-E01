@@ -175,10 +175,11 @@ class ClusterFlySession(
         closeOwed = false
         return effect(
             steps = listOf(
+                FlyStep(FlyCommand.NAV_MODE_OFF, nowMillis, retraction = true),
                 FlyStep(FlyCommand.NAV_OFF, nowMillis, retraction = true),
                 FlyStep(
                     FlyCommand.NAV_BACK,
-                    nowMillis + ClusterFlySequencer.STEP_DELAY_MILLIS,
+                    nowMillis + ClusterFlySequencer.MCU_GAP_MILLIS,
                     retraction = true,
                 ),
             ),
@@ -208,14 +209,18 @@ class ClusterFlySession(
         val wait = (ClusterFlyGate.MIN_COMMAND_INTERVAL_MILLIS - conditions.millisSinceLastClusterCommand)
             .coerceAtLeast(0L)
         val at = nowMillis + wait
-        val steps = listOf(
-            FlyStep(FlyCommand.FLY_RIGHT, at),
-            FlyStep(FlyCommand.NAV_OFF, at + ClusterFlySequencer.STEP_DELAY_MILLIS),
-            FlyStep(FlyCommand.NAV_BACK, at + ClusterFlySequencer.MCU_GAP_MILLIS),
+        // The close list lives in the sequencer only. Moving the clock to the boundary is what makes
+        // its gate pass; a safety state that is still set comes back as no steps, and the close stays
+        // owed until that state clears.
+        val steps = ClusterFlySequencer.close(
+            at,
+            conditions.copy(
+                millisSinceLastClusterCommand = ClusterFlyGate.MIN_COMMAND_INTERVAL_MILLIS,
+            ),
         )
         phase = FlyPhase.CLOSING
-        closeOwed = false
-        closeNavOffAt = steps.last().sendAtMillis
+        closeOwed = steps.isEmpty()
+        closeNavOffAt = steps.lastOrNull()?.sendAtMillis ?: at
         return effect(steps = steps)
     }
 

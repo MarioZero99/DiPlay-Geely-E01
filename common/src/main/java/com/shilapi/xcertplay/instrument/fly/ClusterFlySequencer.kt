@@ -1,7 +1,16 @@
 package com.shilapi.xcertplay.instrument.fly
 
 /** What gets sent to the head unit's extraservice. The order it is sent in is part of the contract. */
-enum class FlyCommand { NAV_ON, NAV_FRONT, FLY_LEFT, FLY_RIGHT, NAV_OFF, NAV_BACK }
+enum class FlyCommand {
+    NAV_ON,
+    NAV_MODE_ON,
+    NAV_FRONT,
+    FLY_LEFT,
+    FLY_RIGHT,
+    NAV_MODE_OFF,
+    NAV_OFF,
+    NAV_BACK,
+}
 
 /**
  * One command and the moment it is due, counted on the caller's clock.
@@ -20,19 +29,22 @@ data class FlyStep(
 /**
  * Turns a gesture into the commands the factory expects.
  *
- * Opening goes `NAV_ON`, then `NAV_FRONT` (the factory's "navigation is in front" message) 400 ms
- * later, then `FLY_LEFT` another 1000 ms after that. Closing goes `FLY_RIGHT`, then `NAV_OFF` 400 ms
- * later, then `NAV_BACK` 1000 ms after the swipe — clearing the navigation flag before the swipe
- * makes the head unit drop it, and the cluster is left on the map page with nothing behind the
- * layer. No steps are returned when the gate refuses, and the caller may not move its "last
- * command" clock until it has actually sent one.
+ * Opening turns navigation on and puts the factory's navigation mode on at the same instant, then
+ * says navigation is in front one gap later, then flips the page another gap after that. Closing
+ * flips the page back first, then — one gap later — takes the navigation mode and flag off at the
+ * same instant, then says navigation is in the back one more gap later. Clearing the navigation
+ * flag before the swipe makes the head unit drop it, and the cluster is left on the map page with
+ * nothing behind the layer. Every pair of MCU writes is at least [MCU_GAP_MILLIS] apart; the
+ * broadcast shares its instant with the MCU next to it because it is not an MCU write. No steps are
+ * returned when the gate refuses, and the caller may not move its "last command" clock until it has
+ * actually sent one.
  */
 object ClusterFlySequencer {
 
-    /** Enough for the extraservice to notice the first broadcast before the second arrives. */
+    /** Part of the old 400 ms spacing. Kept for callers that still name it; sequences do not use it. */
     const val STEP_DELAY_MILLIS = 400L
 
-    /** Two MCU opcodes, 1887 and 1885, must be at least this far apart. */
+    /** Two MCU writes (1900, 1887, 1885) must be at least this far apart. */
     const val MCU_GAP_MILLIS = 1_000L
 
     fun open(nowMillis: Long, conditions: FlyConditions): List<FlyStep> =
@@ -41,8 +53,9 @@ object ClusterFlySequencer {
         } else {
             listOf(
                 FlyStep(FlyCommand.NAV_ON, nowMillis),
-                FlyStep(FlyCommand.NAV_FRONT, nowMillis + STEP_DELAY_MILLIS),
-                FlyStep(FlyCommand.FLY_LEFT, nowMillis + STEP_DELAY_MILLIS + MCU_GAP_MILLIS),
+                FlyStep(FlyCommand.NAV_MODE_ON, nowMillis),
+                FlyStep(FlyCommand.NAV_FRONT, nowMillis + MCU_GAP_MILLIS),
+                FlyStep(FlyCommand.FLY_LEFT, nowMillis + MCU_GAP_MILLIS * 2),
             )
         }
 
@@ -52,8 +65,9 @@ object ClusterFlySequencer {
         } else {
             listOf(
                 FlyStep(FlyCommand.FLY_RIGHT, nowMillis),
-                FlyStep(FlyCommand.NAV_OFF, nowMillis + STEP_DELAY_MILLIS),
-                FlyStep(FlyCommand.NAV_BACK, nowMillis + MCU_GAP_MILLIS),
+                FlyStep(FlyCommand.NAV_MODE_OFF, nowMillis + MCU_GAP_MILLIS),
+                FlyStep(FlyCommand.NAV_OFF, nowMillis + MCU_GAP_MILLIS),
+                FlyStep(FlyCommand.NAV_BACK, nowMillis + MCU_GAP_MILLIS * 2),
             )
         }
 

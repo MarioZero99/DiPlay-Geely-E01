@@ -35,24 +35,24 @@ class ClusterFlyControllerTest {
         pending.forEach { it.second() }
     }
 
-    /** Gesture at 1000, front at 1400, left at 2400, the display ready at 2500. */
+    /** Gesture at 1000, front at 2000, left at 3000, the display ready at 3100. */
     private fun pushing(): ClusterFlyController {
         val controller = controller()
         controller.onGesture(Decision.FLY_LEFT)
-        now = 2_400L
+        now = 3_000L
         runScheduled()
-        now = 2_500L
+        now = 3_100L
         controller.onMirrorReady()
         return controller
     }
 
-    /** Gesture at 1000, front at 1400, left at 2400: the session is waiting for a picture. */
+    /** Gesture at 1000, front at 2000, left at 3000: the session is waiting for a picture. */
     private fun waiting(): ClusterFlyController {
         val controller = controller()
         controller.onGesture(Decision.FLY_LEFT)
-        now = 1_400L
+        now = 2_000L
         scheduled.removeAt(0).second()
-        now = 2_400L
+        now = 3_000L
         scheduled.removeAt(0).second()
         return controller
     }
@@ -62,7 +62,7 @@ class ClusterFlyControllerTest {
         controller.onMirrorStarted()
         controller.onMirrorFailed()
         // The close is one second after FLY_LEFT; the factory would refuse it sooner.
-        now = 3_400L
+        now = 4_000L
         scheduled.last { it.first == 1_000L }.second()
         assertTrue(sent.contains(FlyCommand.FLY_RIGHT))
     }
@@ -70,7 +70,7 @@ class ClusterFlyControllerTest {
     @Test fun fiveSecondsWithoutAFrameCoversTheLayer() {
         val controller = waiting()
         controller.onMirrorStarted()
-        now = 7_400L
+        now = 8_000L
         scheduled.last { it.first == 5_000L }.second()
         assertTrue(sent.contains(FlyCommand.FLY_RIGHT))
         assertEquals(FlyPhase.CLOSING, controller.phase)
@@ -85,9 +85,9 @@ class ClusterFlyControllerTest {
             postDelayed = { delay, action -> scheduled.add(delay to action) },
         )
         controller.onGesture(Decision.FLY_LEFT)
-        now = 1_400L
+        now = 2_000L
         scheduled.removeAt(0).second()
-        now = 2_400L
+        now = 3_000L
         scheduled.removeAt(0).second()
         controller.onMirrorStarted()
         controller.onMirrorReady()
@@ -100,20 +100,23 @@ class ClusterFlyControllerTest {
     fun `left sends navigation, then front, then the fly`() {
         controller().onGesture(Decision.FLY_LEFT)
 
-        assertEquals(listOf(FlyCommand.NAV_ON), sent)
-        assertEquals(listOf(400L, 1_400L), scheduled.map { it.first })
+        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_MODE_ON), sent)
+        assertEquals(listOf(1_000L, 2_000L), scheduled.map { it.first })
         assertTrue(lines.contains("fly.command NAV_ON"))
         assertFalse(lines.contains("fly.command NAV_FRONT"))
         assertFalse(lines.contains("fly.command FLY_LEFT"))
 
-        now = 1_400L
+        now = 2_000L
         scheduled[0].second()
-        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT), sent)
+        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_MODE_ON, FlyCommand.NAV_FRONT), sent)
         assertFalse(lines.contains("fly.command FLY_LEFT"))
 
-        now = 2_400L
+        now = 3_000L
         scheduled[1].second()
-        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT), sent)
+        assertEquals(
+            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_MODE_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT),
+            sent,
+        )
     }
 
     @Test fun theLeftStepOpensTheLayerAndStillWaitsForTheSurface() {
@@ -130,7 +133,7 @@ class ClusterFlyControllerTest {
             onLayerOpened = { order.add("opened") },
         )
         controller.onGesture(Decision.FLY_LEFT)
-        now = 2_400L
+        now = 3_000L
         runScheduled()
         assertEquals(FlyPhase.WAITING_FOR_VIDEO, controller.phase)
         assertTrue(order.indexOf("opened") < order.indexOf("schedule 3000"))
@@ -165,12 +168,18 @@ class ClusterFlyControllerTest {
     @Test
     fun `car play ending closes the layer it opened`() {
         val controller = pushing()
-        now = 3_400L
+        now = 4_100L
 
         controller.onCarPlayEnded()
 
         assertEquals(
-            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT, FlyCommand.FLY_RIGHT),
+            listOf(
+                FlyCommand.NAV_ON,
+                FlyCommand.NAV_MODE_ON,
+                FlyCommand.NAV_FRONT,
+                FlyCommand.FLY_LEFT,
+                FlyCommand.FLY_RIGHT,
+            ),
             sent,
         )
         runScheduled()
@@ -190,9 +199,9 @@ class ClusterFlyControllerTest {
 
     private fun openToLeft(controller: ClusterFlyController) {
         controller.onGesture(Decision.FLY_LEFT)
-        now = 1_400L
+        now = 2_000L
         scheduled.removeAt(0).second()
-        now = 2_400L
+        now = 3_000L
         scheduled.removeAt(0).second()
     }
 
@@ -202,28 +211,38 @@ class ClusterFlyControllerTest {
         openToLeft(controller)
 
         assertEquals(
-            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT, FlyCommand.NAV_OFF),
+            listOf(
+                FlyCommand.NAV_ON,
+                FlyCommand.NAV_MODE_ON,
+                FlyCommand.NAV_FRONT,
+                FlyCommand.FLY_LEFT,
+                FlyCommand.NAV_MODE_OFF,
+                FlyCommand.NAV_OFF,
+            ),
             sent,
         )
-        assertEquals(listOf(400L), scheduled.map { it.first })
+        assertEquals(listOf(1_000L), scheduled.map { it.first })
         assertFalse(lines.contains("fly.phase WAITING_FOR_VIDEO"))
         assertTrue(lines.contains("fly.abort 1885 left false"))
         assertEquals(listOf(ClusterFlyWarning.pageUnchanged()), warnings)
 
-        now = 2_400L
+        now = 3_000L
         controller.onGesture(Decision.FLY_LEFT)
         assertEquals(listOf("刚才那次还没完成，请稍等"), warnings.drop(1))
-        assertFalse(sent.drop(4).contains(FlyCommand.NAV_ON))
+        assertFalse(sent.drop(6).contains(FlyCommand.NAV_ON))
 
-        // The abort's own front message goes out at 2800. It is a withdrawal, not a new command,
-        // so the one-second interval still counts from the failed 1885 at 2400.
-        now = 2_800L
+        // The abort's own front message goes out at 4000. It is a withdrawal, not a new command,
+        // so the one-second interval still counts from the failed 1885 at 3000.
+        now = 4_000L
         scheduled.removeAt(0).second()
         assertEquals(FlyCommand.NAV_BACK, sent.last())
 
-        now = 3_400L
+        now = 4_000L
         controller.onGesture(Decision.FLY_LEFT)
-        assertEquals(FlyCommand.NAV_ON, sent.last())
+        assertEquals(
+            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_MODE_ON),
+            sent.takeLast(2),
+        )
     }
 
     /**
@@ -244,14 +263,17 @@ class ClusterFlyControllerTest {
             postDelayed = { delay, action -> scheduled.add(delay to action) },
         )
         controller.onGesture(Decision.FLY_LEFT)
-        now = 1_400L
+        now = 2_000L
         scheduled.removeAt(0).second()
 
-        now = 2_400L
+        now = 3_000L
         controller.onMirrorReady()
         runScheduled()
 
-        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT), sent)
+        assertEquals(
+            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_MODE_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT),
+            sent,
+        )
         assertFalse(warnings.contains(ClusterFlyWarning.pageUnchanged()))
     }
 
@@ -276,11 +298,18 @@ class ClusterFlyControllerTest {
         assertTrue(lines.contains("fly.phase WAITING_FOR_VIDEO"))
         assertEquals(listOf(3_000L), scheduled.map { it.first })
 
-        now = 5_400L
+        now = 6_000L
         scheduled.removeAt(0).second()
 
         assertEquals(
-            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_FRONT, FlyCommand.FLY_LEFT, FlyCommand.NAV_OFF),
+            listOf(
+                FlyCommand.NAV_ON,
+                FlyCommand.NAV_MODE_ON,
+                FlyCommand.NAV_FRONT,
+                FlyCommand.FLY_LEFT,
+                FlyCommand.NAV_MODE_OFF,
+                FlyCommand.NAV_OFF,
+            ),
             sent,
         )
         assertFalse(sent.contains(FlyCommand.FLY_RIGHT))
@@ -300,9 +329,9 @@ class ClusterFlyControllerTest {
             onGiveUp = { giveUps.add(1) },
         )
         controller.onGesture(Decision.FLY_LEFT)
-        now = 2_400L
+        now = 3_000L
         runScheduled()
-        now = 2_500L
+        now = 3_100L
         controller.onMirrorReady()
 
         controller.onCarPlayEnded()
@@ -322,9 +351,9 @@ class ClusterFlyControllerTest {
             onGiveUp = { giveUps.add(1) },
         )
         controller.onGesture(Decision.FLY_LEFT)
-        now = 2_400L
+        now = 3_000L
         runScheduled()
-        now = 2_500L
+        now = 3_100L
         controller.onMirrorReady()
 
         controller.onClusterDisplayLost()
@@ -346,7 +375,7 @@ class ClusterFlyControllerTest {
     fun `a cluster display cancels the silent timeout`() {
         val controller = controller()
         openToLeft(controller)
-        now = 2_500L
+        now = 3_100L
         controller.onMirrorReady()
         runScheduled()
 

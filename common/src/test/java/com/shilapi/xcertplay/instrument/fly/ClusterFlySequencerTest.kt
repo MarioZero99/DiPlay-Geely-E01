@@ -33,12 +33,17 @@ class ClusterFlySequencerTest {
         assertEquals(
             listOf(
                 FlyStep(FlyCommand.NAV_ON, 1_000L),
-                FlyStep(FlyCommand.NAV_FRONT, 1_400L),
-                FlyStep(FlyCommand.FLY_LEFT, 2_400L),
+                FlyStep(FlyCommand.NAV_MODE_ON, 1_000L),
+                FlyStep(FlyCommand.NAV_FRONT, 2_000L),
+                FlyStep(FlyCommand.FLY_LEFT, 3_000L),
             ),
             steps,
         )
+        // The broadcast and the 1900 share the opening instant; the two MCUs that follow are each
+        // one full gap after the previous one.
+        assertEquals(steps[0].sendAtMillis, steps[1].sendAtMillis)
         assertEquals(1_000L, steps[2].sendAtMillis - steps[1].sendAtMillis)
+        assertEquals(1_000L, steps[3].sendAtMillis - steps[2].sendAtMillis)
     }
 
     @Test
@@ -47,12 +52,15 @@ class ClusterFlySequencerTest {
         assertEquals(
             listOf(
                 FlyStep(FlyCommand.FLY_RIGHT, 5_000L),
-                FlyStep(FlyCommand.NAV_OFF, 5_400L),
-                FlyStep(FlyCommand.NAV_BACK, 6_000L),
+                FlyStep(FlyCommand.NAV_MODE_OFF, 6_000L),
+                FlyStep(FlyCommand.NAV_OFF, 6_000L),
+                FlyStep(FlyCommand.NAV_BACK, 7_000L),
             ),
             steps,
         )
+        assertEquals(steps[1].sendAtMillis, steps[2].sendAtMillis)
         assertEquals(1_000L, steps[2].sendAtMillis - steps[0].sendAtMillis)
+        assertEquals(1_000L, steps[3].sendAtMillis - steps[2].sendAtMillis)
     }
 
     @Test

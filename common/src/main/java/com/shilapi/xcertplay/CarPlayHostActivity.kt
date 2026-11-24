@@ -2731,6 +2731,13 @@ class CarPlayHostActivity : ComponentActivity() {
      * True means the command got out. For 1885 that only means the binder accepted the write.
      */
     private fun sendFlyCommand(command: FlyCommand): Boolean = when (command) {
+        FlyCommand.NAV_MODE_ON, FlyCommand.NAV_MODE_OFF -> {
+            val on = command == FlyCommand.NAV_MODE_ON
+            val ok = ClusterFlyMcu.send1900(on)
+            DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.mcu1900(on, ok))
+            ok
+        }
+
         FlyCommand.NAV_FRONT, FlyCommand.NAV_BACK -> {
             val front = command == FlyCommand.NAV_FRONT
             val ok = ClusterFlyMcu.send(front)
