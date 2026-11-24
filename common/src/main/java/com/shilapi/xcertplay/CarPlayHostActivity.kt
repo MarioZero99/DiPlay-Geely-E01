@@ -2752,6 +2752,9 @@ class CarPlayHostActivity : ComponentActivity() {
                     .putExtra(ClusterFlySequencer.EXTRA_KEY_TYPE, ClusterFlySequencer.KEY_TYPE_NAV_STATE)
                     .putExtra(ClusterFlySequencer.EXTRA_STATE, ClusterFlySequencer.STATE_NAV_ON),
             )
+            DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.broadcast(true))
+            // The main log is wiped in about ten seconds; pull Extra's lines while they are here.
+            FlyTrace.capture("open")
             true
         }
 
@@ -2762,6 +2765,7 @@ class CarPlayHostActivity : ComponentActivity() {
                     .putExtra(ClusterFlySequencer.EXTRA_KEY_TYPE, ClusterFlySequencer.KEY_TYPE_NAV_STATE)
                     .putExtra(ClusterFlySequencer.EXTRA_STATE, ClusterFlySequencer.STATE_NAV_OFF),
             )
+            DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.broadcast(false))
             true
         }
 
@@ -2770,8 +2774,8 @@ class CarPlayHostActivity : ComponentActivity() {
             val ok = ClusterFlyMcu.send1885(open)
             DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.mcu1885(open, ok))
             // The main log is wiped in about ten seconds, and the uploaded report only keeps this
-            // process. Pull the navigation-indicator lines now, while they are still in logcat.
-            if (open) FlyTrace.captureAfterGesture()
+            // process. Pull Extra's lines now, while they are still here — only after a real write.
+            if (open && ok) FlyTrace.capture("left")
             ok
         }
     }

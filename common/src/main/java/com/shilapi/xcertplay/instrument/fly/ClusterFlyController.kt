@@ -49,6 +49,9 @@ class ClusterFlyController(
     /** Before any command has been sent. Not `0`: uptime can legitimately start there. */
     private var lastCommandAt = NO_TIME
 
+    /** When the last MCU write actually went out. The gap line measures these, not broadcasts. */
+    private var lastMcuAt = NO_TIME
+
     private var radar = false
     private var ecall = false
 
@@ -248,10 +251,23 @@ class ClusterFlyController(
 
     private fun sendStep(step: FlyStep) {
         log(ClusterFlyLog.command(step.command))
+        val now = clock()
+        // The gap line is written before the send so it reflects the interval the factory sees. A
+        // broadcast is not an MCU write and shares an instant with the 1900 next to it.
+        if (isMcu(step.command)) {
+            log(ClusterFlyLog.mcuGap(if (lastMcuAt == NO_TIME) null else now - lastMcuAt))
+        }
         val ok = commands.send(step.command)
         // A withdrawal does not restart the interval: the driver waits one second from the failure,
         // not one second from the message that takes the failure back.
-        if (!step.retraction) lastCommandAt = clock()
+        if (isMcu(step.command) && !step.retraction) lastMcuAt = now
+        if (!step.retraction) lastCommandAt = now
+        // The mode write never reached RpcService. The front and the page have no meaning without
+        // it, so they are withdrawn instead of being sent to a factory that ignores them.
+        if (step.command == FlyCommand.NAV_MODE_ON && !ok) {
+            abortSession("1900 on false")
+            return
+        }
         if (step.command != FlyCommand.FLY_LEFT) return
         if (!ok) {
             // The write never reached RpcService. Waiting three seconds for a page change nobody
@@ -299,6 +315,12 @@ class ClusterFlyController(
         log(ClusterFlyLog.abort(reason))
         showWarning(ClusterFlyWarning.pageUnchanged())
         handle(effect)
+    }
+
+    /** The three MCU opcodes plus the close side; only the two broadcasts are not. */
+    private fun isMcu(command: FlyCommand): Boolean = when (command) {
+        FlyCommand.NAV_ON, FlyCommand.NAV_OFF -> false
+        else -> true
     }
 
     private fun safetyChanged(block: FlyBlock?) {

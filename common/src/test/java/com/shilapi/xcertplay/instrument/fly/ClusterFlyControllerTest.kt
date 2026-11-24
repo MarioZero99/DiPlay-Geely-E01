@@ -245,6 +245,71 @@ class ClusterFlyControllerTest {
         )
     }
 
+    @Test
+    fun `a failed 1900 aborts and drops the front and the fly`() {
+        val controller = ClusterFlyController(
+            commands = { command ->
+                sent.add(command)
+                command != FlyCommand.NAV_MODE_ON
+            },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+        )
+
+        controller.onGesture(Decision.FLY_LEFT)
+
+        // The 1900 write never reached RpcService: the mode, the flag and the front are withdrawn.
+        assertEquals(
+            listOf(FlyCommand.NAV_ON, FlyCommand.NAV_MODE_ON, FlyCommand.NAV_MODE_OFF, FlyCommand.NAV_OFF),
+            sent,
+        )
+        assertTrue(lines.contains("fly.abort 1900 on false"))
+
+        // The queued 1887 and 1885 belong to the old generation and must not go out.
+        now = 3_000L
+        runScheduled()
+
+        assertFalse(sent.contains(FlyCommand.NAV_FRONT))
+        assertFalse(sent.contains(FlyCommand.FLY_LEFT))
+        assertTrue(sent.contains(FlyCommand.NAV_BACK))
+    }
+
+    @Test
+    fun `a failed 1887 still sends the fly`() {
+        val controller = ClusterFlyController(
+            commands = { command ->
+                sent.add(command)
+                command != FlyCommand.NAV_FRONT
+            },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+        )
+        controller.onGesture(Decision.FLY_LEFT)
+
+        now = 2_000L
+        scheduled[0].second()
+        now = 3_000L
+        scheduled[1].second()
+
+        assertTrue(sent.contains(FlyCommand.FLY_LEFT))
+        assertFalse(sent.contains(FlyCommand.NAV_MODE_OFF))
+    }
+
+    @Test
+    fun `the first mcu has no gap and the next one is one second`() {
+        val controller = controller()
+        controller.onGesture(Decision.FLY_LEFT)
+        assertTrue(lines.contains("fly.mcu gap none"))
+
+        now = 2_000L
+        scheduled[0].second()
+        assertTrue(lines.contains("fly.mcu gap 1000"))
+    }
+
     /**
      * The cluster's display came up at the same millisecond the left step was due, so the session
      * is already pushing by the time the failed 1885 is known. There is nothing to take back: the

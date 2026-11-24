@@ -45,9 +45,6 @@ internal object FlyTrace {
         }, "fly-trace").apply { isDaemon = true }.start()
     }
 
-    /** Captures under the old name until the Activity moves to [capture]. */
-    fun captureAfterGesture() = capture("gesture")
-
     internal fun select(body: String): List<String> {
         return body.lineSequence()
             .map { it.trim() }
