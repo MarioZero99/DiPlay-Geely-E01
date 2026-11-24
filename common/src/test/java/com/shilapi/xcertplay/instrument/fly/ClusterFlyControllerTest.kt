@@ -329,6 +329,45 @@ class ClusterFlyControllerTest {
     }
 
     @Test
+    fun `a cluster that never brings a surface reports the chain at surface`() {
+        val hops = mutableListOf<String>()
+        val controller = ClusterFlyController(
+            commands = { sent.add(it) },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            onPictureFailed = { hops.add(it) },
+        )
+        openToLeft(controller)
+
+        now = 6_000L
+        scheduled.removeAt(0).second()
+
+        assertEquals(listOf("surface"), hops)
+    }
+
+    @Test
+    fun `a mirror with no frame reports the chain at frame`() {
+        val hops = mutableListOf<String>()
+        val controller = ClusterFlyController(
+            commands = { sent.add(it) },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            onPictureFailed = { hops.add(it) },
+        )
+        openToLeft(controller)
+        controller.onMirrorStarted()
+
+        now = 8_000L
+        scheduled.last { it.first == 5_000L }.second()
+
+        assertEquals(listOf("frame"), hops)
+    }
+
+    @Test
     fun `the first mcu has no gap and the next one is one second`() {
         val controller = controller()
         controller.onGesture(Decision.FLY_LEFT)

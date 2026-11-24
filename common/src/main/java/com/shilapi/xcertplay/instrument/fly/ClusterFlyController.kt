@@ -35,6 +35,12 @@ class ClusterFlyController(
     private val onMain: (() -> Unit) -> Unit = { action -> action() },
     /** The Activity takes its cluster window down. Called once per failed picture. */
     private val onGiveUp: () -> Unit = {},
+    /**
+     * The picture chain stopped at a hop the controller owns: `surface` when the cluster never
+     * brings a surface, `frame` when the mirror never puts a buffer on it. The Activity writes the
+     * summary line; the callbacks it handles itself are not reported here.
+     */
+    private val onPictureFailed: (String) -> Unit = {},
 ) {
 
     private val session = ClusterFlySession(log)
@@ -106,6 +112,7 @@ class ClusterFlyController(
                 synchronized(lock) {
                     if (videoTimeoutGeneration != expected) return@synchronized
                     if (session.currentPhase != FlyPhase.WAITING_FOR_VIDEO) return@synchronized
+                    onPictureFailed("frame")
                     onMirrorFailed()
                 }
             }
@@ -347,6 +354,7 @@ class ClusterFlyController(
             synchronized(lock) {
                 if (videoTimeoutGeneration != expected) return@synchronized
                 if (session.currentPhase != FlyPhase.WAITING_FOR_VIDEO) return@synchronized
+                onPictureFailed("surface")
                 abortSession("cluster silent")
             }
         }

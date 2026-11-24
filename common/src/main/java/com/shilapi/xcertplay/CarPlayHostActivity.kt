@@ -185,6 +185,8 @@ class CarPlayHostActivity : ComponentActivity() {
     /** The window handoff and the texture mirror for the fly in progress, if any. */
     private var flyHandoff: FlyOutputHandoff? = null
     private var flyMirror: FlyTextureMirror? = null
+    /** The picture chain of the attach in progress, for the controller's timeout reports. */
+    private var flyChain: FlyChain? = null
     /** True between the start of a teardown and the moment the cluster surface is gone. */
     private var flyClosing = false
     /** A centre Surface that arrived while a fly was live; handed to the decoder after the teardown. */
@@ -2575,6 +2577,7 @@ class CarPlayHostActivity : ComponentActivity() {
             onLayerOpened = { attachClusterPresentation() },
             onMain = { action -> runOnUiThread(action) },
             onGiveUp = { dismissClusterFly() },
+            onPictureFailed = { at -> reportPictureFailed(at) },
         ).also { clusterFly = it }
 
     /**
@@ -2601,6 +2604,7 @@ class CarPlayHostActivity : ComponentActivity() {
         val chosen = chooseClusterDisplay(infos)
         displayLines(infos, chosen).forEach { DiagLog.i(ClusterFlyLog.TAG, it) }
         val chain = FlyChain()
+        flyChain = chain
         if (chosen == null) {
             // 1885 already lifted the layer, but there is no display to draw on: cover it again.
             chain.display = FlyChainLog.NONE
@@ -2711,6 +2715,13 @@ class CarPlayHostActivity : ComponentActivity() {
         if (chain.reported) return
         chain.reported = true
         DiagLog.i(ClusterFlyLog.TAG, chain.line(result, at))
+    }
+
+    /** The controller's two timeouts: the cluster never brought a surface, or never got a frame. */
+    private fun reportPictureFailed(at: String) {
+        val chain = flyChain ?: return
+        if (at == "frame") chain.frame = FlyChainLog.FALSE
+        emitPicture(chain, FlyChainLog.FAIL, at)
     }
 
     /** Takes the cluster window down. Called on the main thread, after a right swipe or a failure. */

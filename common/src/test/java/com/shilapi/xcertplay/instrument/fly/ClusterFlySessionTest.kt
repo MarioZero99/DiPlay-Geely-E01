@@ -116,6 +116,25 @@ class ClusterFlySessionTest {
      * Radar stops the picture at once, but the layer is still up. When the warning clears and the
      * interval allows it, the close goes out instead of being forgotten.
      */
+    /**
+     * A right swipe inside the interval while a safety state is also set: the close cannot go out
+     * now, and the gate's [FlyBlock.TOO_SOON] answer must not be mistaken for a dropped close.
+     */
+    @Test
+    fun `a too soon close under radar stays owed until it clears`() {
+        pushing()
+
+        val right = session.onRight(3_200L, openConditions(radar = true, millisSinceLastClusterCommand = 200))
+        assertEquals(FlyPhase.CLOSING, right.phase)
+        assertTrue(right.steps.isEmpty())
+        assertFalse(right.push)
+
+        val cleared = session.onSafety(openConditions(millisSinceLastClusterCommand = 5_000), 6_000L)
+
+        assertEquals(FlyPhase.CLOSING, cleared.phase)
+        assertEquals(FlyCommand.FLY_RIGHT, cleared.steps.first().command)
+    }
+
     @Test
     fun `radar during playback closes once it clears`() {
         pushing()
