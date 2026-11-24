@@ -183,7 +183,19 @@ class ClusterFlyControllerTest {
             sent,
         )
         runScheduled()
-        assertEquals(FlyCommand.NAV_BACK, sent.last())
+        assertEquals(
+            listOf(
+                FlyCommand.NAV_ON,
+                FlyCommand.NAV_MODE_ON,
+                FlyCommand.NAV_FRONT,
+                FlyCommand.FLY_LEFT,
+                FlyCommand.FLY_RIGHT,
+                FlyCommand.NAV_MODE_OFF,
+                FlyCommand.NAV_OFF,
+                FlyCommand.NAV_BACK,
+            ),
+            sent,
+        )
     }
 
     private fun failedLeft(): ClusterFlyController = ClusterFlyController(
@@ -448,6 +460,13 @@ class ClusterFlyControllerTest {
         assertFalse(sent.contains(FlyCommand.FLY_RIGHT))
         assertEquals(listOf(ClusterFlyWarning.pageUnchanged()), warnings)
         assertTrue(lines.contains("fly.abort cluster silent"))
+
+        // The withdrawal's gap is between writes including withdrawals: 1000 ms from the
+        // retraction mode-off that went out at 6000, not 4000 from the failed FLY_LEFT.
+        now = 7_000L
+        runScheduled()
+        assertEquals(FlyCommand.NAV_BACK, sent.last())
+        assertEquals("fly.mcu gap 1000", lines.last { it.startsWith("fly.mcu gap") })
     }
 
     @Test

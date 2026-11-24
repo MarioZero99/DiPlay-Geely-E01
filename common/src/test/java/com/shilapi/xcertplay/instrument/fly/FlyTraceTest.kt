@@ -8,6 +8,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+// API 29 only so Robolectric's cached android-all jar can run `android.util.Log`; this class
+// exercises no platform behaviour that the product's API 22 would answer differently.
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29], manifest = Config.NONE)
 class FlyTraceTest {

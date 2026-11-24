@@ -41,9 +41,6 @@ data class FlyStep(
  */
 object ClusterFlySequencer {
 
-    /** Part of the old 400 ms spacing. Kept for callers that still name it; sequences do not use it. */
-    const val STEP_DELAY_MILLIS = 400L
-
     /** Two MCU writes (1900, 1887, 1885) must be at least this far apart. */
     const val MCU_GAP_MILLIS = 1_000L
 

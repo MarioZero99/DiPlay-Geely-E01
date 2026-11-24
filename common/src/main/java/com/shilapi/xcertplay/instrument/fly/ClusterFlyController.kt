@@ -270,9 +270,10 @@ class ClusterFlyController(
             log(ClusterFlyLog.mcuGap(if (lastMcuAt == NO_TIME) null else now - lastMcuAt))
         }
         val ok = commands.send(step.command)
-        // A withdrawal does not restart the interval: the driver waits one second from the failure,
-        // not one second from the message that takes the failure back.
-        if (isMcu(step.command) && !step.retraction) lastMcuAt = now
+        // A withdrawal does not restart the gate's interval: the driver waits one second from the
+        // failure, not one second from the message that takes the failure back. The gap line is
+        // still measured between writes, withdrawals included, so the abort tail reads correctly.
+        if (isMcu(step.command)) lastMcuAt = now
         if (!step.retraction) lastCommandAt = now
         // The three MCU results, printed once as one line when the last one is known.
         if (!step.retraction) recordChain(step.command, ok)
