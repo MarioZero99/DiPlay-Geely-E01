@@ -108,4 +108,46 @@ class FlyTraceTest {
             FlyTrace.select(body),
         )
     }
+
+    @Test fun anOldSetInfoDoesNotCountAsThisSwipe() {
+        val before = """
+            D Extra: ThreeFingerReceiver isNavigation = true
+            D Extra: ThreeFingerReceiver left
+            D Extra: ThreeFingerReceiver setInfo = [74, 1, 0, 0]
+        """.trimIndent()
+        assertEquals(PageProof.MISSING, FlyTrace.witness(before, before).proof)
+    }
+
+    @Test fun aNewLeftAndSetInfoOpens() {
+        val before = "D Extra: ThreeFingerReceiver setInfo = [74, 1, 0, 0]"
+        val after = before + """
+
+            D Extra: ThreeFingerReceiver isNavigation = true
+            D Extra: ThreeFingerReceiver left
+            D Extra: ThreeFingerReceiver setInfo = [74, 1, 0, 0, 0]
+        """.trimIndent()
+        assertEquals(PageProof.OPENED, FlyTrace.witness(before, after).proof)
+    }
+
+    @Test fun navigationFalseIsDenied() {
+        val after = "D Extra: ThreeFingerReceiver isNavigation = false"
+        assertEquals(PageProof.DENIED, FlyTrace.witness("", after).proof)
+    }
+
+    @Test fun navigationTrueWithoutLeftIsDropped() {
+        val after = """
+            D Extra: ThreeFingerReceiver isNavigation = true
+            D Extra: Settings.Global.getIn 恢复出厂设置值 = 1,isRadar = false, isEcall = false, isReversing = true
+        """.trimIndent()
+        assertEquals(PageProof.DROPPED, FlyTrace.witness("", after).proof)
+    }
+
+    @Test fun aNewRightAndSetInfoCloses() {
+        val after = """
+            D Extra: ThreeFingerReceiver isNavigation = true
+            D Extra: ThreeFingerReceiver right
+            D Extra: ThreeFingerReceiver setInfo = [74, 2, 0, 0]
+        """.trimIndent()
+        assertEquals(PageProof.CLOSED, FlyTrace.witness("", after).proof)
+    }
 }

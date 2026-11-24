@@ -3,6 +3,11 @@ package com.shilapi.xcertplay.instrument.fly
 import com.shilapi.xcertplay.DiagLog
 import com.shilapi.xcertplay.system.RootShellBridge
 
+/** What Extra's log says about the page this swipe asked for. */
+enum class PageProof { OPENED, CLOSED, DENIED, DROPPED, MISSING, UNCONFIRMED }
+
+data class PageWitness(val proof: PageProof)
+
 /**
  * 1885 出没出去，只有 Extraservice 的 logcat 知道。
  * 车机主缓冲大约 11 秒就被冲掉，诊断报告又只收本进程的行，所以在三指广播发出后马上抽一次。
@@ -28,21 +33,82 @@ internal object FlyTrace {
         "threefinger" to "ThreeFingerReceiver",
     )
 
-    /** [which] says only which capture this was (`open` after the broadcast, `left` after 1885). */
-    fun capture(which: String) {
+    /** The page-proof tokens. `setInfo` prints the whole 25-byte array, so only its prefix is fixed. */
+    private const val NAVIGATION = "ThreeFingerReceiver isNavigation = "
+    private const val LEFT = "ThreeFingerReceiver left"
+    private const val RIGHT = "ThreeFingerReceiver right"
+    private const val OPEN_INFO = "setInfo = [74, 1,"
+    private const val CLOSE_INFO = "setInfo = [74, 2,"
+
+    /**
+     * Compares two dumps of the same logcat. Only lines that grew count: an old `setInfo` still in
+     * the ring buffer belongs to an earlier swipe.
+     */
+    fun witness(before: String, after: String): PageWitness {
+        val navigationGrew = count(after, NAVIGATION) > count(before, NAVIGATION)
+        val leftGrew = count(after, LEFT) > count(before, LEFT) &&
+            count(after, OPEN_INFO) > count(before, OPEN_INFO)
+        val rightGrew = count(after, RIGHT) > count(before, RIGHT) &&
+            count(after, CLOSE_INFO) > count(before, CLOSE_INFO)
+        val proof = when {
+            leftGrew -> PageProof.OPENED
+            rightGrew -> PageProof.CLOSED
+            navigationGrew && lastNavigation(after) == false -> PageProof.DENIED
+            navigationGrew -> PageProof.DROPPED
+            else -> PageProof.MISSING
+        }
+        return PageWitness(proof)
+    }
+
+    private fun count(body: String, token: String): Int =
+        if (token.isEmpty()) 0 else body.split(token).size - 1
+
+    private fun lastNavigation(body: String): Boolean? {
+        val at = body.lastIndexOf(NAVIGATION)
+        if (at < 0) return null
+        return body.startsWith("true", at + NAVIGATION.length)
+    }
+
+    /** One dump on the calling thread. `null` means the dump failed, not that the log was empty. */
+    fun snapshot(): String? {
+        val override = dumpOverrideForTest
+        if (override != null) return override().second
+        if (!RootShellBridge.isAvailable()) return null
+        val dump = dumpFromDevice()
+        return if (dump.first == 0) dump.second else null
+    }
+
+    /**
+     * Logs the dump as before, then reports what it says about the page.
+     *
+     * [before] is the dump taken just before the gesture; `null` means that dump failed, and the
+     * page is reported `UNCONFIRMED` without comparing an empty string to [after].
+     */
+    fun capture(which: String, before: String? = "", onWitness: (PageWitness) -> Unit = {}) {
         val override = dumpOverrideForTest
         if (override != null) {
-            record(which, override())
+            val dump = override()
+            record(which, dump)
+            onWitness(if (before == null) PageWitness(PageProof.UNCONFIRMED) else witnessOf(dump, before))
             return
         }
         Thread({
             try {
                 Thread.sleep(CAPTURE_DELAY_MILLIS)
             } catch (_: InterruptedException) {
+                onWitness(PageWitness(PageProof.UNCONFIRMED))
                 return@Thread
             }
-            record(which, dumpFromDevice())
+            val dump = dumpFromDevice()
+            record(which, dump)
+            onWitness(if (before == null) PageWitness(PageProof.UNCONFIRMED) else witnessOf(dump, before))
         }, "fly-trace").apply { isDaemon = true }.start()
+    }
+
+    private fun witnessOf(dump: Pair<Int?, String>, before: String): PageWitness {
+        val rc = dump.first
+        if (rc == null || rc != 0) return PageWitness(PageProof.UNCONFIRMED)
+        return witness(before, dump.second)
     }
 
     internal fun select(body: String): List<String> {
