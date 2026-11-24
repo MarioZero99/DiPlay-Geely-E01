@@ -2578,6 +2578,15 @@ class CarPlayHostActivity : ComponentActivity() {
             onMain = { action -> runOnUiThread(action) },
             onGiveUp = { dismissClusterFly() },
             onPictureFailed = { at -> reportPictureFailed(at) },
+            confirmPage = { command, report ->
+                val open = command == FlyCommand.FLY_LEFT
+                // The broadcast was just sent; Extra's receiver runs later, so the ring buffer is
+                // still this swipe's "before".
+                val before = FlyTrace.snapshot()
+                FlyTrace.capture(if (open) "left" else "right", before) { witness ->
+                    runOnUiThread { report(witness) }
+                }
+            },
         ).also { clusterFly = it }
 
     /**
@@ -2765,13 +2774,14 @@ class CarPlayHostActivity : ComponentActivity() {
     /**
      * The factory commands, in the order the sequencer asks for them.
      *
-     * The navigation broadcast still names AutoNaviReceiver: it sets the factory's navigation flag
-     * on EXTRA_STATE 8. Opcodes 1887 and 1885 do not travel by broadcast; both are written straight
-     * to RpcService, the same parcel the factory's own proxy writes. The three-finger broadcast that
-     * used to reach ThreeFingerReceiver never produced a single line on this head unit, so 1885 is
-     * sent here and the receiver's answer is no longer waited for.
+     * The navigation broadcast names AutoNaviReceiver: it sets the factory's navigation flag on
+     * EXTRA_STATE 8. Opcodes 1900 and 1887 are written straight to RpcService, the same parcel the
+     * factory's own proxy writes. The page flip (1885) is not written here: only Extra's
+     * ThreeFingerReceiver may lift the map page, so this names it with a three-finger broadcast and
+     * waits for its log to say the write happened.
      *
-     * True means the command got out. For 1885 that only means the binder accepted the write.
+     * True means the command got out. For the page broadcast that only means it was handed to the
+     * system; the page proof in Extra's log is what decides whether the picture attaches.
      */
     private fun sendFlyCommand(command: FlyCommand): Boolean = when (command) {
         FlyCommand.NAV_MODE_ON, FlyCommand.NAV_MODE_OFF -> {
@@ -2814,12 +2824,25 @@ class CarPlayHostActivity : ComponentActivity() {
 
         FlyCommand.FLY_LEFT, FlyCommand.FLY_RIGHT -> {
             val open = command == FlyCommand.FLY_LEFT
-            val ok = ClusterFlyMcu.send1885(open)
-            DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.mcu1885(open, ok))
-            // The main log is wiped in about ten seconds, and the uploaded report only keeps this
-            // process. Pull Extra's lines now, while they are still here — only after a real write.
-            if (open && ok) FlyTrace.capture("left")
-            ok
+            // Extra writes 1885 itself: only its ThreeFingerReceiver is allowed to lift the map page.
+            try {
+                sendBroadcast(
+                    Intent(ClusterFlySequencer.ACTION_THREE_FINGER)
+                        .setClassName(
+                            ClusterFlySequencer.PACKAGE_EXTRASERVICE,
+                            ClusterFlySequencer.RECEIVER_THREE_FINGER,
+                        )
+                        .putExtra(
+                            ClusterFlySequencer.EXTRA_DIRECTION,
+                            if (open) ClusterFlySequencer.DIRECTION_LEFT else ClusterFlySequencer.DIRECTION_RIGHT,
+                        ),
+                )
+                DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.pageBroadcast(open))
+                true
+            } catch (thrown: RuntimeException) {
+                DiagLog.w(ClusterFlyLog.TAG, "fly.broadcast page failed ${thrown.javaClass.simpleName}")
+                false
+            }
         }
     }
 

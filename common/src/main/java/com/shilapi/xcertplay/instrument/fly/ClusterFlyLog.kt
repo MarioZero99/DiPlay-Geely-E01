@@ -40,6 +40,10 @@ object ClusterFlyLog {
     fun broadcast(on: Boolean): String =
         "fly.broadcast nav ${if (on) "on" else "off"} sent"
 
+    /** The three-finger broadcast that asks Extra to write 1885. */
+    fun pageBroadcast(open: Boolean): String =
+        "fly.broadcast page ${if (open) "left" else "right"} sent"
+
     /** How long since the previous MCU command; `null` before the first one. Not part of the gate. */
     fun mcuGap(millis: Long?): String =
         if (millis == null) "fly.mcu gap none" else "fly.mcu gap $millis"

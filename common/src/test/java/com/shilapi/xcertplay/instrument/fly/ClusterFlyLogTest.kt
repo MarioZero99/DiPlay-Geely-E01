@@ -32,6 +32,11 @@ class ClusterFlyLogTest {
         FlyPhase.values().forEach { assertEquals("fly.phase ${it.name}", ClusterFlyLog.phase(it)) }
     }
 
+    @Test fun pageBroadcastNamesTheDirection() {
+        assertEquals("fly.broadcast page left sent", ClusterFlyLog.pageBroadcast(open = true))
+        assertEquals("fly.broadcast page right sent", ClusterFlyLog.pageBroadcast(open = false))
+    }
+
     @Test
     fun `a session reports its phase changes through the sink`() {
         val lines = mutableListOf<String>()
