@@ -19,8 +19,11 @@ internal object FlyTrace {
     /** 给 Extraservice 主线程跑完接收器。仍远小于主缓冲被冲掉的时间。 */
     internal const val CAPTURE_DELAY_MILLIS = 200L
 
-    /** 必须放进 ExtraUtils 的 220 字节命令上限，含退出码包装。只收 tag Extra，Debug 才有三指那几行。 */
-    internal const val COMMAND = "logcat -d -t 200 -s Extra:D '*:S'"
+    /** 首次未抓到新行时再等一次，避免车机主线程调度慢导致的误判。 */
+    internal const val RETRY_DELAY_MILLIS = 250L
+
+    /** 必须放进 ExtraUtils 的 220 字节命令上限，含退出码包装。带 threadtime 方便去重对齐。 */
+    internal const val COMMAND = "logcat -d -v threadtime -t 200 -s Extra:D '*:S'"
 
     internal var dumpOverrideForTest: (() -> Pair<Int?, String>)? = null
 
@@ -41,27 +44,39 @@ internal object FlyTrace {
     private const val CLOSE_INFO = "setInfo = [74, 2,"
 
     /**
-     * Compares two dumps of the same logcat. Only lines that grew count: an old `setInfo` still in
-     * the ring buffer belongs to an earlier swipe.
+     * Compares two dumps of the same logcat. Only lines that arrived after [before] count: an old
+     * `setInfo` still in the ring buffer belongs to an earlier swipe.
      */
     fun witness(before: String, after: String): PageWitness {
-        val navigationGrew = count(after, NAVIGATION) > count(before, NAVIGATION)
-        val leftGrew = count(after, LEFT) > count(before, LEFT) &&
-            count(after, OPEN_INFO) > count(before, OPEN_INFO)
-        val rightGrew = count(after, RIGHT) > count(before, RIGHT) &&
-            count(after, CLOSE_INFO) > count(before, CLOSE_INFO)
+        val delta = newLines(before, after).joinToString("\n")
+        val hasNavigation = delta.contains(NAVIGATION)
+        val hasLeft = delta.contains(LEFT) && delta.contains(OPEN_INFO)
+        val hasRight = delta.contains(RIGHT) && delta.contains(CLOSE_INFO)
         val proof = when {
-            leftGrew -> PageProof.OPENED
-            rightGrew -> PageProof.CLOSED
-            navigationGrew && lastNavigation(after) == false -> PageProof.DENIED
-            navigationGrew -> PageProof.DROPPED
+            hasLeft -> PageProof.OPENED
+            hasRight -> PageProof.CLOSED
+            hasNavigation && lastNavigation(delta) == false -> PageProof.DENIED
+            hasNavigation -> PageProof.DROPPED
             else -> PageProof.MISSING
         }
         return PageWitness(proof)
     }
 
-    private fun count(body: String, token: String): Int =
-        if (token.isEmpty()) 0 else body.split(token).size - 1
+    /** Returns only the lines in [after] that follow the overlapping suffix of [before]. */
+    internal fun newLines(before: String, after: String): List<String> {
+        val beforeLines = before.lineSequence().map { it.trimEnd() }.filter { it.isNotEmpty() }.toList()
+        val afterLines = after.lineSequence().map { it.trimEnd() }.filter { it.isNotEmpty() }.toList()
+        if (beforeLines.isEmpty() || afterLines.isEmpty()) return afterLines
+        val maxOverlap = minOf(beforeLines.size, afterLines.size)
+        for (overlap in maxOverlap downTo 1) {
+            if (beforeLines.subList(beforeLines.size - overlap, beforeLines.size) ==
+                afterLines.subList(0, overlap)
+            ) {
+                return afterLines.subList(overlap, afterLines.size)
+            }
+        }
+        return afterLines
+    }
 
     private fun lastNavigation(body: String): Boolean? {
         val at = body.lastIndexOf(NAVIGATION)
@@ -99,10 +114,35 @@ internal object FlyTrace {
                 onWitness(PageWitness(PageProof.UNCONFIRMED))
                 return@Thread
             }
-            val dump = dumpFromDevice()
+            var dump = dumpFromDevice()
+            var result = resolveDeviceWitness(before, dump)
+            if (result.proof == PageProof.MISSING) {
+                try {
+                    Thread.sleep(RETRY_DELAY_MILLIS)
+                    dump = dumpFromDevice()
+                    result = resolveDeviceWitness(before, dump)
+                } catch (_: InterruptedException) {
+                    onWitness(PageWitness(PageProof.UNCONFIRMED))
+                    return@Thread
+                }
+            }
             record(which, dump)
-            onWitness(if (before == null) PageWitness(PageProof.UNCONFIRMED) else witnessOf(dump, before))
+            onWitness(result)
         }, "fly-trace").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * When the main logcat ring buffer has been flushed by other processes (no Extra gate lines
+     * remain at all), treat a `MISSING` diff as `UNCONFIRMED` so the cluster's own 3s surface
+     * timeout decides instead of aborting on a wiped buffer.
+     */
+    internal fun resolveDeviceWitness(before: String?, dump: Pair<Int?, String>): PageWitness {
+        if (before == null) return PageWitness(PageProof.UNCONFIRMED)
+        val result = witnessOf(dump, before)
+        if (result.proof == PageProof.MISSING && select(dump.second).isEmpty()) {
+            return PageWitness(PageProof.UNCONFIRMED)
+        }
+        return result
     }
 
     private fun witnessOf(dump: Pair<Int?, String>, before: String): PageWitness {

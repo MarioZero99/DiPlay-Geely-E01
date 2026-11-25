@@ -150,4 +150,35 @@ class FlyTraceTest {
         """.trimIndent()
         assertEquals(PageProof.CLOSED, FlyTrace.witness("", after).proof)
     }
+
+    @Test fun aNewSwipeStillOpensWhenOldOneScrolledOffTop() {
+        val before = """
+            11-25 10:19:02.100  2133  2133 D Extra: ThreeFingerReceiver isNavigation = true
+            11-25 10:19:02.101  2133  2133 D Extra: ThreeFingerReceiver left
+            11-25 10:19:02.102  2133  2133 D Extra: ThreeFingerReceiver setInfo = [74, 1, 0, 0]
+            11-25 10:19:03.000  2133  2133 D Extra: other log line
+        """.trimIndent()
+        val after = """
+            11-25 10:19:03.000  2133  2133 D Extra: other log line
+            11-25 10:19:09.850  2133  2133 D Extra: ThreeFingerReceiver isNavigation = true
+            11-25 10:19:09.851  2133  2133 D Extra: ThreeFingerReceiver left
+            11-25 10:19:09.852  2133  2133 D Extra: ThreeFingerReceiver setInfo = [74, 1, 0, 0]
+        """.trimIndent()
+        assertEquals(PageProof.OPENED, FlyTrace.witness(before, after).proof)
+    }
+
+    @Test fun flushedRingBufferFallsBackToUnconfirmedOnDevice() {
+        val before = "11-25 10:19:08.000  2133  2133 D Extra:  @neunavi@  导航状态"
+        val flushedAfter = 0 to ""
+        assertEquals(PageProof.UNCONFIRMED, FlyTrace.resolveDeviceWitness(before, flushedAfter).proof)
+    }
+
+    @Test fun intactRingBufferWithNoNewSwipeRemainsMissingOnDevice() {
+        val intact = """
+            11-25 10:19:02.100  2133  2133 D Extra: ThreeFingerReceiver isNavigation = true
+            11-25 10:19:02.101  2133  2133 D Extra: ThreeFingerReceiver left
+            11-25 10:19:02.102  2133  2133 D Extra: ThreeFingerReceiver setInfo = [74, 1, 0, 0]
+        """.trimIndent()
+        assertEquals(PageProof.MISSING, FlyTrace.resolveDeviceWitness(intact, 0 to intact).proof)
+    }
 }

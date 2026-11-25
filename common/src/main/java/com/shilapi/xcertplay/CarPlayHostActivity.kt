@@ -191,6 +191,8 @@ class CarPlayHostActivity : ComponentActivity() {
     private var flyClosing = false
     /** A centre Surface that arrived while a fly was live; handed to the decoder after the teardown. */
     private var flyPendingCenter: Surface? = null
+    /** Extra's logcat snapshot taken just before `FLY_LEFT`/`FLY_RIGHT` broadcast is sent. */
+    private var pendingFlyTraceBefore: String? = null
 
     /** The one line under a picture when a fly was refused; built with the page, hidden by default. */
     private var flyWarningView: TextView? = null
@@ -2580,9 +2582,10 @@ class CarPlayHostActivity : ComponentActivity() {
             onPictureFailed = { at -> reportPictureFailed(at) },
             confirmPage = { command, report ->
                 val open = command == FlyCommand.FLY_LEFT
-                // The broadcast was just sent; Extra's receiver runs later, so the ring buffer is
-                // still this swipe's "before".
-                val before = FlyTrace.snapshot()
+                // Prefer the snapshot captured before sendBroadcast; ExtraService runs in another
+                // process and often logs before a post-broadcast snapshot completes.
+                val before = pendingFlyTraceBefore ?: FlyTrace.snapshot()
+                pendingFlyTraceBefore = null
                 FlyTrace.capture(if (open) "left" else "right", before) { witness ->
                     runOnUiThread { report(witness) }
                 }
@@ -2825,6 +2828,8 @@ class CarPlayHostActivity : ComponentActivity() {
         FlyCommand.FLY_LEFT, FlyCommand.FLY_RIGHT -> {
             val open = command == FlyCommand.FLY_LEFT
             // Extra writes 1885 itself: only its ThreeFingerReceiver is allowed to lift the map page.
+            // Snapshot logcat before sending the broadcast so Extra's receiver cannot race ahead of it.
+            pendingFlyTraceBefore = FlyTrace.snapshot()
             try {
                 sendBroadcast(
                     Intent(ClusterFlySequencer.ACTION_THREE_FINGER)
@@ -2840,6 +2845,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.pageBroadcast(open))
                 true
             } catch (thrown: RuntimeException) {
+                pendingFlyTraceBefore = null
                 DiagLog.w(ClusterFlyLog.TAG, "fly.broadcast page failed ${thrown.javaClass.simpleName}")
                 false
             }
@@ -2975,9 +2981,13 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     private fun attachSurface(surface: Surface) {
+        if (flyClosing) {
+            flyPendingCenter = surface
+            return
+        }
         val fly = clusterFly
         val live = flyHandoff
-        if (live != null && !flyClosing && fly != null &&
+        if (live != null && fly != null &&
             (fly.phase == FlyPhase.WAITING_FOR_VIDEO || fly.phase == FlyPhase.PUSHING)
         ) {
             // The centre window changed under the mirror. Pointing the decoder here directly would
