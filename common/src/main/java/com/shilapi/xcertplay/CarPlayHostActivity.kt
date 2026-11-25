@@ -952,6 +952,7 @@ class CarPlayHostActivity : ComponentActivity() {
             onToggleNight = { toggleQuickHudNight() },
             onExit = { exitFromQuickHud() },
             onDismiss = { hideQuickHud() },
+            onToggleClusterFly = { toggleClusterFlyFromQuickHud() },
             onSampleTelemetry = { callback ->
                 val isWired = !wirelessEnabled
                 val appContext = applicationContext
@@ -2558,6 +2559,10 @@ class CarPlayHostActivity : ComponentActivity() {
         }
         hud.setNight(darkMode)
         hud.setAudioStream(AirPlayPersistence.loadNavigationStreamType(this))
+        val flyActive = clusterFly?.phase.let {
+            it == FlyPhase.PUSHING || it == FlyPhase.WAITING_FOR_VIDEO || it == FlyPhase.ARMING
+        }
+        hud.setClusterFlying(flyActive)
         hud.open()
     }
 
@@ -2928,6 +2933,19 @@ class CarPlayHostActivity : ComponentActivity() {
         quickHud?.setNight(darkMode)
         syncAirPlayDarkMode()
         appendLog("Quick bar: night mode=$darkMode")
+    }
+
+    private fun toggleClusterFlyFromQuickHud() {
+        hideQuickHud()
+        val controller = flyController()
+        val active = controller.phase == FlyPhase.PUSHING ||
+            controller.phase == FlyPhase.WAITING_FOR_VIDEO ||
+            controller.phase == FlyPhase.ARMING
+        appendLog("Quick bar: cluster fly active=$active")
+        controller.onGesture(
+            if (active) ThreeFingerSwipeDetector.Decision.FLY_RIGHT
+            else ThreeFingerSwipeDetector.Decision.FLY_LEFT,
+        )
     }
 
     /** Ends the app. The bar's own two-press arm is what keeps this from being a single mis-tap. */

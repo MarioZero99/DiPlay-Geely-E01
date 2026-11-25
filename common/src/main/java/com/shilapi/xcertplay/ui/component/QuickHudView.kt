@@ -45,11 +45,13 @@ class QuickHudView(
     private val onExit: () -> Unit,
     private val onDismiss: () -> Unit,
     private val onSampleTelemetry: (((PerformanceSnapshot) -> Unit) -> Unit)? = null,
+    private val onToggleClusterFly: (() -> Unit)? = null,
 ) : FrameLayout(context) {
 
     private val disconnectButton: TextView
     private val audioButton: TextView
     private val nightButton: TextView
+    private var clusterFlyButton: TextView? = null
     private val exitButton: TextView
     private val channelStrip: HorizontalScrollView
     private val channelRow: LinearLayout
@@ -136,6 +138,13 @@ class QuickHudView(
             onToggleNight()
         }
         bar.addView(nightButton, barParams())
+
+        if (onToggleClusterFly != null) {
+            clusterFlyButton = action("投屏仪表") {
+                scheduleAutoHide()
+                onToggleClusterFly.invoke()
+            }.also { bar.addView(it, barParams()) }
+        }
 
         exitButton = action(context.getString(R.string.close_app)) {
             if (exitArmed) {
@@ -225,6 +234,10 @@ class QuickHudView(
     fun setNight(night: Boolean) {
         isNight = night
         paintNight()
+    }
+
+    fun setClusterFlying(active: Boolean) {
+        clusterFlyButton?.text = if (active) "收回仪表" else "投屏仪表"
     }
 
     fun setAudioStream(stream: Int) {
