@@ -138,6 +138,29 @@ class ClusterFlyMcuTest {
         assertEquals("fly.mcu gap 1000", ClusterFlyLog.mcuGap(1_000L))
     }
 
+    @Test
+    fun `1899 navigation status payload is 2 bytes with 6 then 1 or 0`() {
+        assertEquals(listOf(6.toByte(), 1.toByte()), ClusterFlyMcu.payload1899(active = true).toList())
+        assertEquals(listOf(6.toByte(), 0.toByte()), ClusterFlyMcu.payload1899(active = false).toList())
+    }
+
+    @Test
+    fun `send1899 writes opcode 1899 with control 0 on transaction 5`() {
+        val binder = RecordingBinder(succeeds = true)
+        val ok = ClusterFlyMcu.send1899(active = true, binder = binder)
+        assertEquals(true, ok)
+        assertEquals(5, binder.code)
+        assertEquals(0.toByte(), binder.control)
+        assertEquals(1899, binder.opcode)
+        assertEquals(listOf(6.toByte(), 1.toByte()), binder.payload.toList())
+    }
+
+    @Test
+    fun `1899 log line names state and binder result`() {
+        assertEquals("fly.mcu 1899 on true", ClusterFlyLog.mcu1899(active = true, ok = true))
+        assertEquals("fly.mcu 1899 off false", ClusterFlyLog.mcu1899(active = false, ok = false))
+    }
+
     private class RecordingBinder(private val succeeds: Boolean) : Binder() {
         var code: Int = -1
         var control: Byte = -1

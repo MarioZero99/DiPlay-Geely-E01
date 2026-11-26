@@ -36,6 +36,10 @@ object ClusterFlyLog {
     fun mcu1900(on: Boolean, ok: Boolean): String =
         "fly.mcu 1900 ${if (on) "on" else "off"} $ok"
 
+    /** Binder accepted the 1899 IPKServer navigation status write. */
+    fun mcu1899(active: Boolean, ok: Boolean): String =
+        "fly.mcu 1899 ${if (active) "on" else "off"} $ok"
+
     /** A broadcast went out. `sendBroadcast` has no reply, so this says only that it was sent. */
     fun broadcast(on: Boolean): String =
         "fly.broadcast nav ${if (on) "on" else "off"} sent"

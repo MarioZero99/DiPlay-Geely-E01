@@ -20,6 +20,8 @@ object ClusterFlyMcu {
 
     /** Navigation mode, from `AutoNaviRpc.setMMI_NavigationMod_indicator`. */
     const val OPCODE_1900 = 1900
+    /** IPKServer navigation status (`CAN_DataPackage`), `[6, 1]` active / `[6, 0]` inactive. */
+    const val OPCODE_1899 = 1899
     const val PAYLOAD_LENGTH = 25
     private const val MARKER: Byte = 67
     private const val MARKER_1885: Byte = 74
@@ -48,6 +50,9 @@ object ClusterFlyMcu {
         return bytes
     }
 
+    /** 6 in the first byte (IPKServer NavigationStatus); 1 active, 0 inactive. */
+    fun payload1899(active: Boolean): ByteArray = byteArrayOf(6, if (active) 1 else 0)
+
     fun send(front: Boolean, binder: IBinder? = lookup()): Boolean =
         send(OPCODE, payload(front), binder)
 
@@ -56,6 +61,9 @@ object ClusterFlyMcu {
 
     fun send1900(on: Boolean, binder: IBinder? = lookup()): Boolean =
         send(OPCODE_1900, payload1900(on), binder)
+
+    fun send1899(active: Boolean, binder: IBinder? = lookup()): Boolean =
+        send(OPCODE_1899, payload1899(active), binder)
 
     private fun send(opcode: Int, payload: ByteArray, binder: IBinder?): Boolean {
         if (binder == null) return false
