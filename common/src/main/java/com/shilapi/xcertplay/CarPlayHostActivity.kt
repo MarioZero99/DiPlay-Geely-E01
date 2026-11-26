@@ -193,6 +193,8 @@ class CarPlayHostActivity : ComponentActivity() {
     private var flyPendingCenter: Surface? = null
     /** Extra's logcat snapshot taken just before `FLY_LEFT`/`FLY_RIGHT` broadcast is sent. */
     private var pendingFlyTraceBefore: String? = null
+    /** True after CarPlay stream pre-armed `1900`/`1899`/`1887` so 3-finger swipe does not race. */
+    private var flyPreArmed = false
 
     /** The one line under a picture when a fly was refused; built with the page, hidden by default. */
     private var flyWarningView: TextView? = null
@@ -952,7 +954,6 @@ class CarPlayHostActivity : ComponentActivity() {
             onToggleNight = { toggleQuickHudNight() },
             onExit = { exitFromQuickHud() },
             onDismiss = { hideQuickHud() },
-            onToggleClusterFly = { toggleClusterFlyFromQuickHud() },
             onSampleTelemetry = { callback ->
                 val isWired = !wirelessEnabled
                 val appContext = applicationContext
@@ -2487,6 +2488,7 @@ class CarPlayHostActivity : ComponentActivity() {
         val oldController = controller
         val oldSink = sink
         clusterFly?.onCarPlayEnded()
+        disarmClusterFlyIfPreArmed()
         CarPlayMediaKeys.detach(oldController)
         CarPlayBackgroundSession.clear(oldController, keepOwner = true)
         controller = null
@@ -2559,10 +2561,6 @@ class CarPlayHostActivity : ComponentActivity() {
         }
         hud.setNight(darkMode)
         hud.setAudioStream(AirPlayPersistence.loadNavigationStreamType(this))
-        val flyActive = clusterFly?.phase.let {
-            it == FlyPhase.PUSHING || it == FlyPhase.WAITING_FOR_VIDEO || it == FlyPhase.ARMING
-        }
-        hud.setClusterFlying(flyActive)
         hud.open()
     }
 
@@ -2937,17 +2935,32 @@ class CarPlayHostActivity : ComponentActivity() {
         appendLog("Quick bar: night mode=$darkMode")
     }
 
-    private fun toggleClusterFlyFromQuickHud() {
-        hideQuickHud()
-        val controller = flyController()
-        val active = controller.phase == FlyPhase.PUSHING ||
-            controller.phase == FlyPhase.WAITING_FOR_VIDEO ||
-            controller.phase == FlyPhase.ARMING
-        appendLog("Quick bar: cluster fly active=$active")
-        controller.onGesture(
-            if (active) ThreeFingerSwipeDetector.Decision.FLY_RIGHT
-            else ThreeFingerSwipeDetector.Decision.FLY_LEFT,
-        )
+    /**
+     * Pre-arms navigation mode (`1900`, `1899`, `NAV_ON`) and foreground (`1887`) as soon as
+     * CarPlay video starts, so `MultiGestureMonitor`'s three-finger `1885` never lands before
+     * `1887` when the driver swipes left.
+     */
+    private fun preArmClusterFly() {
+        if (flyPreArmed) return
+        flyPreArmed = true
+        sendFlyCommand(FlyCommand.NAV_ON)
+        sendFlyCommand(FlyCommand.NAV_MODE_ON)
+        mainHandler.postDelayed({
+            if (!shuttingDown.get() && flyPreArmed) {
+                sendFlyCommand(FlyCommand.NAV_FRONT)
+            }
+        }, ClusterFlySequencer.MCU_GAP_MILLIS)
+    }
+
+    private fun disarmClusterFlyIfPreArmed() {
+        if (!flyPreArmed) return
+        flyPreArmed = false
+        if (clusterFly?.phase != FlyPhase.IDLE) return
+        sendFlyCommand(FlyCommand.NAV_MODE_OFF)
+        sendFlyCommand(FlyCommand.NAV_OFF)
+        mainHandler.postDelayed({
+            sendFlyCommand(FlyCommand.NAV_BACK)
+        }, ClusterFlySequencer.MCU_GAP_MILLIS)
     }
 
     /** Ends the app. The bar's own two-press arm is what keeps this from being a single mis-tap. */
@@ -2972,6 +2985,7 @@ class CarPlayHostActivity : ComponentActivity() {
         val oldController = controller
         val oldSink = sink
         clusterFly?.onCarPlayEnded()
+        disarmClusterFlyIfPreArmed()
         CarPlayMediaKeys.detach(oldController)
         // detach() only releases the controller it was handed. This session is over either way, so
         // take the claim down unconditionally as well — the quick-bar exit and the page's own exit
@@ -3152,6 +3166,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 // A live picture is what the cluster flies to; a restart clears the old session's
                 // navigation flag, and this puts it back.
                 clusterFly?.onCarPlayStarted()
+                preArmClusterFly()
             } else {
                 activeScreenStreamTypes.remove(type)
             }
