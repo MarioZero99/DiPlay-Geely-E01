@@ -118,6 +118,8 @@ import com.shilapi.xcertplay.instrument.fly.ClusterFlyController
 import com.shilapi.xcertplay.instrument.fly.ClusterFlyLog
 import com.shilapi.xcertplay.instrument.fly.ClusterFlyMcu
 import com.shilapi.xcertplay.instrument.fly.ClusterFlySequencer
+import com.shilapi.xcertplay.instrument.fly.ClusterFlyWarning
+import com.shilapi.xcertplay.instrument.fly.FlyBlock
 import com.shilapi.xcertplay.instrument.fly.FlyChain
 import com.shilapi.xcertplay.instrument.fly.FlyChainLog
 import com.shilapi.xcertplay.instrument.fly.FlyClusterPresentation
@@ -195,6 +197,8 @@ class CarPlayHostActivity : ComponentActivity() {
     private var pendingFlyTraceBefore: String? = null
     /** True after CarPlay stream pre-armed `1900`/`1899`/`1887` so 3-finger swipe does not race. */
     private var flyPreArmed = false
+    /** True once the pre-arm `1887 front` step (1s after `1900`/`1899`) has actually gone out. */
+    private var flyPreArmedReady = false
 
     /** The one line under a picture when a fly was refused; built with the page, hidden by default. */
     private var flyWarningView: TextView? = null
@@ -2741,6 +2745,17 @@ class CarPlayHostActivity : ComponentActivity() {
 
     /** Takes the cluster window down. Called on the main thread, after a right swipe or a failure. */
     private fun dismissClusterFly() {
+        flyPreArmed = false
+        flyPreArmedReady = false
+        if (!shuttingDown.get() && activeScreenStreamTypes.isNotEmpty()) {
+            mainHandler.postDelayed({
+                if (!shuttingDown.get() && activeScreenStreamTypes.isNotEmpty() &&
+                    clusterFly?.phase == FlyPhase.IDLE
+                ) {
+                    preArmClusterFly()
+                }
+            }, ClusterFlySequencer.MCU_GAP_MILLIS * 2 + 100L)
+        }
         if (flyClosing) return
         flyClosing = true
         val presentation = flyClusterPresentation
@@ -2943,11 +2958,13 @@ class CarPlayHostActivity : ComponentActivity() {
     private fun preArmClusterFly() {
         if (flyPreArmed) return
         flyPreArmed = true
+        flyPreArmedReady = false
         sendFlyCommand(FlyCommand.NAV_ON)
         sendFlyCommand(FlyCommand.NAV_MODE_ON)
         mainHandler.postDelayed({
             if (!shuttingDown.get() && flyPreArmed) {
                 sendFlyCommand(FlyCommand.NAV_FRONT)
+                flyPreArmedReady = true
             }
         }, ClusterFlySequencer.MCU_GAP_MILLIS)
     }
@@ -2955,6 +2972,7 @@ class CarPlayHostActivity : ComponentActivity() {
     private fun disarmClusterFlyIfPreArmed() {
         if (!flyPreArmed) return
         flyPreArmed = false
+        flyPreArmedReady = false
         if (clusterFly?.phase != FlyPhase.IDLE) return
         sendFlyCommand(FlyCommand.NAV_MODE_OFF)
         sendFlyCommand(FlyCommand.NAV_OFF)
@@ -3108,7 +3126,17 @@ class CarPlayHostActivity : ComponentActivity() {
             // A sideways fly belongs to the cluster layer: the controller decides, and either way the
             // rest of this touch stream is consumed rather than forwarded with its down missing.
             ThreeFingerSwipeDetector.Decision.FLY_LEFT -> {
-                flyController().onGesture(ThreeFingerSwipeDetector.Decision.FLY_LEFT)
+                if (activeScreenStreamTypes.isEmpty()) {
+                    DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.blocked(FlyBlock.NOT_NAVIGATING))
+                    ClusterFlyWarning.text(FlyBlock.NOT_NAVIGATING)?.let(::showFlyWarning)
+                    return true
+                }
+                if (!flyPreArmedReady) {
+                    DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.blocked(FlyBlock.TOO_SOON))
+                    ClusterFlyWarning.text(FlyBlock.TOO_SOON)?.let(::showFlyWarning)
+                    return true
+                }
+                flyController().onGesture(ThreeFingerSwipeDetector.Decision.FLY_LEFT, preArmed = true)
                 return true
             }
             ThreeFingerSwipeDetector.Decision.FLY_RIGHT -> {

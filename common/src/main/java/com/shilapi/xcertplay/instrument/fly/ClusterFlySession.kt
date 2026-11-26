@@ -45,7 +45,7 @@ class ClusterFlySession(
     val currentPhase: FlyPhase
         get() = phase
 
-    fun onLeft(nowMillis: Long, conditions: FlyConditions): FlyEffect {
+    fun onLeft(nowMillis: Long, conditions: FlyConditions, preArmed: Boolean = false): FlyEffect {
         advance(nowMillis)
         lastConditions = conditions
         if (phase != FlyPhase.IDLE) return effect()
@@ -53,7 +53,11 @@ class ClusterFlySession(
         val block = ClusterFlyGate.decide(conditions)
         if (block != FlyBlock.NONE) return effect(warning = block)
 
-        val steps = ClusterFlySequencer.open(nowMillis, conditions)
+        val steps = if (preArmed) {
+            ClusterFlySequencer.openPreArmed(nowMillis, conditions)
+        } else {
+            ClusterFlySequencer.open(nowMillis, conditions)
+        }
         phase = FlyPhase.ARMING
         flyStepAt = steps.first { it.command == FlyCommand.FLY_LEFT }.sendAtMillis
         return effect(steps = steps)

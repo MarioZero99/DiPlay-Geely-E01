@@ -56,6 +56,14 @@ object ClusterFlySequencer {
             )
         }
 
+    /** When `NAV_ON`, `1900`, `1899`, and `1887` were already pre-armed on stream start, flip immediately. */
+    fun openPreArmed(nowMillis: Long, conditions: FlyConditions): List<FlyStep> =
+        if (ClusterFlyGate.decide(conditions) != FlyBlock.NONE) {
+            emptyList()
+        } else {
+            listOf(FlyStep(FlyCommand.FLY_LEFT, nowMillis))
+        }
+
     fun close(nowMillis: Long, conditions: FlyConditions): List<FlyStep> =
         if (ClusterFlyGate.decide(conditions) != FlyBlock.NONE) {
             emptyList()

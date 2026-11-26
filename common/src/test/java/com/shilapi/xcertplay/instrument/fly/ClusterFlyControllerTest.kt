@@ -602,4 +602,21 @@ class ClusterFlyControllerTest {
         assertTrue(lines.contains("fly.phase PUSHING"))
     }
 
+    @Test
+    fun `pre-armed left sends only FLY_LEFT immediately and opens layer`() {
+        var opened = 0
+        val controller = ClusterFlyController(
+            commands = { sent.add(it) },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            onLayerOpened = { opened++ },
+        )
+        controller.onGesture(Decision.FLY_LEFT, preArmed = true)
+        assertEquals(listOf(FlyCommand.FLY_LEFT), sent)
+        assertEquals(1, opened)
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, controller.phase)
+        assertTrue(lines.contains("fly.chain commands result=ok 1900=true 1887=true 1885=true"))
+    }
 }

@@ -87,13 +87,19 @@ class ClusterFlyController(
      */
     private var videoTimeoutGeneration = 0
 
-    fun onGesture(decision: Decision) {
+    fun onGesture(decision: Decision, preArmed: Boolean = false) {
         synchronized(lock) {
             val now = clock()
             when (decision) {
                 Decision.FLY_LEFT -> {
                     log(ClusterFlyLog.gesture(FlyDirection.LEFT))
-                    handle(session.onLeft(now, conditions(now)))
+                    val effect = session.onLeft(now, conditions(now), preArmed)
+                    if (preArmed && effect.steps.isNotEmpty()) {
+                        chain1900 = FlyChainLog.TRUE
+                        chain1887 = FlyChainLog.TRUE
+                        chain1885 = FlyChainLog.SKIP
+                    }
+                    handle(effect)
                 }
 
                 Decision.FLY_RIGHT -> {
