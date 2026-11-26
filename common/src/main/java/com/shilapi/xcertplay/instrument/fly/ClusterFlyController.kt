@@ -499,20 +499,30 @@ class ClusterFlyController(
         handle(session.onSafety(conditions(now), now))
     }
 
+    private fun millisUntilMcuReady(now: Long): Long {
+        val latest = when {
+            lastCommandAt == NO_TIME -> lastMcuAt
+            lastMcuAt == NO_TIME -> lastCommandAt
+            else -> maxOf(lastCommandAt, lastMcuAt)
+        }
+        if (latest == NO_TIME) return 0L
+        return (ClusterFlyGate.MIN_COMMAND_INTERVAL_MILLIS - (now - latest)).coerceAtLeast(0L)
+    }
+
     private fun schedulePreArmIfIdle() {
         if (!carPlayActive || session.currentPhase != FlyPhase.IDLE || preArmed) return
         val now = clock()
-        val cond = conditions(now)
-        if (cond.millisSinceLastClusterCommand < ClusterFlyGate.MIN_COMMAND_INTERVAL_MILLIS) {
-            val wait = ClusterFlyGate.MIN_COMMAND_INTERVAL_MILLIS - cond.millisSinceLastClusterCommand
+        val mcuWait = millisUntilMcuReady(now)
+        if (mcuWait > 0L) {
             val expected = generation
-            postDelayed(wait) {
+            postDelayed(mcuWait) {
                 synchronized(lock) {
                     if (generation == expected) schedulePreArmIfIdle()
                 }
             }
             return
         }
+        val cond = conditions(now)
         if (ClusterFlyGate.decide(cond) != FlyBlock.NONE) return
 
         log(ClusterFlyLog.command(FlyCommand.NAV_ON))
@@ -546,12 +556,32 @@ class ClusterFlyController(
                 lastMcuAt = t
                 lastCommandAt = t
                 preArm1887 = if (ok1887) FlyChainLog.TRUE else FlyChainLog.FALSE
-                preArmedFrontOk = ok1887
+                if (!ok1887) {
+                    // Do not leave preArmed=true with front=false, or every swipe would hit TOO_SOON.
+                    preArmed = false
+                    preArmedFrontOk = false
+                    return@synchronized
+                }
+                preArmedFrontOk = true
             }
         }
     }
 
     private fun disarmPreArmLocked(now: Long, hadFront: Boolean) {
+        val wait = millisUntilMcuReady(now)
+        if (wait > 0L) {
+            val expected = generation
+            postDelayed(wait) {
+                synchronized(lock) {
+                    if (generation == expected) disarmPreArmNowLocked(clock(), hadFront)
+                }
+            }
+            return
+        }
+        disarmPreArmNowLocked(now, hadFront)
+    }
+
+    private fun disarmPreArmNowLocked(now: Long, hadFront: Boolean) {
         log(ClusterFlyLog.command(FlyCommand.NAV_MODE_OFF))
         log(ClusterFlyLog.mcuGap(if (lastMcuAt == NO_TIME) null else now - lastMcuAt))
         commands.send(FlyCommand.NAV_MODE_OFF)

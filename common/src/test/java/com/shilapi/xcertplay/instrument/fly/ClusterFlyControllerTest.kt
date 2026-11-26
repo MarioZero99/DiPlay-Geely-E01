@@ -709,4 +709,47 @@ class ClusterFlyControllerTest {
         scheduled.removeAt(0).second()
         assertEquals(listOf(FlyCommand.NAV_MODE_OFF, FlyCommand.NAV_OFF, FlyCommand.NAV_BACK), sent)
     }
+
+    @Test
+    fun `pre-arm NAV_FRONT failure resets preArmed so next left falls back to normal open`() {
+        var failFront = true
+        val controller = ClusterFlyController(
+            commands = { cmd ->
+                sent.add(cmd)
+                !(cmd == FlyCommand.NAV_FRONT && failFront)
+            },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+        )
+        controller.onCarPlayStarted()
+        now = 2_000L
+        scheduled.removeAt(0).second() // NAV_FRONT fails
+
+        failFront = false
+        now = 3_000L
+        sent.clear()
+        controller.onGesture(Decision.FLY_LEFT)
+        assertEquals(FlyPhase.ARMING, controller.phase)
+        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_MODE_ON), sent)
+    }
+
+    @Test
+    fun `carPlayEnded within 1s of pre-arm NAV_FRONT waits MCU gap before NAV_MODE_OFF`() {
+        val controller = controller()
+        controller.onCarPlayStarted()
+        now = 2_000L
+        scheduled.removeAt(0).second() // NAV_FRONT at 2000
+        sent.clear()
+
+        now = 2_300L
+        controller.onCarPlayEnded()
+        assertTrue(sent.isEmpty())
+        assertEquals(700L, scheduled.last().first)
+
+        now = 3_000L
+        scheduled.removeAt(0).second()
+        assertEquals(listOf(FlyCommand.NAV_MODE_OFF, FlyCommand.NAV_OFF), sent)
+    }
 }
