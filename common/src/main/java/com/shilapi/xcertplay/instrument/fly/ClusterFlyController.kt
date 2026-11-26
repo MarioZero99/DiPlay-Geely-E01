@@ -72,6 +72,13 @@ class ClusterFlyController(
     private var chain1887 = FlyChainLog.SKIP
     private var chain1885 = FlyChainLog.SKIP
 
+    /** Pre-armed state set when CarPlay starts (and re-armed after a clean close). */
+    private var preArmEnabled = false
+    private var preArmed = false
+    private var preArmedFrontOk = false
+    private var preArm1900 = FlyChainLog.SKIP
+    private var preArm1887 = FlyChainLog.SKIP
+
     private var radar = false
     private var ecall = false
 
@@ -93,18 +100,30 @@ class ClusterFlyController(
             when (decision) {
                 Decision.FLY_LEFT -> {
                     log(ClusterFlyLog.gesture(FlyDirection.LEFT))
-                    val effect = session.onLeft(now, conditions(now), preArmed)
-                    if (preArmed && effect.steps.isNotEmpty()) {
-                        chain1900 = FlyChainLog.TRUE
-                        chain1887 = FlyChainLog.TRUE
+                    if (this.preArmed && !this.preArmedFrontOk) {
+                        log(ClusterFlyLog.blocked(FlyBlock.TOO_SOON))
+                        ClusterFlyWarning.text(FlyBlock.TOO_SOON)?.let(showWarning)
+                        return
+                    }
+                    val usePreArmed = preArmed || (this.preArmed && this.preArmedFrontOk)
+                    val effect = session.onLeft(now, conditions(now), usePreArmed)
+                    if (usePreArmed && effect.steps.isNotEmpty()) {
+                        chain1900 = if (this.preArmed) preArm1900 else FlyChainLog.TRUE
+                        chain1887 = if (this.preArmed) preArm1887 else FlyChainLog.TRUE
                         chain1885 = FlyChainLog.SKIP
+                        this.preArmed = false
+                        this.preArmedFrontOk = false
                     }
                     handle(effect)
                 }
 
                 Decision.FLY_RIGHT -> {
                     log(ClusterFlyLog.gesture(FlyDirection.RIGHT))
-                    handle(session.onRight(now, conditions(now)))
+                    val effect = session.onRight(now, conditions(now))
+                    handle(effect)
+                    if (effect.phase == FlyPhase.CLOSING) {
+                        onGiveUp()
+                    }
                 }
 
                 Decision.TRIGGER -> log(ClusterFlyLog.gestureDown())
@@ -187,6 +206,8 @@ class ClusterFlyController(
     fun onCarPlayStarted() {
         synchronized(lock) {
             carPlayActive = true
+            preArmEnabled = true
+            schedulePreArmIfIdle()
         }
     }
 
@@ -199,7 +220,22 @@ class ClusterFlyController(
     fun onCarPlayEnded() {
         synchronized(lock) {
             generation++
+            preArmEnabled = false
             val now = clock()
+            if (session.currentPhase == FlyPhase.IDLE && preArmed) {
+                val hadFront = preArmedFrontOk
+                preArmed = false
+                preArmedFrontOk = false
+                preArm1900 = FlyChainLog.SKIP
+                preArm1887 = FlyChainLog.SKIP
+                carPlayActive = false
+                disarmPreArmLocked(now, hadFront)
+                return
+            }
+            preArmed = false
+            preArmedFrontOk = false
+            preArm1900 = FlyChainLog.SKIP
+            preArm1887 = FlyChainLog.SKIP
             val effect = session.onCarPlayEnded(now, conditions(now))
             carPlayActive = false
             handle(effect)
@@ -343,6 +379,14 @@ class ClusterFlyController(
                 }
             }
         }
+        if (step.command == FlyCommand.NAV_BACK) {
+            // Advance CLOSING -> IDLE now that the final close command has gone out, then re-arm
+            // if CarPlay is still active so the next left swipe works without a 2s wait.
+            session.onWaitTimeout(clock())
+            if (preArmEnabled && carPlayActive && session.currentPhase == FlyPhase.IDLE) {
+                schedulePreArmIfIdle()
+            }
+        }
     }
 
     /**
@@ -453,6 +497,80 @@ class ClusterFlyController(
         if (block != null) log(ClusterFlyLog.safetyOn(block)) else log(ClusterFlyLog.safetyOff())
         val now = clock()
         handle(session.onSafety(conditions(now), now))
+    }
+
+    private fun schedulePreArmIfIdle() {
+        if (!carPlayActive || session.currentPhase != FlyPhase.IDLE || preArmed) return
+        val now = clock()
+        val cond = conditions(now)
+        if (cond.millisSinceLastClusterCommand < ClusterFlyGate.MIN_COMMAND_INTERVAL_MILLIS) {
+            val wait = ClusterFlyGate.MIN_COMMAND_INTERVAL_MILLIS - cond.millisSinceLastClusterCommand
+            val expected = generation
+            postDelayed(wait) {
+                synchronized(lock) {
+                    if (generation == expected) schedulePreArmIfIdle()
+                }
+            }
+            return
+        }
+        if (ClusterFlyGate.decide(cond) != FlyBlock.NONE) return
+
+        log(ClusterFlyLog.command(FlyCommand.NAV_ON))
+        commands.send(FlyCommand.NAV_ON)
+        log(ClusterFlyLog.command(FlyCommand.NAV_MODE_ON))
+        log(ClusterFlyLog.mcuGap(if (lastMcuAt == NO_TIME) null else now - lastMcuAt))
+        val ok1900 = commands.send(FlyCommand.NAV_MODE_ON)
+        lastMcuAt = now
+        lastCommandAt = now
+        preArm1900 = if (ok1900) FlyChainLog.TRUE else FlyChainLog.FALSE
+        if (!ok1900) {
+            preArmed = false
+            preArmedFrontOk = false
+            return
+        }
+        preArmed = true
+        preArmedFrontOk = false
+        preArm1887 = FlyChainLog.SKIP
+        val expected = generation
+        postDelayed(ClusterFlySequencer.MCU_GAP_MILLIS) {
+            synchronized(lock) {
+                if (generation != expected || !preArmed || !carPlayActive ||
+                    session.currentPhase != FlyPhase.IDLE
+                ) {
+                    return@synchronized
+                }
+                val t = clock()
+                log(ClusterFlyLog.command(FlyCommand.NAV_FRONT))
+                log(ClusterFlyLog.mcuGap(if (lastMcuAt == NO_TIME) null else t - lastMcuAt))
+                val ok1887 = commands.send(FlyCommand.NAV_FRONT)
+                lastMcuAt = t
+                lastCommandAt = t
+                preArm1887 = if (ok1887) FlyChainLog.TRUE else FlyChainLog.FALSE
+                preArmedFrontOk = ok1887
+            }
+        }
+    }
+
+    private fun disarmPreArmLocked(now: Long, hadFront: Boolean) {
+        log(ClusterFlyLog.command(FlyCommand.NAV_MODE_OFF))
+        log(ClusterFlyLog.mcuGap(if (lastMcuAt == NO_TIME) null else now - lastMcuAt))
+        commands.send(FlyCommand.NAV_MODE_OFF)
+        lastMcuAt = now
+        lastCommandAt = now
+        log(ClusterFlyLog.command(FlyCommand.NAV_OFF))
+        commands.send(FlyCommand.NAV_OFF)
+        if (!hadFront) return
+        val expected = generation
+        postDelayed(ClusterFlySequencer.MCU_GAP_MILLIS) {
+            synchronized(lock) {
+                if (generation != expected) return@synchronized
+                val t = clock()
+                log(ClusterFlyLog.command(FlyCommand.NAV_BACK))
+                log(ClusterFlyLog.mcuGap(if (lastMcuAt == NO_TIME) null else t - lastMcuAt))
+                commands.send(FlyCommand.NAV_BACK)
+                lastMcuAt = t
+            }
+        }
     }
 
     private companion object {

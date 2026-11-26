@@ -171,6 +171,14 @@ class ClusterFlyMcuTest {
         assertEquals(2, ClusterFlyMcu.guideFrames1899(active = false).size)
     }
 
+    @Test
+    fun `send1899Batch sends status and guidance reusing the same binder`() {
+        val binder = RecordingBinder(succeeds = true)
+        assertEquals(true, ClusterFlyMcu.send1899Batch(active = true, binder = binder))
+        assertEquals(1899, binder.opcode)
+        assertEquals(listOf(15.toByte(), 0.toByte()), binder.payload.toList())
+    }
+
     private class RecordingBinder(private val succeeds: Boolean) : Binder() {
         var code: Int = -1
         var control: Byte = -1

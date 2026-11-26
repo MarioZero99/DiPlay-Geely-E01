@@ -619,4 +619,94 @@ class ClusterFlyControllerTest {
         assertEquals(FlyPhase.WAITING_FOR_VIDEO, controller.phase)
         assertTrue(lines.contains("fly.chain commands result=ok 1900=true 1887=true 1885=true"))
     }
+
+    @Test
+    fun `full pre-arm, left, right, auto re-arm, second left, and disarm lifecycle`() {
+        var opened = 0
+        var giveUp = 0
+        val controller = ClusterFlyController(
+            commands = { sent.add(it) },
+            showWarning = { warnings.add(it) },
+            log = { lines.add(it) },
+            clock = { now },
+            postDelayed = { delay, action -> scheduled.add(delay to action) },
+            onLayerOpened = { opened++ },
+            onGiveUp = { giveUp++ },
+        )
+
+        // 1. CarPlay starts -> pre-arms NAV_ON + NAV_MODE_ON at t=1000, schedules NAV_FRONT at +1000ms
+        controller.onCarPlayStarted()
+        assertEquals(listOf(FlyCommand.NAV_ON, FlyCommand.NAV_MODE_ON), sent)
+
+        // Left swipe before NAV_FRONT completes is blocked by TOO_SOON
+        now = 1_500L
+        controller.onGesture(Decision.FLY_LEFT)
+        assertEquals(FlyPhase.IDLE, controller.phase)
+        assertTrue(lines.contains("fly.blocked TOO_SOON"))
+
+        // 2. t=2000: NAV_FRONT goes out
+        now = 2_000L
+        scheduled.removeAt(0).second()
+        assertEquals(FlyCommand.NAV_FRONT, sent.last())
+
+        // Left swipe within 1000ms of NAV_FRONT is also blocked by ClusterFlyGate TOO_SOON
+        now = 2_500L
+        controller.onGesture(Decision.FLY_LEFT)
+        assertEquals(FlyPhase.IDLE, controller.phase)
+
+        // 3. t=3000: Left swipe succeeds immediately with only FLY_LEFT
+        now = 3_000L
+        sent.clear()
+        controller.onGesture(Decision.FLY_LEFT)
+        assertEquals(listOf(FlyCommand.FLY_LEFT), sent)
+        assertEquals(1, opened)
+        assertEquals(FlyPhase.WAITING_FOR_VIDEO, controller.phase)
+
+        now = 3_200L
+        controller.onMirrorReady()
+        assertEquals(FlyPhase.PUSHING, controller.phase)
+
+        // 4. t=4200: Right swipe closes and withdraws, then NAV_BACK advances to IDLE and auto re-arms
+        now = 4_200L
+        sent.clear()
+        scheduled.clear()
+        controller.onGesture(Decision.FLY_RIGHT)
+        assertEquals(1, giveUp)
+        assertEquals(listOf(FlyCommand.FLY_RIGHT), sent)
+
+        now = 5_200L
+        scheduled.removeAt(0).second() // NAV_MODE_OFF
+        scheduled.removeAt(0).second() // NAV_OFF
+        now = 6_200L
+        scheduled.removeAt(0).second() // NAV_BACK -> advances to IDLE and schedules re-arm after 1s gap
+
+        assertEquals(FlyPhase.IDLE, controller.phase)
+        now = 7_200L
+        scheduled.removeAt(0).second() // re-arm NAV_ON + NAV_MODE_ON
+        now = 8_200L
+        scheduled.removeAt(0).second() // re-arm NAV_FRONT
+
+        // 5. t=9200: Second left swipe works immediately without getting stuck in TOO_SOON
+        now = 9_200L
+        sent.clear()
+        controller.onGesture(Decision.FLY_LEFT)
+        assertEquals(listOf(FlyCommand.FLY_LEFT), sent)
+        assertEquals(2, opened)
+    }
+
+    @Test
+    fun `carPlayEnded while idle and pre-armed withdraws 1900, NAV_OFF, and NAV_BACK`() {
+        val controller = controller()
+        controller.onCarPlayStarted()
+        now = 2_000L
+        scheduled.removeAt(0).second() // NAV_FRONT
+        sent.clear()
+
+        now = 3_000L
+        controller.onCarPlayEnded()
+        assertEquals(listOf(FlyCommand.NAV_MODE_OFF, FlyCommand.NAV_OFF), sent)
+        now = 4_000L
+        scheduled.removeAt(0).second()
+        assertEquals(listOf(FlyCommand.NAV_MODE_OFF, FlyCommand.NAV_OFF, FlyCommand.NAV_BACK), sent)
+    }
 }

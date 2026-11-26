@@ -86,8 +86,16 @@ object ClusterFlyMcu {
     fun send1899(active: Boolean, binder: IBinder? = lookup()): Boolean =
         send(OPCODE_1899, payload1899(active), binder)
 
-    fun send1899Guide(active: Boolean, binder: IBinder? = lookup()): Boolean =
-        guideFrames1899(active).all { frame -> send(OPCODE_1899, frame, binder) }
+    fun send1899Guide(active: Boolean, binder: IBinder? = lookup()): Boolean {
+        val resolved = binder ?: return false
+        return guideFrames1899(active).all { frame -> send(OPCODE_1899, frame, resolved) }
+    }
+
+    /** Sends NavigationStatus and TBT guidance frames while reusing one RpcService binder lookup. */
+    fun send1899Batch(active: Boolean, binder: IBinder? = lookup()): Boolean {
+        val resolved = binder ?: return false
+        return send1899(active, resolved) && send1899Guide(active, resolved)
+    }
 
     private fun send(opcode: Int, payload: ByteArray, binder: IBinder?): Boolean {
         if (binder == null) return false
