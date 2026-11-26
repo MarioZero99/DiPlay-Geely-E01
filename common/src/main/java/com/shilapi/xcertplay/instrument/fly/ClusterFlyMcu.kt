@@ -53,6 +53,27 @@ object ClusterFlyMcu {
     /** 6 in the first byte (IPKServer NavigationStatus); 1 active, 0 inactive. */
     fun payload1899(active: Boolean): ByteArray = byteArrayOf(6, if (active) 1 else 0)
 
+    /**
+     * TBT guidance frames sent by IPKServer on opcode 1899 right after NavigationStatus, so the
+     * cluster MCU sees the exact same active-navigation state as Amap.
+     */
+    fun guideFrames1899(active: Boolean): List<ByteArray> = if (active) {
+        listOf(
+            byteArrayOf(7, 3),
+            byteArrayOf(8, 0),
+            byteArrayOf(9, 0, 0),
+            byteArrayOf(10, 1),
+            byteArrayOf(11, 0, 0),
+            byteArrayOf(12, 0, 1),
+            byteArrayOf(15, 0),
+        )
+    } else {
+        listOf(
+            byteArrayOf(7, 0),
+            byteArrayOf(15, 0),
+        )
+    }
+
     fun send(front: Boolean, binder: IBinder? = lookup()): Boolean =
         send(OPCODE, payload(front), binder)
 
@@ -64,6 +85,9 @@ object ClusterFlyMcu {
 
     fun send1899(active: Boolean, binder: IBinder? = lookup()): Boolean =
         send(OPCODE_1899, payload1899(active), binder)
+
+    fun send1899Guide(active: Boolean, binder: IBinder? = lookup()): Boolean =
+        guideFrames1899(active).all { frame -> send(OPCODE_1899, frame, binder) }
 
     private fun send(opcode: Int, payload: ByteArray, binder: IBinder?): Boolean {
         if (binder == null) return false

@@ -161,6 +161,16 @@ class ClusterFlyMcuTest {
         assertEquals("fly.mcu 1899 off false", ClusterFlyLog.mcu1899(active = false, ok = false))
     }
 
+    @Test
+    fun `send1899Guide sends IPKServer TBT guidance frames on opcode 1899`() {
+        val binder = RecordingBinder(succeeds = true)
+        assertEquals(true, ClusterFlyMcu.send1899Guide(active = true, binder = binder))
+        assertEquals(1899, binder.opcode)
+        assertEquals(listOf(15.toByte(), 0.toByte()), binder.payload.toList())
+        assertEquals(7, ClusterFlyMcu.guideFrames1899(active = true).size)
+        assertEquals(2, ClusterFlyMcu.guideFrames1899(active = false).size)
+    }
+
     private class RecordingBinder(private val succeeds: Boolean) : Binder() {
         var code: Int = -1
         var control: Byte = -1

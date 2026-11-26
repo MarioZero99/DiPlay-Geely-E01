@@ -2794,7 +2794,7 @@ class CarPlayHostActivity : ComponentActivity() {
             val on = command == FlyCommand.NAV_MODE_ON
             val ok = ClusterFlyMcu.send1900(on)
             DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.mcu1900(on, ok))
-            val ok1899 = ClusterFlyMcu.send1899(on)
+            val ok1899 = ClusterFlyMcu.send1899(on) && ClusterFlyMcu.send1899Guide(on)
             DiagLog.i(ClusterFlyLog.TAG, ClusterFlyLog.mcu1899(on, ok1899))
             ok
         }
